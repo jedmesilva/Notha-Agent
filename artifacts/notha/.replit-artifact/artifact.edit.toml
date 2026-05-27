@@ -1,0 +1,12 @@
+kind = "api"
+previewPath = "/"
+title = "Notha"
+version = "1.0.0"
+
+[[services]]
+localPort = 8000
+name = "Notha"
+paths = ["/"]
+
+[services.development]
+run = "cd artifacts/notha && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
