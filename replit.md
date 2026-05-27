@@ -1,45 +1,52 @@
-# [Project name]
+# Notha
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Agente de IA disponível via WhatsApp — integra a Meta WhatsApp Cloud API com GPT-5.4 via Replit AI Integrations.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `cd artifacts/notha && uvicorn main:app --host 0.0.0.0 --port 8000 --reload` — iniciar o servidor Notha
+- Workflow: **Notha (WhatsApp Agent)** — processo gerenciado pelo Replit
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11 + FastAPI + Uvicorn
+- LLM: OpenAI GPT-5.4 via Replit AI Integrations (sem chave própria)
+- WhatsApp: Meta WhatsApp Cloud API v21 (webhook)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/notha/main.py` — entrypoint FastAPI, rotas /webhook e /health
+- `artifacts/notha/whatsapp.py` — cliente HTTP para envio de mensagens e parsing de payloads
+- `artifacts/notha/llm.py` — integração com OpenAI via Replit AI Integrations
+- `artifacts/notha/conversation.py` — histórico de conversa em memória por número de telefone
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Histórico de conversa em memória (defaultdict por número de telefone), limitado a 20 mensagens por usuário.
+- Webhook unico `/webhook` com GET para verificação e POST para recebimento de mensagens.
+- LLM chamado de forma assíncrona (AsyncOpenAI) para não bloquear o event loop.
+- Comando `/reset` (ou `/limpar`) reinicia o histórico do usuário.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+O Notha é um agente de IA acessível pelo WhatsApp. O usuário envia uma mensagem, o Notha responde usando GPT-5.4. Suporta contexto de conversa por sessão e comando de reset.
 
-## User preferences
+## Secrets necessários
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- `WHATSAPP_ACCESS_TOKEN` — token de acesso Meta (WhatsApp > API Setup no Meta for Developers)
+- `WHATSAPP_PHONE_NUMBER_ID` — ID do número de telefone (mesma página)
+- `WHATSAPP_VERIFY_TOKEN` — texto livre escolhido por você; usado na verificação do webhook
+
+## Como configurar o webhook na Meta
+
+1. Acesse [developers.facebook.com](https://developers.facebook.com) → seu app → WhatsApp → Configuration
+2. Em **Webhook**, clique em "Edit"
+3. **Callback URL**: `https://<SEU_DOMINIO>/webhook`
+4. **Verify token**: o mesmo valor que você definiu em `WHATSAPP_VERIFY_TOKEN`
+5. Inscreva-se no campo `messages`
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- O domínio público do Replit é `https://<REPL_SLUG>.<USERNAME>.repl.co` ou o domínio custom configurado.
+- Para produção, o token de acesso permanente precisa ser gerado via Meta Business Manager.
+- Histórico é perdido se o servidor reiniciar — para persistência, adicionar banco de dados.

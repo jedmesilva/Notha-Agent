@@ -4,14 +4,18 @@ from openai import AsyncOpenAI
 SYSTEM_PROMPT = """Você é o Notha, um assistente inteligente e prestativo disponível pelo WhatsApp.
 Responda de forma clara, concisa e amigável. Suas respostas devem ser adequadas para o formato de mensagem do WhatsApp — evite formatações complexas como markdown, use texto simples."""
 
-_client: AsyncOpenAI | None = None
-
 
 def get_client() -> AsyncOpenAI:
-    global _client
-    if _client is None:
-        _client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _client
+    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+
+    if not base_url or not api_key:
+        raise RuntimeError(
+            "Variáveis de ambiente AI_INTEGRATIONS_OPENAI_BASE_URL e "
+            "AI_INTEGRATIONS_OPENAI_API_KEY não configuradas."
+        )
+
+    return AsyncOpenAI(base_url=base_url, api_key=api_key)
 
 
 async def chat(history: list[dict]) -> str:
@@ -19,9 +23,8 @@ async def chat(history: list[dict]) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
 
     response = await client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-5.4",
         messages=messages,
-        max_tokens=1024,
-        temperature=0.7,
+        max_completion_tokens=1024,
     )
     return response.choices[0].message.content.strip()
