@@ -38,7 +38,8 @@ async def process_message(phone: str, text: str) -> None:
 
     add_message(phone, "user", text)
     try:
-        reply = "✅ Mensagem recebida pelo Notha! O agente está funcionando."
+        reply = await chat(get_history(phone))
+        add_message(phone, "assistant", reply)
         await send_message(phone, reply)
         logger.info(f"Resposta enviada para {phone}.")
     except Exception as e:
