@@ -10,5 +10,6 @@ dependencies = [
     "openai==1.59.3",
     "python-dotenv==1.0.1",
     "pytz>=2026.2",
+    "sympy>=1.14.0",
     "uvicorn[standard]==0.32.1",
 ]
