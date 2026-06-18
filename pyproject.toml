@@ -9,5 +9,6 @@ dependencies = [
     "httpx==0.28.1",
     "openai==1.59.3",
     "python-dotenv==1.0.1",
+    "pytz>=2026.2",
     "uvicorn[standard]==0.32.1",
 ]

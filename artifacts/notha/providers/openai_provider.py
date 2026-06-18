@@ -1,14 +1,13 @@
+import json
 import os
 from openai import AsyncOpenAI
-from .base import LLMProvider
+from providers.base import LLMProvider, LLMResponse, ToolCall
 
 
 class OpenAIProvider(LLMProvider):
     """Provedor OpenAI — suporta API direta (OPENAI_API_KEY) ou Replit AI Integrations."""
 
-    def __init__(self, system_prompt: str):
-        self.system_prompt = system_prompt
-
+    def __init__(self):
         replit_base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
         replit_api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
         direct_api_key = os.environ.get("OPENAI_API_KEY")
@@ -25,11 +24,32 @@ class OpenAIProvider(LLMProvider):
 
         self._model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-    async def chat(self, history: list[dict]) -> str:
-        messages = [{"role": "system", "content": self.system_prompt}] + history
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_completion_tokens=1024,
-        )
-        return response.choices[0].message.content.strip()
+    async def complete(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        kwargs = {
+            "model": self._model,
+            "messages": messages,
+            "max_completion_tokens": 1024,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        response = await self._client.chat.completions.create(**kwargs)
+        message = response.choices[0].message
+
+        if message.tool_calls:
+            tool_calls = [
+                ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    args=json.loads(tc.function.arguments),
+                )
+                for tc in message.tool_calls
+            ]
+            return LLMResponse(text=None, tool_calls=tool_calls)
+
+        return LLMResponse(text=message.content.strip())

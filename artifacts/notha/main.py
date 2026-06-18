@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -6,10 +5,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+import os
 
-from conversation import add_message, get_history, clear_history
+from agent.agent import Agent
+from tools.registry import registry
+from tools.builtin.datetime_tool import DateTimeTool
+from tools.builtin.web_search import WebSearchTool
 from whatsapp import send_message, extract_messages
-from llm import chat
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,28 +19,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger("notha")
 
+agent: Agent | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global agent
+
+    registry.register(DateTimeTool())
+    registry.register(WebSearchTool())
+
+    agent = Agent(registry=registry)
     logger.info("Notha iniciado e pronto para receber mensagens do WhatsApp.")
     yield
 
 
-app = FastAPI(title="Notha", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Notha", version="2.0.0", lifespan=lifespan)
 
 
 async def process_message(phone: str, text: str) -> None:
     if text.lower() in ("/reset", "/limpar", "/clear"):
-        clear_history(phone)
+        await agent.reset(phone)
         try:
             await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
         except Exception as e:
             logger.error(f"Erro ao enviar reset para {phone}: {e}")
         return
 
-    add_message(phone, "user", text)
     try:
-        reply = "✅ Notha recebeu sua mensagem! O agente está funcionando."
+        reply = await agent.run(phone, text)
         await send_message(phone, reply)
         logger.info(f"Resposta enviada para {phone}.")
     except Exception as e:
@@ -86,17 +95,16 @@ class TestMessage(BaseModel):
 
 @app.post("/test")
 async def test_chat(body: TestMessage) -> dict:
-    """Testa o LLM diretamente sem enviar mensagem pelo WhatsApp."""
+    """Testa o agente diretamente sem enviar mensagem pelo WhatsApp."""
     if body.message.lower() in ("/reset", "/limpar", "/clear"):
-        clear_history(body.phone)
+        await agent.reset(body.phone)
         return {"reply": "Conversa reiniciada!"}
 
-    add_message(body.phone, "user", body.message)
-    reply = await chat(get_history(body.phone))
-    add_message(body.phone, "assistant", reply)
+    reply = await agent.run(body.phone, body.message)
     return {"reply": reply, "phone": body.phone}
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "agent": "Notha"}
+    tools = list(registry._tools.keys())
+    return {"status": "ok", "agent": "Notha", "tools": tools}
