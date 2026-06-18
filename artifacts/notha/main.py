@@ -12,6 +12,8 @@ from tools.registry import registry
 from tools.builtin.datetime_tool import DateTimeTool
 from tools.builtin.web_search import WebSearchTool
 from tools.builtin.math_tool import MathTool
+from tools.builtin.units_tool import UnitsTool
+from tools.builtin.currency_tool import CurrencyTool
 from whatsapp import send_message, extract_messages
 
 logging.basicConfig(
@@ -30,6 +32,8 @@ async def lifespan(app: FastAPI):
     registry.register(DateTimeTool())
     registry.register(WebSearchTool())
     registry.register(MathTool())
+    registry.register(UnitsTool())
+    registry.register(CurrencyTool())
 
     agent = Agent(registry=registry)
     logger.info("Notha iniciado e pronto para receber mensagens do WhatsApp.")
