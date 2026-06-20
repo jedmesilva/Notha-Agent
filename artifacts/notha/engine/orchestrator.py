@@ -9,10 +9,12 @@ import logging
 import re
 from db.connection import DB, get_db
 from db.repositories import (
-    UserRepository, ListingRepository, NegotiationRepository,
-    TransactionRepository, DeliveryRepository, ConversationRepository,
+    UserRepository, ListingRepository, ListingFlowRepository,
+    NegotiationRepository, TransactionRepository, DeliveryRepository,
+    ConversationRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
+from agents.listing_flow import ListingFlowAgent, _parse_jsonb
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
@@ -112,6 +114,7 @@ class Orchestrator:
         self._db = db
         self._conv = ConversationAgent()
         self._pricing = PricingAgent(db)
+        self._listing_flow_agent = ListingFlowAgent()
 
     def _repos(self, db: DB):
         return (
@@ -131,9 +134,25 @@ class Orchestrator:
 
         user_repo, listing_repo, neg_repo, tx_repo, delivery_repo, conv_repo = self._repos(db)
         engine = NegotiationEngine(db)
+        flow_repo = ListingFlowRepository(db)
 
         user = await user_repo.find_or_create_by_phone(phone)
         user_id = user["id"]
+
+        # Verifica se há um fluxo de cadastro de produto ativo para este telefone
+        active_flow = await flow_repo.get_active(phone)
+        if active_flow:
+            return await self._handle_listing_flow_message(
+                phone=phone,
+                text=text,
+                flow=dict(active_flow),
+                user=user,
+                user_repo=user_repo,
+                listing_repo=listing_repo,
+                flow_repo=flow_repo,
+                conv_repo=conv_repo,
+                db=db,
+            )
 
         # Confirmações pendentes de negócio (ex: confirmar preço de anúncio)
         pending = PENDING_CONFIRMATIONS.get(phone)
@@ -303,13 +322,15 @@ class Orchestrator:
             return result, None
 
         if name == "listar_produto":
-            intent = {
-                "descricao": args.get("descricao", text),
-                "categoria": args.get("categoria"),
-                "preco_informado": args.get("preco_informado"),
-            }
-            complex_reply = await self._handle_list_product(phone, text, user, user_repo, listing_repo, intent)
-            return "fluxo de listagem iniciado", complex_reply
+            db = self._db or get_db()
+            complex_reply = await self._start_listing_flow(
+                phone=phone,
+                text=text,
+                user=user,
+                user_repo=user_repo,
+                db=db,
+            )
+            return "fluxo de cadastro iniciado", complex_reply
 
         if name == "buscar_produto":
             intent = {
@@ -562,6 +583,185 @@ class Orchestrator:
 
         PENDING_CONFIRMATIONS.pop(phone, None)
         return await self._conv.build_reply("Ok, ação cancelada.", {})
+
+    # ─────────────────────────────────────────────
+    # Fluxo de cadastro de produto (listing flow)
+    # ─────────────────────────────────────────────
+
+    async def _start_listing_flow(
+        self, phone: str, text: str, user, user_repo: UserRepository, db: DB,
+    ) -> str:
+        """Inicia o fluxo de cadastro de produto (state machine persistida no banco)."""
+        check = await user_repo.check_missing_fields(user["id"], "listar_produto")
+        if check["falta"]:
+            campos = ", ".join(check["falta"])
+            return await self._conv.build_reply(
+                f"Para listar um produto, preciso de: {campos}. Pode me informar?",
+                {"falta": check["falta"]},
+            )
+
+        flow_repo = ListingFlowRepository(db)
+
+        # Cancela eventual fluxo preso (step != concluido)
+        await flow_repo.cancel(phone)
+
+        # Cria novo fluxo
+        flow = await flow_repo.create(user["id"], phone)
+
+        primeira_pergunta = await self._listing_flow_agent.start()
+        return primeira_pergunta
+
+    async def _handle_listing_flow_message(
+        self,
+        phone: str,
+        text: str,
+        flow: dict,
+        user,
+        user_repo: UserRepository,
+        listing_repo: ListingRepository,
+        flow_repo: ListingFlowRepository,
+        conv_repo: ConversationRepository,
+        db: DB,
+    ) -> str:
+        """Roteia a mensagem de texto para o agente de fluxo de cadastro."""
+        seller_profile = await user_repo.get_seller_profile(user["id"])
+        sp = dict(seller_profile) if seller_profile else {}
+
+        dados, fotos, reply, concluido = await self._listing_flow_agent.handle_message(
+            flow=flow,
+            text=text,
+            seller_profile=sp,
+            db=db,
+        )
+
+        next_step = dados.get("step_next", flow["step"])
+        await flow_repo.update_step(flow["id"], next_step, dados, fotos)
+
+        # Persiste histórico
+        await conv_repo.add(user["id"], "user", text)
+
+        # Etapa de processamento automático: envia "aguarde" → processa → retorna confirmação
+        if next_step == "processando":
+            if reply:
+                from whatsapp import send_message as _wpp_send
+                await _wpp_send(phone, reply)
+
+            flow_atualizado = await flow_repo.get_active(phone)
+            if flow_atualizado:
+                dados_proc, msg_confirmar = await self._listing_flow_agent.processar(
+                    flow=dict(flow_atualizado),
+                    listing_repo=listing_repo,
+                    db=db,
+                )
+                fotos_atuais = _parse_jsonb(flow_atualizado.get("fotos"), [])
+                await flow_repo.update_step(flow_atualizado["id"], "confirmar", dados_proc, fotos_atuais)
+                await conv_repo.add(user["id"], "assistant", msg_confirmar)
+                return msg_confirmar
+            return reply or "Processando seu produto..."
+
+        # Fluxo confirmado: cria listing no banco
+        if concluido:
+            result_msg = await self._finalize_listing(
+                flow_id=flow["id"],
+                dados=dados,
+                fotos=fotos,
+                user=user,
+                listing_repo=listing_repo,
+                flow_repo=flow_repo,
+            )
+            await conv_repo.add(user["id"], "assistant", result_msg)
+            return result_msg
+
+        if reply:
+            await conv_repo.add(user["id"], "assistant", reply)
+        return reply or "Ok! Pode continuar."
+
+    async def _finalize_listing(
+        self,
+        flow_id: int,
+        dados: dict,
+        fotos: list,
+        user,
+        listing_repo: ListingRepository,
+        flow_repo: ListingFlowRepository,
+    ) -> str:
+        """Cria o listing no banco com todos os dados coletados e marca o fluxo como concluído."""
+        appraisal = dados.get("appraisal", {})
+        nome_produto = " ".join(
+            filter(None, [dados.get("marca"), dados.get("modelo"), dados.get("versao")])
+        ) or dados.get("descricao", "Produto")
+
+        listing = await listing_repo.create(
+            seller_id=user["id"],
+            descricao=dados.get("descricao", nome_produto),
+            categoria=dados.get("categoria"),
+            fotos=[f["media_id"] for f in fotos if f.get("media_id")],
+            preco_informado_vendedor=dados.get("preco_desejado"),
+            preco_sugerido=appraisal.get("preco_sugerido"),
+            preco_anunciado=dados.get("preco_anunciado") or appraisal.get("preco_sugerido", 0),
+            preco_minimo=dados.get("preco_minimo") or appraisal.get("preco_minimo_sugerido", 0),
+            appraisal_data=appraisal,
+            marca=dados.get("marca"),
+            modelo=dados.get("modelo"),
+            versao=dados.get("versao"),
+            estado_uso=dados.get("estado_uso"),
+            condicao=dados.get("condicao"),
+            tem_nota_fiscal=dados.get("tem_nota_fiscal"),
+            preco_minimo_vendedor=dados.get("preco_minimo_vendedor"),
+            info_web=dados.get("info_web"),
+            cidade_vendedor=dados.get("cidade_vendedor"),
+            vision_analysis=dados.get("vision_analysis"),
+        )
+
+        await flow_repo.mark_done(flow_id)
+
+        preco = dados.get("preco_anunciado") or appraisal.get("preco_sugerido", 0) or 0
+        return (
+            f"Produto anunciado com sucesso! ID #{listing['id']}.\n"
+            f"Nome: {nome_produto}\n"
+            f"Preço: R${preco:.2f}\n"
+            "Vou te avisar assim que aparecer um interessado!"
+        )
+
+    async def handle_media(
+        self,
+        phone: str,
+        media_id: str,
+        mime_type: str,
+        caption: str,
+    ) -> str:
+        """
+        Roteador central de mídia recebida.
+
+        Prioridade:
+        1. Se há listing flow ativo na etapa 'fotos' → rota para o agente de cadastro
+        2. Caso contrário → identifica como documento de identidade
+        """
+        db = self._db or get_db()
+        if db is None:
+            return "Recebi sua imagem! Mas estou com problema técnico — tenta de novo em instantes."
+
+        user_repo, listing_repo, *_, conv_repo = self._repos(db)
+        flow_repo = ListingFlowRepository(db)
+
+        user = await user_repo.find_or_create_by_phone(phone)
+
+        active_flow = await flow_repo.get_active(phone)
+        if active_flow and active_flow["step"] == "fotos":
+            fotos_atuais, reply = await self._listing_flow_agent.handle_media(
+                flow=dict(active_flow),
+                media_id=media_id,
+                mime_type=mime_type,
+                caption=caption or "",
+            )
+            dados_atuais = _parse_jsonb(active_flow.get("dados"), {})
+            await flow_repo.update_step(active_flow["id"], "fotos", dados_atuais, fotos_atuais)
+            if reply:
+                await conv_repo.add(user["id"], "assistant", reply)
+            return reply
+
+        # Fallback: trata como documento de identidade
+        return await self.handle_identity_document(phone, media_id, mime_type, caption)
 
     async def handle_identity_document(
         self,

@@ -70,10 +70,12 @@ Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Fornecer ou corrigir o nome completo → chame atualizar_nome
 - Quiser mudar como é chamado / fornecer apelido → chame atualizar_apelido
 - Fornecer ou corrigir o CPF → chame atualizar_cpf
-- Quiser vender um produto → chame listar_produto
+- Quiser vender UM produto (qualquer menção a "vender", "anunciar", "tenho pra vender") → chame listar_produto IMEDIATAMENTE, sem perguntar nada antes
 - Quiser comprar/buscar um produto → chame buscar_produto
 - Fornecer chave Pix → chame atualizar_chave_pix
 - Fornecer endereço → chame atualizar_endereco
+
+REGRA CRÍTICA: Quando o usuário quiser vender, NÃO faça perguntas sobre o produto antes de chamar listar_produto. O fluxo de cadastro faz todas as perguntas necessárias. Chame a ferramenta imediatamente.
 
 ━━━ REGRA CRÍTICA — DADOS FACTUAIS ━━━
 NUNCA invente preços, cotações, cálculos, datas ou qualquer dado factual.
@@ -157,21 +159,20 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "type": "function",
         "function": {
             "name": "listar_produto",
-            "description": "Cadastra um produto que o usuário quer vender.",
+            "description": (
+                "Inicia o fluxo completo de cadastro de um produto para venda. "
+                "CHAME IMEDIATAMENTE quando o usuário expressar qualquer intenção de vender um produto, "
+                "como 'quero vender', 'tenho um X para vender', 'quero anunciar', 'vendo um X'. "
+                "NÃO tente coletar mais informações antes de chamar — o fluxo de cadastro "
+                "conduzirá o usuário por todas as perguntas necessárias. "
+                "NÃO faça mais perguntas sobre o produto antes de chamar esta ferramenta."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "descricao": {
                         "type": "string",
-                        "description": "Descrição completa do produto"
-                    },
-                    "categoria": {
-                        "type": "string",
-                        "description": "Categoria do produto (ex: eletrônicos, roupas, móveis)"
-                    },
-                    "preco_informado": {
-                        "type": "number",
-                        "description": "Preço que o vendedor quer cobrar, se informado"
+                        "description": "Descrição do produto mencionada pelo usuário (pode ser parcial)"
                     }
                 },
                 "required": ["descricao"]

@@ -18,13 +18,35 @@ class ListingRepository:
         preco_anunciado: float = 0,
         preco_minimo: float = 0,
         appraisal_data: dict | None = None,
+        # Novos campos do fluxo completo de cadastro
+        marca: str | None = None,
+        modelo: str | None = None,
+        versao: str | None = None,
+        estado_uso: str | None = None,
+        condicao: str | None = None,
+        tem_nota_fiscal: bool | None = None,
+        fotos_info: list | None = None,
+        preco_minimo_vendedor: float | None = None,
+        info_web: dict | None = None,
+        cidade_vendedor: str | None = None,
+        vision_analysis: str | None = None,
     ) -> asyncpg.Record:
         return await self._db.fetch_one(
             """
-            INSERT INTO listings
-                (seller_id, descricao, categoria, fotos, preco_informado_vendedor,
-                 preco_sugerido, preco_anunciado, preco_minimo, appraisal_data, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'disponivel')
+            INSERT INTO listings (
+                seller_id, descricao, categoria, fotos,
+                preco_informado_vendedor, preco_sugerido, preco_anunciado, preco_minimo,
+                appraisal_data, status,
+                marca, modelo, versao, estado_uso, condicao, tem_nota_fiscal,
+                fotos_info, preco_minimo_vendedor, info_web, cidade_vendedor, vision_analysis
+            )
+            VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7, $8,
+                $9, 'disponivel',
+                $10, $11, $12, $13, $14, $15,
+                $16, $17, $18, $19, $20
+            )
             RETURNING *
             """,
             seller_id,
@@ -36,6 +58,17 @@ class ListingRepository:
             preco_anunciado,
             preco_minimo,
             json.dumps(appraisal_data) if appraisal_data else None,
+            marca,
+            modelo,
+            versao,
+            estado_uso,
+            condicao,
+            tem_nota_fiscal,
+            json.dumps(fotos_info or []) if fotos_info is not None else None,
+            preco_minimo_vendedor,
+            json.dumps(info_web) if info_web else None,
+            cidade_vendedor,
+            vision_analysis,
         )
 
     async def find_by_id(self, listing_id: int) -> asyncpg.Record | None:

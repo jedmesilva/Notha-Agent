@@ -63,16 +63,23 @@ async def process_message(phone: str, text: str) -> None:
 
 
 async def process_media(phone: str, media_id: str, mime_type: str, caption: str) -> None:
-    """Processa mensagem de imagem/documento — detecta se é documento de identidade e salva."""
+    """
+    Processa imagem/documento recebido.
+
+    Prioridade:
+    1. Se há fluxo de cadastro de produto ativo na etapa 'fotos' → rota para listing flow
+    2. Caso contrário → trata como documento de identidade
+    """
     try:
-        reply = await orchestrator.handle_identity_document(
+        reply = await orchestrator.handle_media(
             phone=phone,
             media_id=media_id,
             mime_type=mime_type,
             caption=caption,
         )
-        await send_message(phone, reply)
-        logger.info(f"Documento de identidade processado para {phone}.")
+        if reply:
+            await send_message(phone, reply)
+        logger.info(f"Mídia processada para {phone}.")
     except Exception as e:
         logger.error(f"Erro ao processar mídia de {phone}: {e}")
         try:

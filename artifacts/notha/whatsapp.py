@@ -1,7 +1,28 @@
+import logging
 import os
 import httpx
 
+logger = logging.getLogger("notha.whatsapp")
+
 GRAPH_API_URL = "https://graph.facebook.com/v21.0"
+
+
+async def get_media_url(media_id: str) -> str | None:
+    """Obtém a URL temporária de download de uma mídia do WhatsApp."""
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+    if not token or not media_id:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"{GRAPH_API_URL}/{media_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("url")
+    except Exception as e:
+        logger.warning(f"Falha ao obter URL de mídia {media_id}: {e}")
+    return None
 
 
 async def send_message(to: str, text: str) -> dict:

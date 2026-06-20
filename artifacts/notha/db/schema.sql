@@ -102,12 +102,54 @@ CREATE TABLE IF NOT EXISTS listings (
     status                    VARCHAR(30) NOT NULL DEFAULT 'disponivel',
         -- disponivel | em_negociacao | vendido | cancelado
     created_at                TIMESTAMP DEFAULT now(),
-    updated_at                TIMESTAMP DEFAULT now()
+    updated_at                TIMESTAMP DEFAULT now(),
+    -- Campos do fluxo completo de cadastro
+    marca                     VARCHAR(100),
+    modelo                    VARCHAR(200),
+    versao                    VARCHAR(100),
+    estado_uso                VARCHAR(20),
+        -- novo | usado
+    condicao                  VARCHAR(50),
+        -- como_novo | bom | conservado | desgastado | com_defeito
+    tem_nota_fiscal           BOOLEAN,
+    fotos_info                JSONB,
+        -- fotos de etiquetas, embalagem ou nota fiscal
+    preco_minimo_vendedor     NUMERIC,
+        -- piso definido pelo vendedor (sigiloso)
+    info_web                  JSONB,
+        -- resultado da busca web (preços, specs)
+    cidade_vendedor           VARCHAR(100),
+        -- para precificação geográfica
+    vision_analysis           TEXT
+        -- análise visual pelo GPT-4o Vision
 );
 
 CREATE INDEX IF NOT EXISTS idx_listings_status    ON listings(status);
 CREATE INDEX IF NOT EXISTS idx_listings_categoria ON listings(categoria);
 CREATE INDEX IF NOT EXISTS idx_listings_seller    ON listings(seller_id);
+
+-- -----------------------------------------------------------
+-- Fluxo de cadastro de produto (máquina de estados)
+-- -----------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS listing_flows (
+    id          SERIAL PRIMARY KEY,
+    user_id     INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone       VARCHAR(20) NOT NULL,
+    step        VARCHAR(50) NOT NULL DEFAULT 'produto',
+        -- produto | marca_modelo | estado_uso | condicao | nota_fiscal |
+        -- fotos | endereco | preco | processando | confirmar | concluido
+    dados       JSONB NOT NULL DEFAULT '{}',
+    fotos       JSONB NOT NULL DEFAULT '[]',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Apenas um fluxo ativo por telefone
+CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_flows_phone_active
+    ON listing_flows(phone) WHERE step != 'concluido';
+
+CREATE INDEX IF NOT EXISTS idx_listing_flows_user ON listing_flows(user_id);
 
 -- -----------------------------------------------------------
 -- 4. Fila de interessados
