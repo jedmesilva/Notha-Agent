@@ -10,7 +10,7 @@ import re
 from db.connection import DB, get_db
 from db.repositories import (
     UserRepository, ListingRepository, NegotiationRepository,
-    TransactionRepository, DeliveryRepository,
+    TransactionRepository, DeliveryRepository, ConversationRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.pricing import PricingAgent
@@ -19,10 +19,13 @@ from engine.negotiation import NegotiationEngine
 
 logger = logging.getLogger("notha.orchestrator")
 
-CONVERSATION_HISTORY: dict[str, list[dict]] = {}
+# Histórico de conversa persistido no banco via ConversationRepository.
+# Este dict é apenas fallback para quando o banco não está disponível.
+_MEMORY_HISTORY: dict[str, list[dict]] = {}
+_MAX_MEMORY = 20
+
 PENDING_CONFIRMATIONS: dict[str, dict] = {}
 PROCESSED_MESSAGE_IDS: set[str] = set()
-MAX_HISTORY = 20
 MAX_PROCESSED_IDS = 1000
 
 
@@ -76,21 +79,23 @@ def _detectar_tipo_documento(caption: str) -> str:
     return "desconhecido"
 
 
-def _add_to_history(phone: str, role: str, content: str) -> None:
-    if phone not in CONVERSATION_HISTORY:
-        CONVERSATION_HISTORY[phone] = []
-    CONVERSATION_HISTORY[phone].append({"role": role, "content": content})
-    if len(CONVERSATION_HISTORY[phone]) > MAX_HISTORY:
-        CONVERSATION_HISTORY[phone] = CONVERSATION_HISTORY[phone][-MAX_HISTORY:]
+def _memory_add(phone: str, role: str, content: str) -> None:
+    """Adiciona ao histórico em memória (fallback sem banco)."""
+    hist = _MEMORY_HISTORY.setdefault(phone, [])
+    hist.append({"role": role, "content": content})
+    if len(hist) > _MAX_MEMORY:
+        _MEMORY_HISTORY[phone] = hist[-_MAX_MEMORY:]
 
 
-def _get_history(phone: str) -> list[dict]:
-    return CONVERSATION_HISTORY.get(phone, [])
+def _memory_get(phone: str) -> list[dict]:
+    return _MEMORY_HISTORY.get(phone, [])
 
 
-def _clear_history(phone: str) -> None:
-    CONVERSATION_HISTORY.pop(phone, None)
-    PENDING_CONFIRMATIONS.pop(phone, None)
+import asyncio as _asyncio
+
+async def _gather(*coros):
+    """Executa coroutines independentes em paralelo."""
+    return await _asyncio.gather(*coros)
 
 
 class Orchestrator:
@@ -106,6 +111,7 @@ class Orchestrator:
             NegotiationRepository(db),
             TransactionRepository(db),
             DeliveryRepository(db),
+            ConversationRepository(db),
         )
 
     async def handle_message(self, phone: str, text: str) -> str:
@@ -114,21 +120,29 @@ class Orchestrator:
         if db is None:
             return await self._no_db_fallback(phone, text)
 
-        user_repo, listing_repo, neg_repo, tx_repo, delivery_repo = self._repos(db)
+        user_repo, listing_repo, neg_repo, tx_repo, delivery_repo, conv_repo = self._repos(db)
         engine = NegotiationEngine(db)
 
         user = await user_repo.find_or_create_by_phone(phone)
+        user_id = user["id"]
 
         # Confirmações pendentes de negócio (ex: confirmar preço de anúncio)
         pending = PENDING_CONFIRMATIONS.get(phone)
         if pending:
-            return await self._handle_confirmation(
+            reply = await self._handle_confirmation(
                 phone, text, pending, user, user_repo, listing_repo,
                 neg_repo, tx_repo, delivery_repo, engine,
             )
+            await conv_repo.add(user_id, "user", text)
+            await conv_repo.add(user_id, "assistant", reply)
+            return reply
 
-        active_negs = await neg_repo.find_active_by_buyer(user["id"])
-        seller_profile = await user_repo.get_seller_profile(user["id"])
+        # Carrega dados em paralelo para minimizar latência
+        active_negs, seller_profile, history = await _gather(
+            neg_repo.find_active_by_buyer(user_id),
+            user_repo.get_seller_profile(user_id),
+            conv_repo.get_history(user_id),
+        )
 
         # Contexto rico com dados reais do banco — o LLM sempre trabalha com info atual
         contexto = self._build_context(user, active_negs, seller_profile)
@@ -136,7 +150,7 @@ class Orchestrator:
         # Fase 1: LLM vê o histórico completo e decide quais ferramentas chamar
         messages, tool_calls = await self._conv.get_tool_calls(
             contexto=contexto,
-            history=_get_history(phone),
+            history=history,
             user_message=text,
             tools=NOTHA_TOOLS,
         )
@@ -156,14 +170,11 @@ class Orchestrator:
                 override_reply = complex_reply
 
         if override_reply:
-            # Fluxos complexos (listar, buscar) têm reply próprio
             final_reply = override_reply
         elif tool_calls:
             # Fase 2: LLM recebe os resultados reais e gera resposta natural
             final_reply = await self._conv.get_reply_after_tools(messages, tool_results)
         else:
-            # Sem tool calls: resposta já está na última mensagem do assistant
-            # (chat_with_tools retornou o texto diretamente na fase 1)
             last_assistant = next(
                 (m["content"] for m in reversed(messages) if m["role"] == "assistant"),
                 None,
@@ -171,10 +182,9 @@ class Orchestrator:
             if last_assistant:
                 final_reply = last_assistant
             else:
-                # Fallback: gera resposta sem tools
                 final_reply, _ = await self._conv.chat_with_tools(
                     contexto=contexto,
-                    history=_get_history(phone),
+                    history=history,
                     user_message=text,
                     tools=None,
                 )
@@ -184,12 +194,14 @@ class Orchestrator:
                 neg_reply = await self._check_negotiation_response(
                     phone, text, user, active_negs[0],
                     user_repo, neg_repo, listing_repo, engine,
+                    history=history,
                 )
                 if neg_reply:
                     final_reply = neg_reply
 
-        _add_to_history(phone, "user", text)
-        _add_to_history(phone, "assistant", final_reply)
+        # Persiste mensagem e resposta no banco
+        await conv_repo.add(user_id, "user", text)
+        await conv_repo.add(user_id, "assistant", final_reply)
         return final_reply
 
     async def _execute_tool(
@@ -304,6 +316,7 @@ class Orchestrator:
     async def _check_negotiation_response(
         self, phone: str, text: str, user, neg,
         user_repo, neg_repo, listing_repo, engine,
+        history: list[dict] | None = None,
     ) -> str | None:
         """Verifica se a mensagem é uma confirmação/recusa de negociação ativa."""
         intent = await self._conv.extract_intent(text, contexto="negociacao_ativa")
@@ -311,23 +324,23 @@ class Orchestrator:
         if intencao in ("confirmacao", "recusa"):
             return await self._handle_negotiation_response(
                 phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine,
+                history=history or [],
             )
         return None
 
     async def _no_db_fallback(self, phone: str, text: str) -> str:
-        messages, tool_calls = await self._conv.get_tool_calls(
+        messages, _ = await self._conv.get_tool_calls(
             contexto="sem banco de dados disponível — modo memória apenas",
-            history=_get_history(phone),
+            history=_memory_get(phone),
             user_message=text,
             tools=NOTHA_TOOLS,
         )
-        # Sem banco, não executamos tools — apenas pegamos o texto já gerado
         last_assistant = next(
             (m["content"] for m in reversed(messages) if m["role"] == "assistant"),
             "Tive um problema técnico. Tente de novo em instantes!",
         )
-        _add_to_history(phone, "user", text)
-        _add_to_history(phone, "assistant", last_assistant)
+        _memory_add(phone, "user", text)
+        _memory_add(phone, "assistant", last_assistant)
         return last_assistant
 
     def _build_context(self, user, active_negs: list, seller_profile=None) -> str:
@@ -460,7 +473,8 @@ class Orchestrator:
         )
 
     async def _handle_negotiation_response(
-        self, phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine
+        self, phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine,
+        history: list[dict] | None = None,
     ) -> str:
         aceitou = intent.get("aceitou", False)
         status = neg["status"]
@@ -494,7 +508,7 @@ class Orchestrator:
 
         reply, _ = await self._conv.chat_with_tools(
             contexto=f"negociação status={status}",
-            history=_get_history(phone),
+            history=history or [],
             user_message=intent.get("descricao", ""),
             tools=None,
         )
@@ -534,12 +548,6 @@ class Orchestrator:
 
         PENDING_CONFIRMATIONS.pop(phone, None)
         return await self._conv.build_reply("Ok, ação cancelada.", {})
-
-    def _summarize_negs(self, negs) -> str:
-        if not negs:
-            return "sem negociação ativa"
-        statuses = [n["status"] for n in negs]
-        return f"{len(negs)} negociação(ões) ativa(s): {', '.join(statuses)}"
 
     async def handle_identity_document(
         self,
@@ -602,11 +610,15 @@ class Orchestrator:
             "Normalmente leva até 1 dia útil."
         )
 
-    def _summarize_negs(self, negs) -> str:
-        if not negs:
-            return "sem negociação ativa"
-        statuses = [n["status"] for n in negs]
-        return f"{len(negs)} negociação(ões) ativa(s): {', '.join(statuses)}"
-
     async def reset(self, phone: str) -> None:
-        _clear_history(phone)
+        """Apaga histórico do banco e memória; remove confirmações pendentes."""
+        db = self._db or get_db()
+        PENDING_CONFIRMATIONS.pop(phone, None)
+        _MEMORY_HISTORY.pop(phone, None)
+        if db is None:
+            return
+        user_repo, *_, conv_repo = self._repos(db)
+        user = await user_repo.find_by_phone(phone)
+        if user:
+            await conv_repo.clear(user["id"])
+            logger.info("Histórico apagado para user_id=%s", user["id"])
