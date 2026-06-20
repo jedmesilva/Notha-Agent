@@ -278,12 +278,10 @@ class Orchestrator:
 
         if campo == "nome":
             await user_repo.update(user["id"], nome=valor)
-            # Se CPF ainda está vazio, aproveita para pedir
             user_atualizado = await user_repo.find_by_id(user["id"])
             if not user_atualizado or not user_atualizado["cpf"]:
-                PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": user["id"]}
                 return await self._conv.build_reply(
-                    f"Nome salvo! Agora preciso do seu CPF (só os 11 números) para completar o cadastro.", {}
+                    f"Nome atualizado para {valor}! Agora preciso do seu CPF (só os 11 números) para completar o cadastro.", {}
                 )
             return await self._conv.build_reply(f"Nome atualizado para {valor}!", {})
 

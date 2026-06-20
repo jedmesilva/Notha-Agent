@@ -75,6 +75,8 @@ Contexto atual: {contexto}
 - Se o usuário confirmar com "sim", "pode ser", "tá bom", "fechou", "aceito", "combinado", "ok" → intencao: "confirmacao", aceitou: true
 - Se o usuário recusar com "não", "caro demais", "não quero", "desisto", "cancelar" → intencao: "recusa", aceitou: false
 - Se houver um valor mencionado em contexto de oferta ou contraproposta, extraia o número
+- Se o usuário informar, corrigir ou atualizar o próprio nome (ex: "meu nome é João", "pode me chamar de Ana", "na verdade me chamo Pedro", "não, meu nome é Carlos") → intencao: "informar_dados", campo: "nome"
+- Se o usuário informar ou corrigir o próprio CPF → intencao: "informar_dados", campo: "cpf"
 
 ━━━ EXEMPLOS POR INTENCAO ━━━
 
@@ -98,6 +100,13 @@ Informação pessoal fornecida pelo usuário:
 {{"intencao": "informar_dados", "campo": "chave_pix", "valor": "meuemail@gmail.com"}}
 {{"intencao": "informar_dados", "campo": "endereco", "valor": "Rua das Flores, 123, Centro, São Paulo, SP, 01001-000"}}
 {{"intencao": "informar_dados", "campo": "nome", "valor": "João Silva"}}
+{{"intencao": "informar_dados", "campo": "nome", "valor": "Carlos"}}
+{{"intencao": "informar_dados", "campo": "nome", "valor": "Ana Lima"}}
+
+Correção de nome (usuário corrige o nome que estava errado):
+Mensagem: "não, meu nome é Carlos" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Carlos"}}
+Mensagem: "na verdade me chamo Ana Lima" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Ana Lima"}}
+Mensagem: "pode me chamar de Pedro" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Pedro"}}
 
 Solicitação de suporte humano:
 {{"intencao": "suporte", "motivo": "reclamação sobre entrega"}}
