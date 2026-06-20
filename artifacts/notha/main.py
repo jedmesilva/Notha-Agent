@@ -1,19 +1,15 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
-import os
 
-from agent.agent import Agent
-from tools.registry import registry
-from tools.builtin.datetime_tool import DateTimeTool
-from tools.builtin.web_search import WebSearchTool
-from tools.builtin.math_tool import MathTool
-from tools.builtin.units_tool import UnitsTool
-from tools.builtin.currency_tool import CurrencyTool
+from db.connection import init_pool, close_pool
+from engine.orchestrator import Orchestrator
+from engine.jobs import start_all_jobs
 from whatsapp import send_message, extract_messages
 
 logging.basicConfig(
@@ -22,30 +18,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("notha")
 
-agent: Agent | None = None
+orchestrator: Orchestrator | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent
+    global orchestrator
 
-    registry.register(DateTimeTool())
-    registry.register(WebSearchTool())
-    registry.register(MathTool())
-    registry.register(UnitsTool())
-    registry.register(CurrencyTool())
+    await init_pool()
 
-    agent = Agent(registry=registry)
-    logger.info("Notha iniciado e pronto para receber mensagens do WhatsApp.")
+    orchestrator = Orchestrator()
+
+    await start_all_jobs()
+
+    logger.info("NOTHA iniciado e pronto para receber mensagens do WhatsApp.")
     yield
 
+    await close_pool()
+    logger.info("NOTHA encerrado.")
 
-app = FastAPI(title="Notha", version="2.0.0", lifespan=lifespan)
+
+app = FastAPI(title="NOTHA", version="2.0.0", lifespan=lifespan)
 
 
 async def process_message(phone: str, text: str) -> None:
     if text.lower() in ("/reset", "/limpar", "/clear"):
-        await agent.reset(phone)
+        await orchestrator.reset(phone)
         try:
             await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
         except Exception as e:
@@ -53,13 +51,13 @@ async def process_message(phone: str, text: str) -> None:
         return
 
     try:
-        reply = await agent.run(phone, text)
+        reply = await orchestrator.handle_message(phone, text)
         await send_message(phone, reply)
         logger.info(f"Resposta enviada para {phone}.")
     except Exception as e:
         logger.error(f"Erro ao processar mensagem de {phone}: {e}")
         try:
-            await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente.")
+            await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
         except Exception:
             pass
 
@@ -88,10 +86,55 @@ async def receive_message(request: Request) -> Response:
 
     messages = extract_messages(body)
     for msg in messages:
-        logger.info(f"Mensagem recebida de {msg['from']}: {msg['text'][:50]}...")
+        logger.info(f"Mensagem recebida de {msg['from']}: {msg['text'][:60]}...")
         asyncio.create_task(process_message(msg["from"], msg["text"].strip()))
 
     return Response(status_code=200)
+
+
+@app.post("/webhook/asaas")
+async def asaas_webhook(request: Request) -> Response:
+    """Webhook do Asaas para confirmação de pagamentos e transferências."""
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=200)
+
+    event = body.get("event", "")
+    payment = body.get("payment", {})
+    logger.info(f"Evento Asaas recebido: {event} — charge_id={payment.get('id')}")
+
+    if event in ("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"):
+        asyncio.create_task(_handle_payment_confirmed(payment))
+
+    return Response(status_code=200)
+
+
+async def _handle_payment_confirmed(payment: dict) -> None:
+    """Marca transação como paga e notifica partes."""
+    from db.connection import get_db
+    from db.repositories import TransactionRepository, NegotiationRepository
+    db = get_db()
+    if not db:
+        return
+
+    charge_id = payment.get("id")
+    if not charge_id:
+        return
+
+    tx_repo = TransactionRepository(db)
+    neg_repo = NegotiationRepository(db)
+
+    row = await db.fetch_one(
+        "SELECT * FROM transactions WHERE asaas_charge_id = $1", charge_id
+    )
+    if not row:
+        logger.warning(f"Cobrança {charge_id} não encontrada no banco.")
+        return
+
+    await tx_repo.set_paid(row["id"])
+    await neg_repo.set_status(row["negotiation_id"], "paga")
+    logger.info(f"Pagamento confirmado: transaction_id={row['id']}, negotiation_id={row['negotiation_id']}")
 
 
 class TestMessage(BaseModel):
@@ -101,16 +144,64 @@ class TestMessage(BaseModel):
 
 @app.post("/test")
 async def test_chat(body: TestMessage) -> dict:
-    """Testa o agente diretamente sem enviar mensagem pelo WhatsApp."""
+    """Testa o orquestrador diretamente sem enviar mensagem pelo WhatsApp."""
     if body.message.lower() in ("/reset", "/limpar", "/clear"):
-        await agent.reset(body.phone)
+        await orchestrator.reset(body.phone)
         return {"reply": "Conversa reiniciada!"}
 
-    reply = await agent.run(body.phone, body.message)
+    reply = await orchestrator.handle_message(body.phone, body.message)
     return {"reply": reply, "phone": body.phone}
 
 
 @app.get("/health")
 async def health() -> dict:
-    tools = list(registry._tools.keys())
-    return {"status": "ok", "agent": "Notha", "tools": tools}
+    from db.connection import get_pool
+    from db.repositories import TransactionRepository
+    db_ok = get_pool() is not None
+
+    saldo_retido = None
+    if db_ok:
+        try:
+            from db.connection import get_db
+            db = get_db()
+            if db:
+                tx_repo = TransactionRepository(db)
+                saldo_retido = await tx_repo.get_total_retained()
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "database": "conectado" if db_ok else "desconectado",
+        "saldo_retido_total": saldo_retido,
+    }
+
+
+@app.get("/admin/listings")
+async def list_listings(status: str = "disponivel", limit: int = 20) -> dict:
+    """Endpoint admin: lista produtos por status."""
+    from db.connection import get_db
+    from db.repositories import ListingRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+    repo = ListingRepository(db)
+    rows = await repo.find_available(limit=limit) if status == "disponivel" else []
+    return {"listings": [dict(r) for r in rows], "total": len(rows)}
+
+
+@app.get("/admin/conciliacao")
+async def conciliacao() -> dict:
+    """Endpoint admin: saldo retido total para conciliação financeira."""
+    from db.connection import get_db
+    from db.repositories import TransactionRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+    tx_repo = TransactionRepository(db)
+    total = await tx_repo.get_total_retained()
+    return {
+        "saldo_retido_total_notha": total,
+        "nota": "Compare este valor com o saldo real da conta Asaas da MAISOR CAPITAL. Divergência é bug crítico.",
+    }
