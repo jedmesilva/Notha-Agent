@@ -63,9 +63,15 @@ def _nome_valido(nome: str) -> bool:
         return False
     if all(p in _PALAVRAS_INVALIDAS_NOME for p in palavras):
         return False
-    if any(len(p) < 2 for p in palavras):
+    # Não rejeita preposições comuns em nomes brasileiros (de, da, do, das, dos)
+    _PREP_NOMES = {"de", "da", "do", "das", "dos", "e"}
+    palavras_significativas = [p for p in palavras if p not in _PREP_NOMES]
+    if not palavras_significativas:
+        return False
+    if any(len(p) < 2 for p in palavras_significativas):
         return False
     return True
+
 
 
 
@@ -128,9 +134,10 @@ class Orchestrator:
                 neg_repo, tx_repo, delivery_repo, engine,
             )
 
+        active_negs = await neg_repo.find_active_by_buyer(user["id"])
         intent = await self._conv.extract_intent(
             text,
-            contexto=self._build_context_string(user, await neg_repo.find_active_by_buyer(user["id"])),
+            contexto=self._build_context_string(user, active_negs),
         )
 
         intencao = intent.get("intencao", "outro")
@@ -143,8 +150,6 @@ class Orchestrator:
 
         if intencao == "informar_dados":
             return await self._handle_data_update(phone, intent, user, user_repo)
-
-        active_negs = await neg_repo.find_active_by_buyer(user["id"])
 
         if intencao in ("confirmacao", "recusa") and active_negs:
             neg = active_negs[0]
@@ -180,20 +185,19 @@ class Orchestrator:
 
     async def _coletar_nome(self, phone: str, text: str, user, user_repo: UserRepository) -> str:
         """Usuário existe no banco mas ainda não tem nome. Extrai e salva."""
-        intent = await self._conv.extract_intent(text, contexto="aguardando_nome")
-
+        intent = await self._conv.extract_intent(text, contexto="aguardando_nome: o usuário ainda não informou seu nome")
         if intent.get("intencao") == "informar_dados" and intent.get("campo") == "nome":
             nome = intent.get("valor", "").strip()
             if nome and _nome_valido(nome):
                 await user_repo.update(user["id"], nome=nome)
+                logger.info("Nome salvo: %s (user_id=%s)", nome, user["id"])
                 return await self._conv.build_reply(
                     f"Prazer, {nome}! Para finalizar o cadastro, preciso do seu CPF (só os números).",
                     {},
                 )
             if nome and not _nome_valido(nome):
                 return await self._conv.build_reply(
-                    "Hmm, não reconheci isso como um nome. Me manda seu nome completo, por favor!",
-                    {},
+                    "Hmm, não reconheci isso como um nome. Me manda seu nome completo, por favor!", {}
                 )
 
         # Nome não reconhecido — LLM responde naturalmente e pede de novo
@@ -422,7 +426,17 @@ class Orchestrator:
     def _build_context_string(self, user, active_negs) -> str:
         parts = []
         if user:
-            parts.append(f"Usuário: {user.get('nome', 'sem nome')} (id={user['id']})")
+            nome_atual = user.get("nome") or ""
+            if nome_atual and not _nome_valido(nome_atual):
+                # Nome salvo parece inválido (ex: "oi", "sim") — avisar o LLM
+                # para capturar qualquer menção ao nome real do usuário
+                parts.append(
+                    f"ATENÇÃO: o nome salvo do usuário é '{nome_atual}', que parece incorreto. "
+                    f"Se o usuário mencionar seu nome real, classifique como "
+                    f"intencao=informar_dados, campo=nome, valor=<nome mencionado>."
+                )
+            else:
+                parts.append(f"Usuário: {nome_atual or 'sem nome'} (id={user['id']})")
         if active_negs:
             parts.append(f"Negociações ativas: {len(active_negs)}")
         return " | ".join(parts) if parts else "novo usuário"

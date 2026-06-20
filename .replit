@@ -51,3 +51,8 @@ localPort = 8081
 [nix]
 channel = "stable-25_05"
 packages = ["glibcLocales", "postgresql"]
+
+[userenv]
+
+[userenv.shared]
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNsc3puZGFrd2dpenV6aGJuZnphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE5MzUyNzIsImV4cCI6MjA5NzUxMTI3Mn0.AmE-e4Ynw2Fm7hgD1Y0FNb1eoE9ce7V_lxrB0DwSfbk"
