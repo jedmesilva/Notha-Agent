@@ -60,16 +60,32 @@ class ListingFlowAgent:
             self._client = _make_client()
         return self._client
 
+    # ─────────────────────────────────────────────
+    # Guardrails — extração com evidência e retry
+    # ─────────────────────────────────────────────
+
+    _EXTRACT_GUARDRAIL = (
+        "\n\nRETORNE SEMPRE UM JSON VÁLIDO seguindo estas REGRAS DE EXTRAÇÃO (OBRIGATÓRIAS):\n"
+        "1. Para cada campo extraído, inclua um campo 'evidencia_<campo>' com o trecho "
+        "   EXATO da mensagem do usuário que embasa o valor. Se não houver trecho que sustente, "
+        "   o campo principal DEVE ser null e 'evidencia_<campo>' DEVE ser null.\n"
+        "2. NUNCA invente, infira ou suponha valores. Só extraia o que foi dito explicitamente.\n"
+        "3. NUNCA complete informações implícitas (ex: o usuário disse 'iPhone 13' sem citar 'Apple' "
+        "   → marca=null, não 'Apple').\n"
+        "4. Em caso de dúvida, prefira null a um valor incerto."
+    )
+
     async def _extract(self, system: str, user_msg: str) -> dict:
+        """Extração base — use _extract_validated() nas etapas de negócio."""
         try:
             resp = await self._get_client().chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
-                    {"role": "system", "content": system},
+                    {"role": "system", "content": system + self._EXTRACT_GUARDRAIL},
                     {"role": "user", "content": user_msg},
                 ],
-                temperature=0.1,
-                max_tokens=300,
+                temperature=0.0,
+                max_tokens=400,
                 response_format={"type": "json_object"},
             )
             return json.loads(resp.choices[0].message.content or "{}")
@@ -77,7 +93,139 @@ class ListingFlowAgent:
             logger.error(f"Erro na extração LLM: {e}")
             return {}
 
+    async def _extract_validated(
+        self,
+        system: str,
+        user_msg: str,
+        validators: dict,
+        max_retries: int = 2,
+    ) -> dict:
+        """
+        Extração com guardrails:
+          - Exige campo 'evidencia_<campo>' em cada campo extraído
+          - Verifica que a evidência é um substring real da mensagem do usuário
+          - Aplica validators[campo](value) para cada campo — retorna None se inválido
+          - Retry com feedback de erro (max_retries tentativas)
+
+        validators: {campo: callable(value) -> value_validado | None}
+        """
+        messages = [
+            {"role": "system", "content": system + self._EXTRACT_GUARDRAIL},
+            {"role": "user", "content": user_msg},
+        ]
+        last_result: dict = {}
+
+        for tentativa in range(max_retries):
+            try:
+                resp = await self._get_client().chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=500,
+                    response_format={"type": "json_object"},
+                )
+                raw = json.loads(resp.choices[0].message.content or "{}")
+            except Exception as e:
+                logger.error(f"Extração validada falhou (tentativa {tentativa+1}): {e}")
+                break
+
+            erros: list[str] = []
+            resultado: dict = {}
+            user_lower = user_msg.lower()
+
+            for campo, validator in validators.items():
+                valor_bruto = raw.get(campo)
+                evidencia = raw.get(f"evidencia_{campo}")
+
+                # Guardrail 1: evidência deve existir como substring real (só valida se há valor não-nulo)
+                if valor_bruto is not None:
+                    if evidencia is None or str(evidencia).lower() not in user_lower:
+                        erros.append(
+                            f"Campo '{campo}': valor '{valor_bruto}' extraído sem evidência textual na mensagem do usuário. "
+                            f"Retorne null para '{campo}' e null para 'evidencia_{campo}'."
+                        )
+                        resultado[campo] = None
+                        continue
+
+                # Guardrail 2: validator de tipo/enum/range
+                valor_validado = validator(valor_bruto)
+                if valor_bruto is not None and valor_validado is None:
+                    erros.append(
+                        f"Campo '{campo}': valor '{valor_bruto}' inválido. "
+                        f"Retorne null ou um dos valores permitidos. Inclua 'evidencia_{campo}' com o trecho exato."
+                    )
+                resultado[campo] = valor_validado
+
+            last_result = resultado
+
+            if not erros:
+                return resultado
+
+            # Retry com feedback dos erros (mantém palavra 'json' para response_format)
+            logger.warning(f"Extração com erros (tentativa {tentativa+1}): {erros}")
+            messages.append({"role": "assistant", "content": json.dumps(raw)})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Sua extração contém problemas. Corrija e retorne um novo JSON válido:\n"
+                    + "\n".join(f"- {e}" for e in erros)
+                ),
+            })
+
+        return last_result
+
+    # ─────────────────────────────────────────────
+    # Validators reutilizáveis
+    # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _val_condicao(v):
+        validos = {"como_novo", "bom", "conservado", "desgastado", "com_defeito"}
+        return v if isinstance(v, str) and v in validos else None
+
+    @staticmethod
+    def _val_estado_uso(v):
+        return v if isinstance(v, str) and v in {"novo", "usado"} else None
+
+    @staticmethod
+    def _val_bool(v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            if v.lower() in ("true", "sim", "yes", "1"):
+                return True
+            if v.lower() in ("false", "não", "nao", "no", "0"):
+                return False
+        return None
+
+    @staticmethod
+    def _val_price(v):
+        """Preço deve ser número positivo entre R$1 e R$9.999.999."""
+        try:
+            f = float(v)
+            if 1.0 <= f <= 9_999_999.0:
+                return round(f, 2)
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _val_str_or_none(v):
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        return None
+
+    @staticmethod
+    def _val_pronto(v):
+        if isinstance(v, bool):
+            return v
+        return None
+
     async def _reply(self, instrucao: str) -> str:
+        """
+        Gera resposta conversacional a partir de uma instrução de roteiro.
+        O LLM só pode redigir a mensagem — não decide dados, não inventa informações.
+        """
         try:
             resp = await self._get_client().chat.completions.create(
                 model=OPENAI_MODEL,
@@ -86,16 +234,21 @@ class ListingFlowAgent:
                         "role": "system",
                         "content": (
                             "Você é o NOTHA, assistente de venda de produtos via WhatsApp. "
-                            "Transforme a instrução em uma mensagem curta, direta e natural. "
-                            "Sem markdown (sem *, sem #). Máximo 3 frases. "
-                            "Português brasileiro coloquial. "
-                            "NUNCA comece com saudações ('Oi!', 'Olá!', 'Certo!', 'Perfeito!'). "
-                            "Vá direto ao ponto."
+                            "Sua única função aqui é redigir a mensagem descrita na instrução, "
+                            "de forma curta, direta e natural. Máximo 3 frases. Sem markdown. "
+                            "Português brasileiro coloquial.\n\n"
+                            "PROIBIDO:\n"
+                            "- Inventar ou inferir dados que não estão na instrução\n"
+                            "- Sugerir preços ou valores não fornecidos\n"
+                            "- Fazer perguntas além do que a instrução pede\n"
+                            "- Começar com saudações (Oi!, Olá!, Certo!, Perfeito!)\n"
+                            "- Dar informações sobre o produto além das fornecidas\n"
+                            "- Prometer funcionalidades ou prazos não confirmados"
                         ),
                     },
                     {"role": "user", "content": instrucao},
                 ],
-                temperature=0.5,
+                temperature=0.4,
                 max_tokens=250,
             )
             return resp.choices[0].message.content or instrucao
@@ -203,15 +356,23 @@ class ListingFlowAgent:
         return dados, fotos, pergunta, False
 
     async def _step_marca_modelo(self, dados, fotos, text):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "Extraia marca, modelo e versão do texto. "
-                "Retorne JSON: {\"marca\": string_ou_null, \"modelo\": string_ou_null, \"versao\": string_ou_null}. "
-                "Exemplos: 'iPhone 13 Pro 256GB' → {\"marca\":\"Apple\",\"modelo\":\"iPhone 13 Pro\",\"versao\":\"256GB\"}. "
-                "'Nike Air Max 90' → {\"marca\":\"Nike\",\"modelo\":\"Air Max 90\",\"versao\":null}. "
-                "'sem marca' ou 'não sei' → {\"marca\":null,\"modelo\":null,\"versao\":null}."
+                "Extraia marca, modelo e versão do texto.\n"
+                "Retorne JSON com os campos: marca, modelo, versao.\n"
+                "Exemplos:\n"
+                "  'iPhone 13 Pro 256GB' → marca=null (usuário não disse 'Apple'), modelo='iPhone 13 Pro', versao='256GB'\n"
+                "  'Nike Air Max 90' → marca='Nike', modelo='Air Max 90', versao=null\n"
+                "  'sem marca' ou 'não sei' → todos null\n"
+                "Se o usuário não mencionou a marca explicitamente, retorne marca=null. "
+                "Não complete com marcas que você 'sabe' — só o que foi dito."
             ),
             user_msg=text,
+            validators={
+                "marca":  self._val_str_or_none,
+                "modelo": self._val_str_or_none,
+                "versao": self._val_str_or_none,
+            },
         )
         dados.update({
             "marca":  ext.get("marca"),
@@ -225,15 +386,17 @@ class ListingFlowAgent:
         return dados, fotos, pergunta, False
 
     async def _step_estado_uso(self, dados, fotos, text):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "Determine se o produto é novo ou usado com base na resposta do usuário. "
-                "Retorne JSON: {\"estado_uso\": \"novo\" | \"usado\"}. "
-                "Na dúvida, use 'usado'."
+                "Determine se o produto é novo ou usado com base EXCLUSIVAMENTE no que o usuário disse.\n"
+                "Valores permitidos para 'estado_uso': 'novo' ou 'usado'.\n"
+                "Palavras que indicam novo: novo, nunca usado, lacrado, na caixa, zerado.\n"
+                "Na dúvida, retorne null — não assuma 'usado' automaticamente."
             ),
             user_msg=text,
+            validators={"estado_uso": self._val_estado_uso},
         )
-        dados["estado_uso"] = ext.get("estado_uso", "usado")
+        dados["estado_uso"] = ext.get("estado_uso") or "usado"
         opcoes = "\n".join(f"  {i+1}. {v}" for i, v in enumerate(CONDICAO_LABEL.values()))
         pergunta = await self._reply(
             f"Produto declarado como {dados['estado_uso']}. "
@@ -245,31 +408,39 @@ class ListingFlowAgent:
         return dados, fotos, pergunta, False
 
     async def _step_condicao(self, dados, fotos, text):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "Classifique o estado de conservação em uma das categorias: "
-                "como_novo, bom, conservado, desgastado, com_defeito. "
-                "Retorne JSON: {\"condicao\": string, \"descricao_condicao\": string}. "
-                "descricao_condicao: o que o usuário disse com as próprias palavras. "
-                "Se o usuário escolheu um número: 1=como_novo, 2=bom, 3=conservado, 4=desgastado, 5=com_defeito."
+                "Classifique o estado de conservação com base APENAS no que o usuário disse.\n"
+                "Valores permitidos para 'condicao': como_novo, bom, conservado, desgastado, com_defeito.\n"
+                "Mapeamento de números: 1=como_novo, 2=bom, 3=conservado, 4=desgastado, 5=com_defeito.\n"
+                "Em 'descricao_condicao', copie literalmente as palavras do usuário — não parafraseie.\n"
+                "Se a mensagem for ambígua, retorne condicao=null."
             ),
             user_msg=text,
+            validators={
+                "condicao":           self._val_condicao,
+                "descricao_condicao": self._val_str_or_none,
+            },
         )
-        dados["condicao"] = ext.get("condicao", "conservado")
-        dados["descricao_condicao"] = ext.get("descricao_condicao", text)
+        dados["condicao"] = ext.get("condicao") or "conservado"
+        dados["descricao_condicao"] = ext.get("descricao_condicao") or text.strip()
         pergunta = await self._reply("Pergunte se o produto tem nota fiscal.")
         dados["step_next"] = "nota_fiscal"
         return dados, fotos, pergunta, False
 
     async def _step_nota_fiscal(self, dados, fotos, text):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "Determine se o produto tem nota fiscal. "
-                "Retorne JSON: {\"tem_nota_fiscal\": true | false}."
+                "O usuário está informando se o produto tem nota fiscal.\n"
+                "Extraia apenas o campo 'tem_nota_fiscal' (true ou false).\n"
+                "Palavras que indicam 'tem': tem, sim, tenho, possui, veio com, inclui.\n"
+                "Palavras que indicam 'não tem': não, sem, perdi, não tenho, não tem.\n"
+                "Se ambíguo, retorne null — não assuma false automaticamente."
             ),
             user_msg=text,
+            validators={"tem_nota_fiscal": self._val_bool},
         )
-        dados["tem_nota_fiscal"] = ext.get("tem_nota_fiscal", False)
+        dados["tem_nota_fiscal"] = ext.get("tem_nota_fiscal") if ext.get("tem_nota_fiscal") is not None else False
         pergunta = await self._reply(
             "Instrua o usuário a enviar as fotos do produto agora. "
             "Diga que pode mandar várias fotos mostrando diferentes ângulos, "
@@ -287,14 +458,16 @@ class ListingFlowAgent:
             )
             return dados, fotos, reply, False
 
-        pronto = await self._extract(
+        pronto = await self._extract_validated(
             system=(
-                "O usuário está enviando fotos de um produto. "
-                "Determine se a mensagem indica que terminou de enviar. "
-                "Retorne JSON: {\"pronto\": true | false}. "
-                "Palavras que indicam 'pronto': pronto, ok, é isso, terminei, pode seguir, continuar, acabou, só isso."
+                "O usuário está no processo de envio de fotos de um produto.\n"
+                "Determine APENAS se a mensagem indica que terminou de enviar fotos.\n"
+                "Campo 'pronto': true se a mensagem sinaliza conclusão, false se ainda quer enviar mais.\n"
+                "Palavras que indicam conclusão: pronto, ok, é isso, terminei, pode seguir, continuar, acabou, só isso, encerrei.\n"
+                "Se a mensagem for uma pergunta, comentário ou descrição — não é 'pronto'."
             ),
             user_msg=text,
+            validators={"pronto": self._val_pronto},
         )
         if not pronto.get("pronto", True):
             dados["obs_fotos"] = text
@@ -321,18 +494,27 @@ class ListingFlowAgent:
     async def _step_endereco(self, dados, fotos, text, seller_profile):
         endereco_sugerido = dados.get("_endereco_sugerido")
         if endereco_sugerido:
-            ext = await self._extract(
+            ext = await self._extract_validated(
                 system=(
-                    "O usuário foi perguntado se quer usar o endereço cadastrado ou informar um novo. "
-                    "Retorne JSON: {\"confirma_existente\": true | false, \"novo_endereco\": string | null}. "
-                    "Se confirmar o existente (sim, pode usar, esse mesmo), novo_endereco = null."
+                    "O usuário foi perguntado se confirma o endereço cadastrado ou quer informar um novo.\n"
+                    "Extraia:\n"
+                    "  'confirma_existente': true se o usuário aceitou o endereço já cadastrado.\n"
+                    "  'novo_endereco': string com o novo endereço, ou null se não forneceu um novo.\n"
+                    "Palavras de confirmação: sim, pode usar, esse mesmo, o cadastrado, tá bom, ok.\n"
+                    "NUNCA invente um endereço — se o usuário não forneceu texto de endereço, novo_endereco=null."
                 ),
                 user_msg=text,
+                validators={
+                    "confirma_existente": self._val_bool,
+                    "novo_endereco":      self._val_str_or_none,
+                },
             )
-            if ext.get("confirma_existente", False):
+            if ext.get("confirma_existente"):
                 dados["endereco_retirada"] = endereco_sugerido
+            elif ext.get("novo_endereco"):
+                dados["endereco_retirada"] = ext["novo_endereco"]
             else:
-                dados["endereco_retirada"] = ext.get("novo_endereco") or text.strip()
+                dados["endereco_retirada"] = text.strip()
         else:
             dados["endereco_retirada"] = text.strip()
 
@@ -345,15 +527,21 @@ class ListingFlowAgent:
         return dados, fotos, pergunta, False
 
     async def _step_preco(self, dados, fotos, text, db):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "Extraia o preço de venda e o preço mínimo da mensagem. "
-                "Retorne JSON: {\"preco_desejado\": number | null, \"preco_minimo_vendedor\": number | null}. "
-                "Exemplos: 'quero 500, aceito no mínimo 400' → {\"preco_desejado\":500,\"preco_minimo_vendedor\":400}. "
-                "'R$ 1.200' → {\"preco_desejado\":1200,\"preco_minimo_vendedor\":null}. "
-                "Valores por extenso: 'quinhentos reais' → 500."
+                "O usuário está informando o preço de venda e/ou o preço mínimo que aceitaria.\n"
+                "Extraia:\n"
+                "  'preco_desejado': valor numérico em reais (ex: 'quero 500' → 500.0), ou null.\n"
+                "  'preco_minimo_vendedor': valor numérico do mínimo aceitável (ex: 'aceito no mínimo 400' → 400.0), ou null.\n"
+                "Valores por extenso são aceitos: 'quinhentos reais' → 500.\n"
+                "NUNCA invente um preço mínimo se o usuário não mencionou. "
+                "NUNCA arredonde ou ajuste o valor — use exatamente o que o usuário disse."
             ),
             user_msg=text,
+            validators={
+                "preco_desejado":        self._val_price,
+                "preco_minimo_vendedor": self._val_price,
+            },
         )
         dados["preco_desejado"] = ext.get("preco_desejado")
         dados["preco_minimo_vendedor"] = ext.get("preco_minimo_vendedor")
@@ -365,17 +553,23 @@ class ListingFlowAgent:
         return dados, fotos, reply, False
 
     async def _step_confirmar(self, dados, fotos, text):
-        ext = await self._extract(
+        ext = await self._extract_validated(
             system=(
-                "O usuário está respondendo se confirma o anúncio do produto ou não. "
-                "Retorne JSON: {\"confirmou\": true | false, \"novo_preco\": number | null}. "
-                "Se mencionar um preço diferente, extraia em novo_preco. "
-                "Confirmações: sim, confirmo, pode anunciar, fechou, ok, isso. "
-                "Recusas: não, mudei de ideia, quero mudar, cancela."
+                "O usuário está respondendo ao resumo do anúncio para confirmar ou rejeitar.\n"
+                "Extraia:\n"
+                "  'confirmou': true se o usuário aceitou e quer publicar, false se recusou ou quer mudar algo.\n"
+                "  'novo_preco': valor numérico se o usuário pediu explicitamente para anunciar por outro preço, null caso contrário.\n"
+                "Confirmações claras: sim, confirmo, pode anunciar, fechou, ok, tá bom, isso mesmo, pode publicar.\n"
+                "Recusas: não, mudei de ideia, quero mudar, cancela, espera.\n"
+                "NUNCA deduza 'confirmou=true' se a mensagem for ambígua. Na dúvida, confirmou=false."
             ),
             user_msg=text,
+            validators={
+                "confirmou":  self._val_bool,
+                "novo_preco": self._val_price,
+            },
         )
-        if ext.get("confirmou", False):
+        if ext.get("confirmou") is True:
             dados["confirmado"] = True
             dados["step_next"] = "concluido"
             return dados, fotos, "", True
@@ -554,19 +748,22 @@ class ListingFlowAgent:
         content.append({
             "type": "text",
             "text": (
-                f"Analise as fotos deste produto: {produto}. "
-                f"O vendedor declarou condição: {CONDICAO_LABEL.get(condicao_declarada, condicao_declarada)}. "
-                "Em 2-3 frases: descreva o estado visual real, "
-                "identifique arranhões/danos visíveis, "
-                "e avalie se a condição declarada parece correta."
+                f"Produto: {produto}. Condição declarada pelo vendedor: {CONDICAO_LABEL.get(condicao_declarada, condicao_declarada)}.\n\n"
+                "REGRAS DA ANÁLISE (obrigatórias):\n"
+                "1. Descreva APENAS o que é visualmente observável nas imagens — não infira especificações técnicas, modelos, preços ou procedência.\n"
+                "2. Liste objetivamente: acabamento, arranhões, manchas, amassados, desgaste ou danos visíveis.\n"
+                "3. Diga se a condição declarada é CONSISTENTE ou INCONSISTENTE com o que aparece nas fotos — justifique com o que você viu.\n"
+                "4. NÃO atribua valor de mercado. NÃO sugira preços. NÃO faça afirmações sobre autenticidade.\n"
+                "5. Se as fotos estiverem desfocadas, escuras ou insuficientes para avaliar, diga isso explicitamente em vez de adivinhar.\n"
+                "Responda em 2-4 frases objetivas."
             ),
         })
         try:
             resp = await self._get_client().chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": content}],
-                max_tokens=200,
-                temperature=0.1,
+                max_tokens=250,
+                temperature=0.0,
             )
             return resp.choices[0].message.content
         except Exception as e:
