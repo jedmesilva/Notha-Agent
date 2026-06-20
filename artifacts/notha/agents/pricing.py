@@ -7,28 +7,68 @@ Saída estruturada: preco_sugerido, preco_minimo_sugerido, justificativa, confia
 """
 import json
 import logging
+import os
 from openai import AsyncOpenAI
 from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
 
 logger = logging.getLogger("notha.agent.pricing")
 
-PRICING_SYSTEM_PROMPT = """Você é o agente de precificação do NOTHA, especializado em avaliar produtos físicos usados para venda via WhatsApp.
+PRICING_SYSTEM_PROMPT = """Você é o agente de precificação do NOTHA — especialista em avaliar produtos físicos usados para venda entre particulares via WhatsApp, no mercado brasileiro.
 
-Sua tarefa é sugerir:
-1. Um preço anunciado justo (preco_sugerido)
-2. Um preço mínimo aceitável (preco_minimo_sugerido) — nunca revelado ao comprador
+━━━ SUA TAREFA ━━━
+Com base nos dados fornecidos, sugira:
+1. preco_sugerido — preço justo para anunciar publicamente (atrativo para compradores, honesto para o mercado)
+2. preco_minimo_sugerido — piso abaixo do qual o vendedor não deve aceitar (NUNCA revelado ao comprador)
 
-Baseie-se nos dados fornecidos: descrição, fotos (se disponíveis), histórico de vendas similares e preço de mercado.
+━━━ CRITÉRIOS DE AVALIAÇÃO ━━━
 
-REGRA CRÍTICA: nunca sugira um preço mínimo abaixo de 60% do valor de mercado do produto novo sem justificativa explícita de dano severo ou produto incompleto.
+Estado do produto (aplique depreciação):
+- Novo/lacrado: 85-95% do preço de varejo atual
+- Seminovo (usado com cuidado, sem marcas): 60-80% do preço de varejo
+- Bom estado (uso normal, pequenas marcas): 45-65% do preço de varejo
+- Regular (desgaste visível, funciona): 30-50% do preço de varejo
+- Ruim / com defeito: 15-30% do preço de varejo — exige menção explícita na descrição
 
-Retorne SOMENTE um JSON válido com os campos:
+Fatores que elevam o preço:
++ Acompanha acessórios originais, caixa ou nota fiscal
++ Produto descontinuado ou difícil de encontrar
++ Alta demanda no momento (iPhone recente, console novo, etc.)
++ Revisado ou com garantia do vendedor
+
+Fatores que reduzem o preço:
+- Sem acessórios ou carregador
+- Sem nota fiscal / sem procedência
+- Modelo desatualizado (há versão mais nova disponível)
+- Arranhões, amassados, tela trincada
+- Bateria degradada (eletrônicos)
+
+━━━ REGRAS CRÍTICAS ━━━
+- O preço_mínimo NUNCA deve ser abaixo de 55% do preço sugerido (evita venda com grande prejuízo)
+- Se o produto tiver defeito grave e funcional, o mínimo pode cair até 40% do valor de mercado, mas exige justificativa explícita
+- Se o preço informado pelo vendedor estiver acima de 120% do mercado, sinalize com alerta
+- Se o preço informado pelo vendedor estiver abaixo de 60% do mercado, avalie se há defeito implícito não declarado
+- Não invente preços de mercado — se não tiver referência, indique confianca: "baixa" e explique
+- Preços devem ser múltiplos de R$5 ou R$10 (mais natural em negociações informais)
+- Produtos acima de R$5.000: arredonde para múltiplos de R$50
+
+━━━ REFERÊNCIAS POR CATEGORIA ━━━
+Eletrônicos: deprecia rápido — celulares perdem 20-30% ao sair da caixa
+Eletrodomésticos: deprecia moderado — vida útil longa mantém valor
+Móveis: depende muito do estado e da marca
+Vestuário / calçados: sem uso = 50-70% do novo; usado = 10-30%
+Brinquedos / infantil: completo e limpo vale mais; incompleto cai muito
+Veículos (acessórios): siga tabela FIPE como referência
+Outros: use bom senso e sinalize confiança baixa se não tiver referência
+
+━━━ SAÍDA OBRIGATÓRIA ━━━
+Retorne SOMENTE um JSON válido, sem texto fora do JSON:
 {
-  "preco_sugerido": <número>,
-  "preco_minimo_sugerido": <número>,
-  "justificativa": "<texto explicando a avaliação>",
-  "confianca": "alta|media|baixa",
-  "fontes": ["historico_interno", "avaliacao_visual", "mercado_externo", "descricao_textual"]
+  "preco_sugerido": <número arredondado>,
+  "preco_minimo_sugerido": <número arredondado>,
+  "justificativa": "<2-4 frases explicando o raciocínio, mencionando o estado e o mercado>",
+  "confianca": "alta | media | baixa",
+  "fontes": ["historico_interno", "avaliacao_visual", "mercado_externo", "descricao_textual"],
+  "alerta": "<null ou mensagem de alerta se o preço do vendedor for muito discrepante>"
 }
 """
 
@@ -69,12 +109,22 @@ class PricingAgent:
 
         if historico_similares:
             fontes_usadas.append("historico_interno")
-            precos = [h.get("preco_final", h.get("preco_anunciado", 0)) for h in historico_similares if h.get("preco_final") or h.get("preco_anunciado")]
+            precos = [
+                h.get("preco_final", h.get("preco_anunciado", 0))
+                for h in historico_similares
+                if h.get("preco_final") or h.get("preco_anunciado")
+            ]
             if precos:
                 media = sum(precos) / len(precos)
-                contexto_parts.append(f"Histórico de {len(precos)} vendas similares: média R${media:.2f}, valores: {[f'R${p:.0f}' for p in precos]}")
+                minimo = min(precos)
+                maximo = max(precos)
+                contexto_parts.append(
+                    f"Histórico de {len(precos)} vendas similares no NOTHA: "
+                    f"média R${media:.0f}, mínimo R${minimo:.0f}, máximo R${maximo:.0f}. "
+                    f"Valores: {[f'R${p:.0f}' for p in precos]}"
+                )
 
-        contexto_parts.append("Descricao textual analisada.")
+        contexto_parts.append("Descrição textual analisada.")
         fontes_usadas.append("descricao_textual")
 
         user_content = []
@@ -89,7 +139,7 @@ class PricingAgent:
 
         user_content.append({
             "type": "text",
-            "text": "\n".join(contexto_parts) + "\n\nAvalie e retorne o JSON de precificação.",
+            "text": "\n".join(contexto_parts) + "\n\nAvalie este produto e retorne o JSON de precificação.",
         })
 
         try:
@@ -100,7 +150,7 @@ class PricingAgent:
                     {"role": "user", "content": user_content},
                 ],
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=600,
                 response_format={"type": "json_object"},
             )
             raw = resp.choices[0].message.content or "{}"
@@ -118,10 +168,11 @@ class PricingAgent:
             fallback = preco_informado_vendedor or 0
             return {
                 "preco_sugerido": fallback,
-                "preco_minimo_sugerido": round(fallback * 0.85, 2),
-                "justificativa": "Avaliação automática indisponível. Usando referência do vendedor.",
+                "preco_minimo_sugerido": round(fallback * 0.80, 2),
+                "justificativa": "Avaliação automática indisponível. Usando referência informada pelo vendedor.",
                 "confianca": "baixa",
                 "fontes": ["descricao_textual"],
+                "alerta": None,
                 "alerta_preco_vendedor": False,
             }
 
@@ -130,10 +181,10 @@ class PricingAgent:
         try:
             from duckduckgo_search import DDGS
             with DDGS() as ddgs:
-                results = list(ddgs.text(f"preço {query} usado Brasil", max_results=3))
+                results = list(ddgs.text(f"preço {query} usado Brasil site:olx.com.br OR site:mercadolivre.com.br", max_results=5))
                 if results:
-                    snippets = [r.get("body", "") for r in results]
-                    return " | ".join(snippets[:3])
+                    snippets = [r.get("body", "") for r in results if r.get("body")]
+                    return " | ".join(snippets[:4])
         except Exception as e:
             logger.debug(f"Web search indisponível: {e}")
         return None
