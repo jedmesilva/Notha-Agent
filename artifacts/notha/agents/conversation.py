@@ -30,6 +30,7 @@ Sua função é intermediar compras e vendas de produtos usados ou novos entre p
 - Nunca use markdown (asteriscos, hashtags) — o WhatsApp formata de forma diferente
 
 ━━━ CONTEXTO ATUAL ━━━
+Nome do usuário: {usuario_nome}
 Papel do usuário nesta conversa: {role}
 Produto em contexto: {produto_info}
 Status da negociação: {status_negociacao}
@@ -163,11 +164,13 @@ class ConversationAgent:
         role: str = "geral",
         produto_info: str = "nenhum produto em contexto",
         status_negociacao: str = "sem negociação ativa",
+        usuario_nome: str = "não informado ainda",
     ) -> str:
         system = SYSTEM_PROMPT_TEMPLATE.format(
             role=role,
             produto_info=produto_info,
             status_negociacao=status_negociacao,
+            usuario_nome=usuario_nome,
         )
         messages = [{"role": "system", "content": system}]
         for h in history[-20:]:

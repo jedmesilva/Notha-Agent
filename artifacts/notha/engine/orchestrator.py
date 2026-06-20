@@ -32,6 +32,18 @@ def _parece_cpf(texto: str) -> bool:
     return limpo.isdigit() and len(limpo) == 11
 
 
+_SAUDACOES = {
+    "oi", "olá", "ola", "oii", "oiii", "hey", "hi", "hello",
+    "bom dia", "boa tarde", "boa noite", "bom tarde", "boa dia",
+    "e aí", "e ai", "eai", "eaí", "salve", "opa", "opa!", "oi!", "olá!",
+    "tudo bem", "tudo bom", "tudo certo", "como vai",
+}
+
+def _e_saudacao(texto: str) -> bool:
+    """Retorna True se o texto é claramente uma saudação, não um nome."""
+    return texto.lower().strip().rstrip("!?.") in _SAUDACOES
+
+
 def _add_to_history(phone: str, role: str, content: str) -> None:
     if phone not in CONVERSATION_HISTORY:
         CONVERSATION_HISTORY[phone] = []
@@ -109,6 +121,7 @@ class Orchestrator:
                 phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine,
             )
 
+        nome = user.get("nome") or "não informado ainda"
         reply = await self._conv.respond(
             phone=phone,
             user_message=text,
@@ -116,6 +129,7 @@ class Orchestrator:
             role="geral",
             produto_info="sem produto específico",
             status_negociacao=self._summarize_negs(active_negs),
+            usuario_nome=nome,
         )
         _add_to_history(phone, "user", text)
         _add_to_history(phone, "assistant", reply)
@@ -127,6 +141,7 @@ class Orchestrator:
             phone=phone,
             user_message=text,
             history=_get_history(phone),
+            usuario_nome="não informado ainda",
         )
         _add_to_history(phone, "user", text)
         _add_to_history(phone, "assistant", reply)
@@ -157,9 +172,9 @@ class Orchestrator:
         if intent.get("intencao") == "informar_dados" and intent.get("campo") == "nome":
             nome_extraido = intent.get("valor", "").strip() or text.strip()
         elif intent.get("intencao") == "outro":
-            # Texto curto sem CPF → provavelmente é o nome
             texto_limpo = text.strip()
-            if texto_limpo and not _parece_cpf(texto_limpo):
+            # Ignora saudações comuns — não são nomes
+            if texto_limpo and not _parece_cpf(texto_limpo) and not _e_saudacao(texto_limpo):
                 nome_extraido = texto_limpo
 
         if nome_extraido:
