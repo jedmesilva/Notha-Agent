@@ -6,4 +6,3 @@ httpx==0.28.1
 python-dotenv==1.0.1
 sympy==1.14.0
 pint==0.25.3
-ddgs==9.14.4
