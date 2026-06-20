@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# cache-bust: 20260620-01
 COPY artifacts/notha/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
