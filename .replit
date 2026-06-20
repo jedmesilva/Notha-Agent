@@ -50,4 +50,4 @@ localPort = 8081
 
 [nix]
 channel = "stable-25_05"
-packages = ["glibcLocales"]
+packages = ["glibcLocales", "postgresql"]

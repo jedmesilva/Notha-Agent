@@ -86,6 +86,19 @@ async def receive_message(request: Request) -> Response:
 
     messages = extract_messages(body)
     for msg in messages:
+        msg_id = msg.get("id", "")
+        from engine.orchestrator import PROCESSED_MESSAGE_IDS, MAX_PROCESSED_IDS
+        if msg_id and msg_id in PROCESSED_MESSAGE_IDS:
+            logger.info(f"Mensagem duplicada ignorada: {msg_id}")
+            continue
+        if msg_id:
+            PROCESSED_MESSAGE_IDS.add(msg_id)
+            if len(PROCESSED_MESSAGE_IDS) > MAX_PROCESSED_IDS:
+                # Evita crescimento ilimitado em memória
+                try:
+                    PROCESSED_MESSAGE_IDS.pop()
+                except KeyError:
+                    pass
         logger.info(f"Mensagem recebida de {msg['from']}: {msg['text'][:60]}...")
         asyncio.create_task(process_message(msg["from"], msg["text"].strip()))
 
