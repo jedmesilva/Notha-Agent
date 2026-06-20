@@ -16,6 +16,15 @@ from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
+from tools.builtin import web_search, currency, math, units, datetime_tool
+
+_BUILTIN_TOOL_MAP = {
+    web_search.name: web_search,
+    currency.name: currency,
+    math.name: math,
+    units.name: units,
+    datetime_tool.name: datetime_tool,
+}
 
 logger = logging.getLogger("notha.orchestrator")
 
@@ -309,6 +318,11 @@ class Orchestrator:
             }
             complex_reply = await self._handle_search(phone, text, user, listing_repo, intent)
             return "busca executada", complex_reply
+
+        if name in _BUILTIN_TOOL_MAP:
+            result = await _BUILTIN_TOOL_MAP[name].execute(**args)
+            logger.info("Tool builtin '%s' executada com sucesso", name)
+            return result, None
 
         logger.warning("Ferramenta desconhecida chamada pelo LLM: %s", name)
         return f"ferramenta '{name}' desconhecida", None

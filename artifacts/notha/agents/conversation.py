@@ -13,6 +13,7 @@ import logging
 import os
 from openai import AsyncOpenAI
 from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+from tools.builtin import ALL_BUILTIN_TOOLS
 
 logger = logging.getLogger("notha.agent.conversation")
 
@@ -74,11 +75,22 @@ Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Fornecer chave Pix → chame atualizar_chave_pix
 - Fornecer endereço → chame atualizar_endereco
 
+━━━ REGRA CRÍTICA — DADOS FACTUAIS ━━━
+NUNCA invente preços, cotações, cálculos, datas ou qualquer dado factual.
+Você OBRIGATORIAMENTE deve usar as ferramentas abaixo para qualquer dado factual:
+- Preço de produto, valor de mercado, quanto custa algo → pesquisar_web
+- Conversão entre moedas (dólar, euro, real, etc.) → converter_moeda
+- Qualquer cálculo numérico (desconto, porcentagem, divisão, etc.) → calcular
+- Conversão de unidades (kg, km, polegadas, etc.) → converter_unidades
+- Data ou hora atual → obter_data_hora
+
+Se você não chamar a ferramenta e inventar um valor, estará causando prejuízo real ao usuário.
+
 Contexto atual do usuário (dados reais do banco):
 {contexto}
 """
 
-NOTHA_TOOLS = [
+NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     {
         "type": "function",
         "function": {
