@@ -1,5 +1,7 @@
-import httpx
+import logging
 from tools.base import Tool
+
+logger = logging.getLogger("notha.tools.web_search")
 
 
 class WebSearchTool(Tool):
@@ -22,32 +24,23 @@ class WebSearchTool(Tool):
 
     async def execute(self, query: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(
-                    "https://api.duckduckgo.com/",
-                    params={
-                        "q": query,
-                        "format": "json",
-                        "no_html": "1",
-                        "skip_disambig": "1",
-                    },
-                    headers={"User-Agent": "Notha-Agent/1.0"},
-                )
-                data = response.json()
+            from ddgs import DDGS
 
-            if data.get("AbstractText"):
-                source = data.get("AbstractURL", "")
-                return f"{data['AbstractText']}\nFonte: {source}".strip()
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=4))
 
-            results = []
-            for topic in data.get("RelatedTopics", [])[:4]:
-                if isinstance(topic, dict) and "Text" in topic:
-                    results.append(topic["Text"])
+            if not results:
+                return "Não encontrei resultados para essa pesquisa."
 
-            if results:
-                return "\n\n".join(results)
+            lines = []
+            for r in results:
+                title = r.get("title", "")
+                body = r.get("body", "")
+                href = r.get("href", "")
+                lines.append(f"{title}\n{body}\nFonte: {href}")
 
-            return "Não encontrei resultados diretos para essa pesquisa."
+            return "\n\n".join(lines)
 
         except Exception as e:
-            return f"Erro ao pesquisar: {e}"
+            logger.error(f"Erro na busca web: {e}")
+            return f"Não consegui realizar a pesquisa no momento: {e}"
