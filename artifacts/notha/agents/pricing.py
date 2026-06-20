@@ -130,12 +130,21 @@ class PricingAgent:
         user_content = []
 
         if fotos:
-            fontes_usadas.append("avaliacao_visual")
-            for foto_url in fotos[:3]:
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": foto_url, "detail": "low"},
-                })
+            # fotos deve ser lista de data URIs base64 (data:image/...;base64,...)
+            # URLs diretas do WhatsApp exigem Authorization header e não funcionam aqui
+            validas = [f for f in fotos[:3] if isinstance(f, str) and f.startswith("data:image/")]
+            if validas:
+                fontes_usadas.append("avaliacao_visual")
+                for data_uri in validas:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_uri, "detail": "low"},
+                    })
+            elif fotos:
+                logger.warning(
+                    "pricing.appraise() recebeu fotos que não são data URIs base64 — ignoradas. "
+                    "Use download_media_as_base64() antes de chamar appraise()."
+                )
 
         user_content.append({
             "type": "text",

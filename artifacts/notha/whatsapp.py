@@ -25,6 +25,55 @@ async def get_media_url(media_id: str) -> str | None:
     return None
 
 
+async def download_media_as_base64(media_id: str, mime_type: str = "image/jpeg") -> str | None:
+    """
+    Baixa o binário de uma mídia do WhatsApp e retorna como data URI base64.
+
+    As URLs de mídia do WhatsApp exigem Authorization header — não são acessíveis
+    diretamente pelo GPT-4o Vision. Por isso é necessário baixar aqui e repassar
+    como data:image/...;base64,<dados>.
+
+    Retorna: "data:<mime>;base64,<b64>" ou None em caso de falha.
+    """
+    import base64
+
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+    if not token or not media_id:
+        return None
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            # Passo 1: resolve a URL de download
+            meta_resp = await client.get(
+                f"{GRAPH_API_URL}/{media_id}",
+                headers=headers,
+            )
+            if meta_resp.status_code != 200:
+                logger.warning(f"Falha ao obter metadata de mídia {media_id}: {meta_resp.status_code}")
+                return None
+
+            download_url = meta_resp.json().get("url")
+            if not download_url:
+                return None
+
+            # Passo 2: baixa o binário com o mesmo token
+            dl_resp = await client.get(download_url, headers=headers)
+            if dl_resp.status_code != 200:
+                logger.warning(f"Falha ao baixar mídia {media_id}: {dl_resp.status_code}")
+                return None
+
+            # Usa o mime_type real se o servidor retornar
+            content_type = dl_resp.headers.get("content-type", mime_type).split(";")[0].strip()
+            b64 = base64.b64encode(dl_resp.content).decode("utf-8")
+            return f"data:{content_type};base64,{b64}"
+
+    except Exception as e:
+        logger.warning(f"Falha ao baixar mídia {media_id} como base64: {e}")
+        return None
+
+
 async def send_message(to: str, text: str) -> dict:
     token = os.environ["WHATSAPP_ACCESS_TOKEN"]
     phone_number_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"]

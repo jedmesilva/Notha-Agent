@@ -655,13 +655,28 @@ class ListingFlowAgent:
             except Exception as e:
                 logger.warning(f"Histórico banco falhou: {e}")
 
-        # 3. Análise visual das fotos
-        vision_result = None
+        # 3. Download das imagens como base64 (uma única vez — usado pela análise e pelo pricing)
+        base64_images: list[str] = []
         if fotos:
-            vision_result = await self._analisar_fotos(fotos, nome_produto, condicao)
+            from whatsapp import download_media_as_base64
+            for foto in fotos[:4]:
+                data_uri = await download_media_as_base64(
+                    foto.get("media_id", ""),
+                    foto.get("mime_type", "image/jpeg"),
+                )
+                if data_uri:
+                    base64_images.append(data_uri)
+            logger.info(f"Download de {len(base64_images)}/{len(fotos[:4])} fotos para análise visual")
+
+        # 3b. Análise visual das fotos (GPT-4o Vision)
+        vision_result = None
+        if base64_images:
+            vision_result = await self._analisar_fotos(
+                fotos, nome_produto, condicao, base64_images=base64_images
+            )
         dados["vision_analysis"] = vision_result
 
-        # 4. Precificação com todos os dados
+        # 4. Precificação com todos os dados (+ imagens para contexto visual no pricing)
         descricao_rica = (
             f"{nome_produto}. "
             f"Estado: {estado_uso}. "
@@ -676,6 +691,7 @@ class ListingFlowAgent:
             categoria=categoria,
             preco_informado_vendedor=preco_desejado,
             historico_similares=historico_similares,
+            fotos=base64_images or None,
         )
         dados["appraisal"] = appraisal
 
@@ -731,16 +747,31 @@ class ListingFlowAgent:
         return dados, msg
 
     async def _analisar_fotos(
-        self, fotos: list, produto: str, condicao_declarada: str
+        self, fotos: list, produto: str, condicao_declarada: str,
+        base64_images: list[str] | None = None,
     ) -> str | None:
-        """Usa GPT-4o Vision para analisar as fotos e verificar a condição declarada."""
-        from whatsapp import get_media_url
+        """
+        Usa GPT-4o Vision para analisar as fotos e verificar a condição declarada.
+
+        Aceita base64_images (lista de data URIs já baixadas) para evitar download duplo.
+        Se não fornecido, baixa cada foto do WhatsApp como base64 internamente.
+        URLs diretas do WhatsApp não funcionam com GPT-4o — exigem Authorization header.
+        """
+        from whatsapp import download_media_as_base64
+
+        imagens = base64_images or []
+        if not imagens:
+            for foto in fotos[:4]:
+                data_uri = await download_media_as_base64(
+                    foto.get("media_id", ""),
+                    foto.get("mime_type", "image/jpeg"),
+                )
+                if data_uri:
+                    imagens.append(data_uri)
 
         content = []
-        for foto in fotos[:4]:
-            url = await get_media_url(foto.get("media_id", ""))
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url, "detail": "low"}})
+        for data_uri in imagens:
+            content.append({"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}})
 
         if not content:
             return None
