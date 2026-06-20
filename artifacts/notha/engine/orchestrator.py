@@ -32,6 +32,42 @@ def _parece_cpf(texto: str) -> bool:
     return limpo.isdigit() and len(limpo) == 11
 
 
+# Palavras que não podem ser aceitas como nome próprio
+_PALAVRAS_INVALIDAS_NOME = {
+    "oi", "olá", "ola", "opa", "ei", "hey",
+    "sim", "não", "nao", "talvez", "ok", "okay",
+    "tudo", "bem", "bom", "dia", "tarde", "noite",
+    "boa", "boas", "certo", "claro", "pode", "vou",
+    "quero", "queria", "preciso", "ajuda", "help",
+    "alô", "alo", "eai", "eaí", "ae",
+}
+
+
+def _nome_valido(nome: str) -> bool:
+    """Valida se o valor extraído é um nome próprio plausível.
+
+    Rejeita:
+    - Muito curto (menos de 2 caracteres)
+    - Só números
+    - Palavras comuns de saudação, confirmação ou conversa
+    - Mais de 60 caracteres (improvável para um nome)
+    """
+    nome = nome.strip()
+    if len(nome) < 2 or len(nome) > 60:
+        return False
+    if nome.isdigit():
+        return False
+    # Verifica cada palavra individualmente — todas precisam ter ≥ 2 chars
+    palavras = nome.lower().split()
+    if not palavras:
+        return False
+    if all(p in _PALAVRAS_INVALIDAS_NOME for p in palavras):
+        return False
+    if any(len(p) < 2 for p in palavras):
+        return False
+    return True
+
+
 
 def _add_to_history(phone: str, role: str, content: str) -> None:
     if phone not in CONVERSATION_HISTORY:
@@ -148,10 +184,15 @@ class Orchestrator:
 
         if intent.get("intencao") == "informar_dados" and intent.get("campo") == "nome":
             nome = intent.get("valor", "").strip()
-            if nome:
+            if nome and _nome_valido(nome):
                 await user_repo.update(user["id"], nome=nome)
                 return await self._conv.build_reply(
                     f"Prazer, {nome}! Para finalizar o cadastro, preciso do seu CPF (só os números).",
+                    {},
+                )
+            if nome and not _nome_valido(nome):
+                return await self._conv.build_reply(
+                    "Hmm, não reconheci isso como um nome. Me manda seu nome completo, por favor!",
                     {},
                 )
 
@@ -277,6 +318,11 @@ class Orchestrator:
         valor = intent.get("valor", "")
 
         if campo == "nome":
+            if not _nome_valido(valor):
+                return await self._conv.build_reply(
+                    "Hmm, não reconheci isso como um nome. Me manda seu nome completo, por favor!",
+                    {},
+                )
             await user_repo.update(user["id"], nome=valor)
             user_atualizado = await user_repo.find_by_id(user["id"])
             if not user_atualizado or not user_atualizado["cpf"]:
