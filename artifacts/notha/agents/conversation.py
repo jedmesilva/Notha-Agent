@@ -2,9 +2,9 @@
 Conversation Agent — única interface de linguagem natural com humanos.
 
 Responsabilidades:
-  - Interpretar mensagens em linguagem natural e extrair intenção estruturada (JSON)
-  - Traduzir decisões estruturadas do sistema em respostas naturais
-  - Manter tom humano e contextual durante toda a interação
+  - Conversar com o usuário usando histórico completo + tools (function calling)
+  - O LLM decide quando chamar cada ferramenta com base no contexto da conversa
+  - O código executa deterministicamente o que o LLM decidiu chamar
 
 NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
 """
@@ -16,50 +16,196 @@ from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
 
 logger = logging.getLogger("notha.agent.conversation")
 
-SYSTEM_PROMPT_TEMPLATE = """Você é o NOTHA — um agente de negociação de produtos físicos que opera 100% pelo WhatsApp.
-
-Sua função é intermediar compras e vendas de produtos usados ou novos entre pessoas reais, de forma segura, rápida e justa. Você gerencia a negociação, o pagamento via Pix e a entrega, tudo pelo chat.
+SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos físicos 100% pelo WhatsApp.
 
 ━━━ IDENTIDADE E TOM ━━━
 - Nome: NOTHA
 - Tom: direto, humano, informal mas profissional — como um amigo de confiança que entende de negócios
 - Linguagem: português brasileiro coloquial, sem gírias excessivas, sem formalidade corporativa
 - Evite frases genéricas como "Claro!", "Com certeza!", "Posso te ajudar?"
-- Seja objetivo: vá direto ao ponto em no máximo 3 frases curtas quando possível
-- Use emojis com moderação (1-2 por mensagem no máximo) quando natural para o contexto
-- Nunca use markdown (asteriscos, hashtags) — o WhatsApp formata de forma diferente
-
-━━━ CONTEXTO ATUAL ━━━
-Nome do usuário: {usuario_nome}
-Papel do usuário nesta conversa: {role}
-Produto em contexto: {produto_info}
-Status da negociação: {status_negociacao}
+- Seja objetivo: no máximo 3 frases curtas quando possível
+- Use emojis com moderação (1-2 por mensagem no máximo) quando natural
+- Nunca use markdown (asteriscos, hashtags) — o WhatsApp formata diferente
 
 ━━━ REGRAS INEGOCIÁVEIS ━━━
 1. NUNCA revele o preço mínimo do vendedor ao comprador
 2. NUNCA revele o limite máximo do comprador ao vendedor
-3. NUNCA prometa um valor, prazo ou condição que o sistema não confirmou
-4. NUNCA peça informação que já foi confirmada anteriormente nessa conversa
+3. NUNCA prometa valor, prazo ou condição que o sistema não confirmou
+4. NUNCA peça informação já confirmada nessa conversa
 5. NUNCA mencione "inteligência artificial", "LLM", "GPT" ou "algoritmo" — você é o NOTHA
-6. Se o usuário perguntar se você é robô: confirme que é um sistema automatizado, mas não entre em detalhes técnicos
-7. Em caso de conflito ou reclamação grave: oriente o usuário a responder "SUPORTE" para falar com um humano
+6. Se perguntarem se você é robô: confirme que é sistema automatizado, sem detalhes técnicos
+7. Conflito ou reclamação grave: oriente o usuário a responder "SUPORTE"
 
 ━━━ SOBRE PAGAMENTOS ━━━
-- Pagamentos são feitos via Pix (QR Code ou chave Pix)
-- O valor fica retido com segurança até a confirmação de entrega por ambas as partes
-- Apenas após confirmação mútua o valor é liberado para o vendedor
-- Taxa do NOTHA já está incluída — não detalhe o valor da taxa para o usuário
+- Pagamentos via Pix (QR Code ou chave Pix)
+- Valor fica retido até confirmação de entrega por ambas as partes
+- Taxa do NOTHA já inclusa — não detalhe o valor da taxa
 
-━━━ QUANDO COLETAR DADOS PESSOAIS ━━━
-Ao pedir CPF: "Preciso do seu CPF só para emitir o comprovante da transação — é seguro e não compartilhamos com terceiros."
-Ao pedir chave Pix: "Qual sua chave Pix para receber o pagamento? Pode ser CPF, e-mail, celular ou chave aleatória."
-Ao pedir endereço: "Me passa o endereço completo para entrega (rua, número, bairro, cidade e CEP)."
+━━━ COLETA DE DADOS ━━━
+- Se ainda não tiver o nome do usuário: peça de forma natural na primeira oportunidade
+- Se ainda não tiver o CPF: explique que é só para emitir comprovante, é seguro
+- Ao pedir chave Pix: "Qual sua chave Pix para receber? Pode ser CPF, e-mail, celular ou chave aleatória."
+- Ao pedir endereço: "Me passa o endereço completo (rua, número, bairro, cidade e CEP)."
 
-━━━ PAPEL ATUAL ━━━
-- vendedor: o usuário está cadastrando um produto para vender. Seja encorajador, ajude a descrever bem o produto.
-- comprador: o usuário quer comprar algo. Ajude-o a encontrar o que busca e entender o processo.
-- entregador: o usuário vai fazer uma entrega. Seja prático e claro sobre rota, valor e confirmação.
-- geral: primeiro contato ou situação não mapeada. Identifique o que o usuário quer e oriente.
+━━━ USO DAS FERRAMENTAS ━━━
+Você tem acesso a ferramentas para salvar dados e executar ações. Use-as sempre que o usuário:
+- Fornecer ou corrigir o nome → chame atualizar_nome
+- Fornecer ou corrigir o CPF → chame atualizar_cpf
+- Quiser vender um produto → chame listar_produto
+- Quiser comprar/buscar um produto → chame buscar_produto
+- Fornecer chave Pix → chame atualizar_chave_pix
+- Fornecer endereço → chame atualizar_endereco
+
+Contexto do usuário: {contexto}
+"""
+
+NOTHA_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_nome",
+            "description": (
+                "Salva ou corrige o nome do usuário no sistema. "
+                "Use sempre que o usuário fornecer ou corrigir seu nome, "
+                "inclusive frases como 'meu nome é X', 'me chamo X', 'pode me chamar de X', "
+                "'na verdade sou X', 'não, meu nome é X'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nome": {
+                        "type": "string",
+                        "description": "Nome completo do usuário como ele informou"
+                    }
+                },
+                "required": ["nome"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_cpf",
+            "description": "Salva ou corrige o CPF do usuário.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cpf": {
+                        "type": "string",
+                        "description": "CPF informado pelo usuário (pode ter pontos e traço ou só dígitos)"
+                    }
+                },
+                "required": ["cpf"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "listar_produto",
+            "description": "Cadastra um produto que o usuário quer vender.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "descricao": {
+                        "type": "string",
+                        "description": "Descrição completa do produto"
+                    },
+                    "categoria": {
+                        "type": "string",
+                        "description": "Categoria do produto (ex: eletrônicos, roupas, móveis)"
+                    },
+                    "preco_informado": {
+                        "type": "number",
+                        "description": "Preço que o vendedor quer cobrar, se informado"
+                    }
+                },
+                "required": ["descricao"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_produto",
+            "description": "Busca produtos disponíveis para compra.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "categoria": {
+                        "type": "string",
+                        "description": "Categoria do produto buscado"
+                    },
+                    "descricao_busca": {
+                        "type": "string",
+                        "description": "Descrição do que o usuário quer comprar"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_chave_pix",
+            "description": "Salva a chave Pix do usuário para receber pagamentos.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chave": {
+                        "type": "string",
+                        "description": "Chave Pix (CPF, e-mail, celular ou chave aleatória)"
+                    }
+                },
+                "required": ["chave"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_endereco",
+            "description": "Salva o endereço de entrega ou retirada do usuário.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "endereco": {
+                        "type": "string",
+                        "description": "Endereço completo (rua, número, bairro, cidade, CEP)"
+                    }
+                },
+                "required": ["endereco"]
+            }
+        }
+    },
+]
+
+REPLY_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
+
+Transforme a instrução abaixo em uma mensagem natural, curta e direta para enviar pelo WhatsApp.
+
+Regras:
+- No máximo 3 frases curtas
+- Tom informal mas profissional (como uma pessoa real de confiança)
+- Português brasileiro coloquial — sem "Prezado", sem "Venho por meio desta"
+- Sem markdown (sem *, sem #, sem _)
+- Emojis: 0 a 2, somente se ficarem naturais
+- Nunca mencione "sistema", "algoritmo", "banco de dados" ou termos técnicos
+- Se o contexto tiver um valor em R$, sempre formate como "R$ 1.200,00"
+"""
+
+CONFIRMATION_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
+
+Crie uma pergunta de confirmação clara e direta (resposta esperada: sim ou não).
+
+Regras:
+- Uma única pergunta, máximo 2 frases
+- Tom direto e amigável
+- Português coloquial
+- Sem markdown
+- Se houver valor em R$, formate como "R$ 1.200,00"
+- Termine com "Confirma?" ou "Pode confirmar?" ou variação natural
 """
 
 INTENT_EXTRACTION_PROMPT = """Você é um extrator de intenção para o sistema NOTHA de negociação de produtos via WhatsApp.
@@ -75,41 +221,17 @@ Contexto atual: {contexto}
 - Se o usuário confirmar com "sim", "pode ser", "tá bom", "fechou", "aceito", "combinado", "ok" → intencao: "confirmacao", aceitou: true
 - Se o usuário recusar com "não", "caro demais", "não quero", "desisto", "cancelar" → intencao: "recusa", aceitou: false
 - Se houver um valor mencionado em contexto de oferta ou contraproposta, extraia o número
-- Se o usuário informar, corrigir ou atualizar o próprio nome (ex: "meu nome é João", "pode me chamar de Ana", "na verdade me chamo Pedro", "não, meu nome é Carlos") → intencao: "informar_dados", campo: "nome"
-- Se o usuário informar ou corrigir o próprio CPF → intencao: "informar_dados", campo: "cpf"
 
-━━━ EXEMPLOS POR INTENCAO ━━━
+━━━ EXEMPLOS ━━━
 
-Oferta / contraproposta de preço:
-{{"intencao": "contraproposta", "valor_estimado": 350.0, "confianca": "alta", "contexto_extra": null}}
-
-Confirmação simples (sim/aceito/fechou):
+Confirmação simples:
 {{"intencao": "confirmacao", "aceitou": true}}
 
-Recusa simples (não/caro/desisto):
+Recusa simples:
 {{"intencao": "recusa", "aceitou": false, "motivo": "achou caro"}}
 
-Cadastro de produto para vender:
-{{"intencao": "listar_produto", "descricao": "iPhone 13 128GB preto, sem arranhões", "categoria": "eletrônicos", "preco_informado": 2200.0}}
-
-Busca de produto para comprar:
-{{"intencao": "buscar_produto", "categoria": "eletrônicos", "descricao_busca": "notebook usado até R$1500"}}
-
-Informação pessoal fornecida pelo usuário:
-{{"intencao": "informar_dados", "campo": "cpf", "valor": "123.456.789-00"}}
-{{"intencao": "informar_dados", "campo": "chave_pix", "valor": "meuemail@gmail.com"}}
-{{"intencao": "informar_dados", "campo": "endereco", "valor": "Rua das Flores, 123, Centro, São Paulo, SP, 01001-000"}}
-{{"intencao": "informar_dados", "campo": "nome", "valor": "João Silva"}}
-{{"intencao": "informar_dados", "campo": "nome", "valor": "Carlos"}}
-{{"intencao": "informar_dados", "campo": "nome", "valor": "Ana Lima"}}
-
-Correção de nome (usuário corrige o nome que estava errado):
-Mensagem: "não, meu nome é Carlos" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Carlos"}}
-Mensagem: "na verdade me chamo Ana Lima" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Ana Lima"}}
-Mensagem: "pode me chamar de Pedro" → {{"intencao": "informar_dados", "campo": "nome", "valor": "Pedro"}}
-
-Solicitação de suporte humano:
-{{"intencao": "suporte", "motivo": "reclamação sobre entrega"}}
+Oferta / contraproposta de preço:
+{{"intencao": "contraproposta", "valor_estimado": 350.0, "confianca": "alta"}}
 
 Confirmação de entrega pelo comprador:
 {{"intencao": "confirmar_entrega", "recebeu": true}}
@@ -117,35 +239,8 @@ Confirmação de entrega pelo comprador:
 Confirmação de entrega pelo vendedor:
 {{"intencao": "confirmar_entrega_vendedor", "entregou": true}}
 
-Comando não mapeado / conversa geral:
+Outro:
 {{"intencao": "outro", "descricao": "usuário perguntou sobre horário de funcionamento"}}
-"""
-
-REPLY_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
-
-Transforme a instrução abaixo em uma mensagem natural, curta e direta para enviar pelo WhatsApp.
-
-Regras:
-- No máximo 3 frases curtas
-- Tom informal mas profissional (como uma pessoa real de confiança)
-- Português brasileiro coloquial — sem "Prezado", sem "Venho por meio desta"
-- Sem markdown (sem *, sem #, sem _)
-- Emojis: 0 a 2, somente se ficarem naturais
-- Nunca mencione "sistema", "algoritmo", "banco de dados" ou termos técnicos
-- Se o contexto tiver um valor em R$, sempre formate como "R$ 1.200,00" (vírgula para centavos, ponto para milhar)
-"""
-
-CONFIRMATION_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
-
-Crie uma pergunta de confirmação clara e direta (resposta esperada: sim ou não).
-
-Regras:
-- Uma única pergunta, máximo 2 frases
-- Tom direto e amigável
-- Português coloquial
-- Sem markdown
-- Se houver valor em R$, formate como "R$ 1.200,00"
-- Termine com "Confirma?" ou "Pode confirmar?" ou variação natural
 """
 
 
@@ -165,6 +260,127 @@ class ConversationAgent:
             self._client = _make_client()
         return self._client
 
+    async def get_tool_calls(
+        self,
+        contexto: str,
+        history: list[dict],
+        user_message: str,
+        tools: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Fase 1 do tool calling: envia mensagens e retorna as tool calls que o LLM quer fazer.
+
+        Retorna (messages_so_far, tool_calls).
+        messages_so_far deve ser passado para get_reply_after_tools junto com os resultados reais.
+        """
+        system = SYSTEM_PROMPT.format(contexto=contexto)
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for h in history[-20:]:
+            messages.append(h)
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            resp = await self._get_client().chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.6,
+                max_tokens=500,
+            )
+        except Exception as e:
+            logger.error("Erro no get_tool_calls: %s", e)
+            return messages, []
+
+        assistant_msg = resp.choices[0].message
+
+        tool_calls: list[dict] = []
+        for tc in (assistant_msg.tool_calls or []):
+            try:
+                args = json.loads(tc.function.arguments)
+            except Exception:
+                args = {}
+            tool_calls.append({
+                "id": tc.id,
+                "name": tc.function.name,
+                "arguments": args,
+            })
+
+        # Adiciona a mensagem do assistant ao histórico de mensagens
+        messages.append({
+            "role": "assistant",
+            "content": assistant_msg.content,
+            **({"tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])},
+                }
+                for tc in tool_calls
+            ]} if tool_calls else {}),
+        })
+
+        return messages, tool_calls
+
+    async def get_reply_after_tools(
+        self,
+        messages: list[dict],
+        tool_results: dict[str, str],
+    ) -> str:
+        """Fase 2 do tool calling: envia os resultados reais das tools e obtém a resposta final.
+
+        tool_results: dict de tool_call_id → resultado descritivo (dados reais do banco).
+        """
+        for tool_id, result in tool_results.items():
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "content": result,
+            })
+
+        try:
+            resp = await self._get_client().chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=0.6,
+                max_tokens=500,
+            )
+            return resp.choices[0].message.content or "Feito!"
+        except Exception as e:
+            logger.error("Erro no get_reply_after_tools: %s", e)
+            return "Feito!"
+
+    async def chat_with_tools(
+        self,
+        contexto: str,
+        history: list[dict],
+        user_message: str,
+        tools: list[dict] | None = None,
+    ) -> tuple[str, list[dict]]:
+        """Atalho para quando não há tools ou não se precisa das duas fases separadas."""
+        system = SYSTEM_PROMPT.format(contexto=contexto)
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for h in history[-20:]:
+            messages.append(h)
+        messages.append({"role": "user", "content": user_message})
+
+        call_kwargs: dict = dict(
+            model=OPENAI_MODEL,
+            messages=messages,
+            temperature=0.6,
+            max_tokens=500,
+        )
+        if tools:
+            call_kwargs["tools"] = tools
+            call_kwargs["tool_choice"] = "auto"
+
+        try:
+            resp = await self._get_client().chat.completions.create(**call_kwargs)
+        except Exception as e:
+            logger.error("Erro no chat_with_tools: %s", e)
+            return "Tive um problema técnico agora. Me manda de novo em instantes!", []
+
+        return resp.choices[0].message.content or "Tive um problema técnico.", []
+
     async def respond(
         self,
         phone: str,
@@ -175,28 +391,17 @@ class ConversationAgent:
         status_negociacao: str = "sem negociação ativa",
         usuario_nome: str = "não informado ainda",
     ) -> str:
-        system = SYSTEM_PROMPT_TEMPLATE.format(
-            role=role,
-            produto_info=produto_info,
-            status_negociacao=status_negociacao,
-            usuario_nome=usuario_nome,
+        contexto = (
+            f"Nome: {usuario_nome} | Papel: {role} | "
+            f"Produto: {produto_info} | Negociação: {status_negociacao}"
         )
-        messages = [{"role": "system", "content": system}]
-        for h in history[-20:]:
-            messages.append(h)
-        messages.append({"role": "user", "content": user_message})
-
-        try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500,
-            )
-            return resp.choices[0].message.content or "Desculpe, não consegui responder agora. Tente de novo."
-        except Exception as e:
-            logger.error(f"Erro no ConversationAgent.respond: {e}")
-            return "Tive um problema técnico agora. Me manda de novo em instantes!"
+        text, _ = await self.chat_with_tools(
+            contexto=contexto,
+            history=history,
+            user_message=user_message,
+            tools=None,
+        )
+        return text
 
     async def extract_intent(self, mensagem: str, contexto: str = "geral") -> dict:
         prompt = INTENT_EXTRACTION_PROMPT.format(mensagem=mensagem, contexto=contexto)
@@ -211,11 +416,10 @@ class ConversationAgent:
             raw = resp.choices[0].message.content or "{}"
             return json.loads(raw)
         except Exception as e:
-            logger.error(f"Erro ao extrair intenção: {e}")
+            logger.error("Erro ao extrair intenção: %s", e)
             return {"intencao": "outro", "descricao": mensagem}
 
     async def build_reply(self, instrucao: str, contexto: dict | None = None) -> str:
-        """Transforma uma instrução estruturada do sistema em linguagem natural."""
         ctx_str = json.dumps(contexto or {}, ensure_ascii=False)
         messages = [
             {"role": "system", "content": REPLY_SYSTEM_PROMPT},
@@ -230,11 +434,10 @@ class ConversationAgent:
             )
             return resp.choices[0].message.content or instrucao
         except Exception as e:
-            logger.error(f"Erro ao construir reply: {e}")
+            logger.error("Erro ao construir reply: %s", e)
             return instrucao
 
     async def ask_confirmation(self, instrucao: str, contexto: dict | None = None) -> str:
-        """Gera uma pergunta de confirmação clara para o usuário."""
         ctx_str = json.dumps(contexto or {}, ensure_ascii=False)
         messages = [
             {"role": "system", "content": CONFIRMATION_SYSTEM_PROMPT},
@@ -249,5 +452,5 @@ class ConversationAgent:
             )
             return resp.choices[0].message.content or instrucao
         except Exception as e:
-            logger.error(f"Erro ao construir confirmação: {e}")
+            logger.error("Erro ao construir confirmação: %s", e)
             return instrucao
