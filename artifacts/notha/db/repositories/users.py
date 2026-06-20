@@ -29,11 +29,91 @@ class UserRepository:
             cpf,
         )
 
-    async def update(self, user_id: int, nome: str | None = None, cpf: str | None = None) -> None:
+    async def update(
+        self,
+        user_id: int,
+        nome: str | None = None,
+        cpf: str | None = None,
+        apelido: str | None = None,
+    ) -> None:
         await self._db.execute(
-            "UPDATE users SET nome = COALESCE($1, nome), cpf = COALESCE($2, cpf), updated_at = now() WHERE id = $3",
+            """
+            UPDATE users SET
+                nome    = COALESCE($1, nome),
+                cpf     = COALESCE($2, cpf),
+                apelido = COALESCE($3, apelido),
+                updated_at = now()
+            WHERE id = $4
+            """,
             nome,
             cpf,
+            apelido,
+            user_id,
+        )
+
+    async def update_apelido(self, user_id: int, apelido: str) -> None:
+        """Atualiza o apelido (como o usuário quer ser chamado) a qualquer momento."""
+        await self._db.execute(
+            "UPDATE users SET apelido = $1, updated_at = now() WHERE id = $2",
+            apelido,
+            user_id,
+        )
+
+    async def update_identidade_status(
+        self,
+        user_id: int,
+        status: str,
+    ) -> None:
+        """Atualiza o status de verificação de identidade.
+
+        status: nao_verificado | em_analise | verificado | rejeitado
+        """
+        await self._db.execute(
+            "UPDATE users SET status_identidade = $1, updated_at = now() WHERE id = $2",
+            status,
+            user_id,
+        )
+
+    async def registrar_documento_identidade(
+        self,
+        user_id: int,
+        url_imagem: str,
+        tipo: str = "desconhecido",
+        whatsapp_media_id: str | None = None,
+    ) -> asyncpg.Record:
+        """Registra um documento de identidade enviado pelo usuário e marca como em_analise."""
+        doc = await self._db.fetch_one(
+            """
+            INSERT INTO documentos_identidade
+                (user_id, tipo, url_imagem, whatsapp_media_id, status)
+            VALUES ($1, $2, $3, $4, 'em_analise')
+            RETURNING *
+            """,
+            user_id,
+            tipo,
+            url_imagem,
+            whatsapp_media_id,
+        )
+        # Marca o usuário como "em análise"
+        await self.update_identidade_status(user_id, "em_analise")
+        return doc
+
+    async def get_documentos_identidade(self, user_id: int) -> list[asyncpg.Record]:
+        """Retorna todos os documentos enviados pelo usuário, do mais recente ao mais antigo."""
+        return await self._db.fetch_all(
+            "SELECT * FROM documentos_identidade WHERE user_id = $1 ORDER BY criado_em DESC",
+            user_id,
+        )
+
+    async def get_documento_pendente(self, user_id: int) -> asyncpg.Record | None:
+        """Retorna o documento mais recente ainda em análise."""
+        return await self._db.fetch_one(
+            """
+            SELECT * FROM documentos_identidade
+            WHERE user_id = $1 AND status = 'em_analise'
+            ORDER BY criado_em DESC
+            LIMIT 1
+            """,
             user_id,
         )
 

@@ -27,11 +27,28 @@ SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos fí
 - Use emojis com moderação (1-2 por mensagem no máximo) quando natural
 - Nunca use markdown (asteriscos, hashtags) — o WhatsApp formata diferente
 
+━━━ COMO CHAMAR O USUÁRIO ━━━
+- Se o contexto tiver "apelido: X" → chame-o sempre por X
+- Se não tiver apelido mas tiver "nome: X" → use o primeiro nome de X
+- Nunca invente um nome que não esteja no contexto
+
+━━━ NOME vs APELIDO ━━━
+- nome: nome legal/completo — coletado uma vez no cadastro, não peça de novo se já tiver
+- apelido: como o usuário quer ser chamado — pode mudar a qualquer hora
+  Ex: "pode me chamar de Zé", "me chama de Cris", "quero mudar meu apelido para Beta"
+  → Quando o usuário pedir isso, chame atualizar_apelido imediatamente
+
+━━━ VERIFICAÇÃO DE IDENTIDADE ━━━
+- status_identidade vem no contexto: nao_verificado | em_analise | verificado | rejeitado
+- Se o usuário enviar foto de RG/CNH/passaporte: informe que o documento foi recebido e está em análise
+- Não exija verificação para comprar/vender — é um diferencial, não obrigação
+- Se verificado(✓): pode mencionar isso como selo de confiança na conversa se relevante
+
 ━━━ REGRAS INEGOCIÁVEIS ━━━
 1. NUNCA revele o preço mínimo do vendedor ao comprador
 2. NUNCA revele o limite máximo do comprador ao vendedor
 3. NUNCA prometa valor, prazo ou condição que o sistema não confirmou
-4. NUNCA peça informação já confirmada nessa conversa
+4. NUNCA peça informação já confirmada nessa conversa (verifique o contexto antes de pedir)
 5. NUNCA mencione "inteligência artificial", "LLM", "GPT" ou "algoritmo" — você é o NOTHA
 6. Se perguntarem se você é robô: confirme que é sistema automatizado, sem detalhes técnicos
 7. Conflito ou reclamação grave: oriente o usuário a responder "SUPORTE"
@@ -48,15 +65,17 @@ SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos fí
 - Ao pedir endereço: "Me passa o endereço completo (rua, número, bairro, cidade e CEP)."
 
 ━━━ USO DAS FERRAMENTAS ━━━
-Você tem acesso a ferramentas para salvar dados e executar ações. Use-as sempre que o usuário:
-- Fornecer ou corrigir o nome → chame atualizar_nome
+Você tem acesso a ferramentas. Use-as sempre que o usuário:
+- Fornecer ou corrigir o nome completo → chame atualizar_nome
+- Quiser mudar como é chamado / fornecer apelido → chame atualizar_apelido
 - Fornecer ou corrigir o CPF → chame atualizar_cpf
 - Quiser vender um produto → chame listar_produto
 - Quiser comprar/buscar um produto → chame buscar_produto
 - Fornecer chave Pix → chame atualizar_chave_pix
 - Fornecer endereço → chame atualizar_endereco
 
-Contexto do usuário: {contexto}
+Contexto atual do usuário (dados reais do banco):
+{contexto}
 """
 
 NOTHA_TOOLS = [
@@ -65,20 +84,43 @@ NOTHA_TOOLS = [
         "function": {
             "name": "atualizar_nome",
             "description": (
-                "Salva ou corrige o nome do usuário no sistema. "
-                "Use sempre que o usuário fornecer ou corrigir seu nome, "
-                "inclusive frases como 'meu nome é X', 'me chamo X', 'pode me chamar de X', "
-                "'na verdade sou X', 'não, meu nome é X'."
+                "Salva ou corrige o nome legal/completo do usuário. "
+                "Use quando o usuário informa o nome pela primeira vez ou corrige um nome incorreto. "
+                "Exemplos: 'meu nome é João Silva', 'me chamo Maria', 'na verdade meu nome é Carlos'. "
+                "NÃO use para apelidos — para isso use atualizar_apelido."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "nome": {
                         "type": "string",
-                        "description": "Nome completo do usuário como ele informou"
+                        "description": "Nome completo/legal do usuário como ele informou"
                     }
                 },
                 "required": ["nome"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_apelido",
+            "description": (
+                "Salva ou muda o apelido do usuário — como ele quer ser chamado. "
+                "Use quando o usuário indicar preferência de como ser chamado, "
+                "mesmo que já tenha nome cadastrado. Pode ser usado a qualquer momento. "
+                "Exemplos: 'pode me chamar de Zé', 'me chama de Cris', "
+                "'quero mudar meu apelido para Beta', 'me chama só de João'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "apelido": {
+                        "type": "string",
+                        "description": "Apelido ou forma preferida de ser chamado"
+                    }
+                },
+                "required": ["apelido"]
             }
         }
     },

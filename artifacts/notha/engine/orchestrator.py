@@ -61,6 +61,21 @@ def _nome_valido(nome: str) -> bool:
     return True
 
 
+def _detectar_tipo_documento(caption: str) -> str:
+    """Infere o tipo de documento pela legenda enviada com a imagem.
+
+    Retorna: 'rg' | 'cnh' | 'passaporte' | 'desconhecido'
+    """
+    texto = caption.lower()
+    if any(p in texto for p in ("rg", "identidade", "registro geral", "carteira de identidade")):
+        return "rg"
+    if any(p in texto for p in ("cnh", "habilitação", "habilitacao", "carteira de motorista")):
+        return "cnh"
+    if "passaporte" in texto:
+        return "passaporte"
+    return "desconhecido"
+
+
 def _add_to_history(phone: str, role: str, content: str) -> None:
     if phone not in CONVERSATION_HISTORY:
         CONVERSATION_HISTORY[phone] = []
@@ -196,18 +211,36 @@ class Orchestrator:
             nome = args.get("nome", "").strip()
             if _nome_valido(nome):
                 await user_repo.update(user["id"], nome=nome)
-                # Relê do banco para confirmar o que foi salvo
                 user_atualizado = await user_repo.find_by_id(user["id"])
                 nome_salvo = user_atualizado.get("nome") if user_atualizado else nome
+                apelido_salvo = user_atualizado.get("apelido") if user_atualizado else ""
                 cpf_ok = bool(user_atualizado.get("cpf")) if user_atualizado else False
                 logger.info("Nome atualizado via tool: '%s' (user_id=%s)", nome_salvo, user["id"])
                 result = (
-                    f"Nome salvo no banco: '{nome_salvo}'. "
+                    f"Nome legal salvo no banco: '{nome_salvo}'. "
+                    f"Apelido: '{apelido_salvo or 'não definido'}'. "
                     f"CPF: {'registrado' if cpf_ok else 'ainda não registrado'}."
                 )
             else:
                 logger.warning("Nome rejeitado pela validação: '%s'", nome)
-                result = f"Nome '{nome}' rejeitado pela validação (parece saudação ou inválido). Nome atual no banco: '{user.get('nome') or 'vazio'}'."
+                result = (
+                    f"Nome '{nome}' rejeitado (parece saudação ou inválido). "
+                    f"Nome atual no banco: '{user.get('nome') or 'vazio'}'."
+                )
+            return result, None
+
+        if name == "atualizar_apelido":
+            apelido = args.get("apelido", "").strip()
+            if apelido and len(apelido) >= 2:
+                await user_repo.update_apelido(user["id"], apelido)
+                logger.info("Apelido atualizado via tool: '%s' (user_id=%s)", apelido, user["id"])
+                result = (
+                    f"Apelido salvo no banco: '{apelido}'. "
+                    f"O usuário agora será chamado de '{apelido}'. "
+                    f"Nome legal permanece: '{user.get('nome') or 'não informado'}'."
+                )
+            else:
+                result = f"Apelido vazio ou muito curto — nenhuma alteração feita."
             return result, None
 
         if name == "atualizar_cpf":
@@ -300,40 +333,55 @@ class Orchestrator:
     def _build_context(self, user, active_negs: list, seller_profile=None) -> str:
         """Monta o contexto com dados reais do banco para o LLM.
 
-        Quanto mais preciso o contexto, mais precisa é a resposta do LLM.
+        Inclui nome, apelido, CPF, verificação de identidade, perfil de vendedor
+        e negociações ativas — tudo direto do banco, nada inventado.
         """
         parts = []
 
-        # Dados do usuário
         nome = user.get("nome") or ""
+        apelido = user.get("apelido") or ""
         cpf = user.get("cpf") or ""
         user_id = user.get("id", "?")
+        status_identidade = user.get("status_identidade") or "nao_verificado"
 
+        # Nome legal
         if not nome:
-            parts.append("STATUS: usuário sem nome cadastrado — pergunte o nome")
+            parts.append("STATUS: usuário sem nome cadastrado — peça o nome completo")
         elif not _nome_valido(nome):
             parts.append(
-                f"STATUS: nome salvo='{nome}' parece incorreto — "
-                "se o usuário mencionar o nome real, chame atualizar_nome"
+                f"STATUS: nome='{nome}' parece incorreto — "
+                "capture o nome real se o usuário mencionar"
             )
         else:
             parts.append(f"nome: {nome}")
 
-        parts.append(f"CPF: {'registrado (✓)' if cpf else 'não registrado ainda'}")
+        # Apelido (como chamar o usuário)
+        if apelido:
+            parts.append(f"apelido: {apelido} (chame-o assim)")
+        else:
+            parts.append("apelido: não definido (use o primeiro nome ou pergunte como prefere ser chamado)")
+
+        # CPF e verificação de identidade
+        parts.append(f"CPF: {'registrado (✓)' if cpf else 'não registrado'}")
+
+        _IDENTIDADE_LABEL = {
+            "nao_verificado": "não verificado",
+            "em_analise": "em análise (documento enviado)",
+            "verificado": "verificado (✓)",
+            "rejeitado": "rejeitado (documento inválido — peça novo envio)",
+        }
+        parts.append(f"identidade: {_IDENTIDADE_LABEL.get(status_identidade, status_identidade)}")
         parts.append(f"user_id: {user_id}")
 
-        # Dados do perfil de vendedor (se existirem)
+        # Perfil de vendedor
         if seller_profile:
             chave_pix = seller_profile.get("chave_pix") or ""
             endereco = seller_profile.get("endereco_retirada") or ""
-            if chave_pix:
-                parts.append(f"chave Pix: {chave_pix}")
-            else:
-                parts.append("chave Pix: não cadastrada")
+            parts.append(f"chave Pix: {chave_pix if chave_pix else 'não cadastrada'}")
             if endereco:
-                parts.append(f"endereço de retirada: {endereco}")
+                parts.append(f"endereço retirada: {endereco}")
         else:
-            parts.append("perfil de vendedor: não criado ainda")
+            parts.append("perfil vendedor: não criado")
 
         # Negociações ativas
         if active_negs:
@@ -486,6 +534,73 @@ class Orchestrator:
 
         PENDING_CONFIRMATIONS.pop(phone, None)
         return await self._conv.build_reply("Ok, ação cancelada.", {})
+
+    def _summarize_negs(self, negs) -> str:
+        if not negs:
+            return "sem negociação ativa"
+        statuses = [n["status"] for n in negs]
+        return f"{len(negs)} negociação(ões) ativa(s): {', '.join(statuses)}"
+
+    async def handle_identity_document(
+        self,
+        phone: str,
+        media_id: str,
+        mime_type: str,
+        caption: str,
+    ) -> str:
+        """Processa imagem/documento enviado pelo usuário como documento de identidade.
+
+        Fluxo:
+        1. Busca o usuário no banco (cria se for o primeiro contato)
+        2. Detecta o tipo de documento pela caption (rg, cnh, passaporte)
+        3. Baixa a imagem do WhatsApp e faz upload para Supabase Storage
+        4. Registra no banco e atualiza status_identidade para 'em_analise'
+        5. Retorna mensagem natural ao usuário
+        """
+        from storage.identity import processar_documento_identidade
+
+        db = self._db or get_db()
+        if db is None:
+            return "Recebi seu documento! Mas estou com problema técnico no momento — tenta de novo em instantes."
+
+        user_repo, *_ = self._repos(db)
+        user = await user_repo.find_or_create_by_phone(phone)
+        user_id = user["id"]
+        nome_display = user.get("apelido") or (user.get("nome") or "").split()[0] or ""
+
+        # Detecta tipo do documento pela legenda enviada com a imagem
+        tipo = _detectar_tipo_documento(caption or "")
+
+        try:
+            resultado = await processar_documento_identidade(
+                user_id=user_id,
+                media_id=media_id,
+                tipo=tipo,
+                user_repo=user_repo,
+            )
+            logger.info(
+                "Documento de identidade salvo: user_id=%s tipo=%s doc_id=%s path=%s",
+                user_id, tipo, resultado.get("doc_id"), resultado.get("object_path"),
+            )
+        except Exception as e:
+            logger.error("Falha ao processar documento de identidade (user_id=%s): %s", user_id, e)
+            return (
+                "Recebi a imagem, mas houve um problema técnico ao salvá-la. "
+                "Pode enviar de novo? Se persistir, tente em formato JPG ou PNG."
+            )
+
+        prefixo = f"{nome_display}, " if nome_display else ""
+        tipo_label = {
+            "rg": "RG",
+            "cnh": "CNH",
+            "passaporte": "passaporte",
+        }.get(tipo, "documento")
+
+        return (
+            f"{prefixo}recebi seu {tipo_label}! "
+            "Vou analisar e te aviso assim que a verificação for concluída. "
+            "Normalmente leva até 1 dia útil."
+        )
 
     def _summarize_negs(self, negs) -> str:
         if not negs:

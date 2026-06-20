@@ -11,12 +11,20 @@
 -- -----------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS users (
-    id         SERIAL PRIMARY KEY,
-    cpf        VARCHAR(14) UNIQUE,
-    nome       VARCHAR(200),
-    created_at TIMESTAMP DEFAULT now(),
-    updated_at TIMESTAMP DEFAULT now()
+    id                 SERIAL PRIMARY KEY,
+    cpf                VARCHAR(14) UNIQUE,
+    nome               VARCHAR(200),
+    apelido            VARCHAR(60),
+        -- Como o usuário quer ser chamado — editável a qualquer momento
+    status_identidade  VARCHAR(20) NOT NULL DEFAULT 'nao_verificado',
+        -- nao_verificado | em_analise | verificado | rejeitado
+    created_at         TIMESTAMP DEFAULT now(),
+    updated_at         TIMESTAMP DEFAULT now(),
+    CONSTRAINT chk_status_identidade
+        CHECK (status_identidade IN ('nao_verificado', 'em_analise', 'verificado', 'rejeitado'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_status_identidade ON users(status_identidade);
 
 CREATE TABLE IF NOT EXISTS user_phone_numbers (
     id        SERIAL PRIMARY KEY,
@@ -29,6 +37,25 @@ CREATE TABLE IF NOT EXISTS user_phone_numbers (
 -- Garante um único número ativo por usuário
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_phone_per_user
     ON user_phone_numbers(user_id) WHERE ativo = TRUE;
+
+-- Documentos de identidade enviados pelo usuário para verificação
+CREATE TABLE IF NOT EXISTS documentos_identidade (
+    id                  SERIAL PRIMARY KEY,
+    user_id             INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tipo                VARCHAR(30) NOT NULL DEFAULT 'desconhecido',
+        -- rg | cnh | passaporte | desconhecido
+    url_imagem          TEXT NOT NULL,
+    whatsapp_media_id   TEXT,
+    status              VARCHAR(20) NOT NULL DEFAULT 'em_analise',
+        -- em_analise | aprovado | rejeitado
+    motivo_rejeicao     TEXT,
+    criado_em           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    analisado_em        TIMESTAMPTZ,
+    analisado_por       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_documentos_identidade_user   ON documentos_identidade(user_id);
+CREATE INDEX IF NOT EXISTS idx_documentos_identidade_status ON documentos_identidade(status);
 
 -- -----------------------------------------------------------
 -- 2. Perfis por papel

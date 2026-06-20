@@ -28,20 +28,62 @@ async def send_message(to: str, text: str) -> dict:
 
 
 def extract_messages(body: dict) -> list[dict]:
+    """Extrai mensagens de texto, imagem e documento do payload do webhook.
+
+    Campos de cada mensagem retornada:
+      from            — telefone do remetente
+      id              — message_id (para deduplicação)
+      type            — "text" | "image" | "document"
+      text            — corpo de texto ou legenda (str, pode ser vazio)
+      media_id        — ID da mídia no WhatsApp (None para texto)
+      media_mime_type — tipo MIME informado pelo WhatsApp (None para texto)
+      caption         — legenda enviada com a imagem/documento (None para texto)
+    """
     messages = []
     try:
         for entry in body.get("entry", []):
             for change in entry.get("changes", []):
                 value = change.get("value", {})
                 for msg in value.get("messages", []):
-                    if msg.get("type") == "text":
-                        messages.append(
-                            {
-                                "from": msg["from"],
-                                "text": msg["text"]["body"],
-                                "id": msg["id"],
-                            }
-                        )
+                    msg_type = msg.get("type", "")
+                    sender = msg["from"]
+                    msg_id = msg.get("id", "")
+
+                    if msg_type == "text":
+                        messages.append({
+                            "from": sender,
+                            "id": msg_id,
+                            "type": "text",
+                            "text": msg["text"]["body"],
+                            "media_id": None,
+                            "media_mime_type": None,
+                            "caption": None,
+                        })
+
+                    elif msg_type == "image":
+                        img = msg.get("image", {})
+                        messages.append({
+                            "from": sender,
+                            "id": msg_id,
+                            "type": "image",
+                            "text": img.get("caption", ""),
+                            "media_id": img.get("id"),
+                            "media_mime_type": img.get("mime_type", "image/jpeg"),
+                            "caption": img.get("caption", ""),
+                        })
+
+                    elif msg_type == "document":
+                        doc = msg.get("document", {})
+                        messages.append({
+                            "from": sender,
+                            "id": msg_id,
+                            "type": "document",
+                            "text": doc.get("caption", ""),
+                            "media_id": doc.get("id"),
+                            "media_mime_type": doc.get("mime_type", "application/pdf"),
+                            "caption": doc.get("caption", ""),
+                        })
+
     except Exception:
         pass
     return messages

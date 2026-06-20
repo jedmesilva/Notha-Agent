@@ -2,6 +2,10 @@ import os
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
 
+SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_ANON_KEY: str = os.environ.get("SUPABASE_ANON_KEY", "")
+
 WHATSAPP_ACCESS_TOKEN: str = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
 WHATSAPP_PHONE_NUMBER_ID: str = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_VERIFY_TOKEN: str = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
