@@ -74,17 +74,23 @@ class Orchestrator:
         user_repo, listing_repo, neg_repo, tx_repo, delivery_repo = self._repos(db)
         engine = NegotiationEngine(db)
 
-        user = await user_repo.find_by_phone(phone)
+        # Sempre busca ou cria o registro — o telefone é suficiente para existir no banco
+        user = await user_repo.find_or_create_by_phone(phone)
 
+        # Onboarding guiado pelo estado do banco, não por flags em memória
+        if not user["nome"]:
+            return await self._coletar_nome(phone, text, user, user_repo)
+
+        if not user["cpf"]:
+            return await self._coletar_cpf(phone, text, user, user_repo)
+
+        # Usuário completo — confirmações pendentes de negócio (ex: confirmar preço)
         pending = PENDING_CONFIRMATIONS.get(phone)
         if pending:
             return await self._handle_confirmation(
                 phone, text, pending, user, user_repo, listing_repo,
                 neg_repo, tx_repo, delivery_repo, engine,
             )
-
-        if not user:
-            return await self._onboard_new_user(phone, text, user_repo)
 
         intent = await self._conv.extract_intent(
             text,
@@ -136,44 +142,71 @@ class Orchestrator:
         _add_to_history(phone, "assistant", reply)
         return reply
 
-    async def _onboard_new_user(self, phone: str, text: str, user_repo: UserRepository) -> str:
-        intent = await self._conv.extract_intent(text, contexto="primeiro_contato")
+    async def _coletar_nome(self, phone: str, text: str, user, user_repo: UserRepository) -> str:
+        """Usuário existe no banco mas ainda não tem nome. Extrai e salva."""
+        intent = await self._conv.extract_intent(text, contexto="aguardando_nome")
 
-        if intent.get("intencao") == "informar_dados" and intent.get("campo") == "cpf":
-            cpf = intent.get("valor", "").strip()
-            existing = await user_repo.find_by_cpf(cpf)
-            if existing:
-                await user_repo.add_phone(existing["id"], phone)
-                return await self._conv.build_reply(
-                    f"Bem-vindo de volta, {existing['nome'] or 'usuário'}! Recuperei seu histórico.",
-                    {"user_id": existing["id"]},
-                )
-            user = await user_repo.create_with_phone(phone)
-            await user_repo.update(user["id"], cpf=cpf)
-            PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_nome"}
-            return await self._conv.build_reply(
-                "CPF registrado! Qual é o seu nome?", {}
-            )
-
-        # LLM reconheceu o nome explicitamente — salva e pede CPF
         if intent.get("intencao") == "informar_dados" and intent.get("campo") == "nome":
-            nome_extraido = intent.get("valor", "").strip() or text.strip()
-            if nome_extraido:
-                user = await user_repo.create_with_phone(phone, nome=nome_extraido)
-                PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": user["id"]}
+            nome = intent.get("valor", "").strip()
+            if nome:
+                await user_repo.update(user["id"], nome=nome)
                 return await self._conv.build_reply(
-                    f"Prazer, {nome_extraido}! Para continuarmos, preciso do seu CPF (só os números).",
+                    f"Prazer, {nome}! Para finalizar o cadastro, preciso do seu CPF (só os números).",
                     {},
                 )
 
-        # Qualquer outra coisa (saudação, pergunta, etc.): pede o nome
-        # e registra que estamos aguardando — próxima mensagem vai direto para _handle_confirmation
-        PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_nome_inicial"}
-        return await self._conv.build_reply(
-            "Olá! Sou o NOTHA, agente de compra e venda de produtos via WhatsApp. "
-            "Para começar, qual é o seu nome?",
-            {},
+        # Nome não reconhecido — LLM responde naturalmente e pede de novo
+        _add_to_history(phone, "user", text)
+        reply = await self._conv.respond(
+            phone=phone,
+            user_message=text,
+            history=_get_history(phone),
+            role="geral",
+            produto_info="onboarding",
+            status_negociacao="aguardando cadastro",
+            usuario_nome="não informado ainda",
         )
+        _add_to_history(phone, "assistant", reply)
+        return reply
+
+    async def _coletar_cpf(self, phone: str, text: str, user, user_repo: UserRepository) -> str:
+        """Usuário tem nome mas ainda não tem CPF. Extrai e salva."""
+        intent = await self._conv.extract_intent(text, contexto="aguardando_cpf")
+
+        cpf = None
+        if intent.get("intencao") == "informar_dados" and intent.get("campo") == "cpf":
+            cpf = intent.get("valor", "").strip()
+        elif _parece_cpf(text.strip()):
+            cpf = re.sub(r"[\.\-\s]", "", text.strip())
+
+        if cpf:
+            existing = await user_repo.find_by_cpf(cpf)
+            if existing and existing["id"] != user["id"]:
+                # CPF já pertence a outro perfil — transfere o telefone
+                await user_repo.add_phone(existing["id"], phone)
+                return await self._conv.build_reply(
+                    f"CPF já cadastrado! Bem-vindo de volta, {existing['nome'] or 'usuário'}. Seu histórico foi recuperado.",
+                    {},
+                )
+            await user_repo.update(user["id"], cpf=cpf)
+            return await self._conv.build_reply(
+                f"Perfeito, {user['nome']}! Cadastro completo. O que você quer comprar ou vender?",
+                {},
+            )
+
+        # CPF não reconhecido — LLM responde e pede de novo
+        _add_to_history(phone, "user", text)
+        reply = await self._conv.respond(
+            phone=phone,
+            user_message=text,
+            history=_get_history(phone),
+            role="geral",
+            produto_info="onboarding",
+            status_negociacao="aguardando CPF",
+            usuario_nome=user["nome"] or "não informado ainda",
+        )
+        _add_to_history(phone, "assistant", reply)
+        return reply
 
     async def _handle_list_product(
         self, phone, text, user, user_repo, listing_repo, intent
@@ -311,58 +344,6 @@ class Orchestrator:
         neg_repo, tx_repo, delivery_repo, engine,
     ) -> str:
         tipo = pending.get("tipo")
-
-        # Fluxo de onboarding: aguardando nome (primeiro contato)
-        if tipo == "aguardando_nome_inicial":
-            nome = text.strip()
-            if nome:
-                novo_user = await user_repo.create_with_phone(phone, nome=nome)
-                PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": novo_user["id"]}
-                return await self._conv.build_reply(
-                    f"Prazer, {nome}! Para continuarmos, preciso do seu CPF (só os números).",
-                    {},
-                )
-            return await self._conv.build_reply("Qual é o seu nome?", {})
-
-        # Fluxo de onboarding: aguardando CPF
-        if tipo == "aguardando_cpf":
-            intent = await self._conv.extract_intent(text, contexto="aguardando_cpf")
-            user_id = pending.get("user_id")
-            if intent.get("intencao") == "informar_dados" and intent.get("campo") == "cpf":
-                cpf = intent.get("valor", "").strip()
-            elif _parece_cpf(text.strip()):
-                cpf = re.sub(r"[\.\-\s]", "", text.strip())
-            else:
-                return await self._conv.build_reply(
-                    "Não reconheci o CPF. Me manda só os 11 números, sem pontos ou traços.", {}
-                )
-            existing = await user_repo.find_by_cpf(cpf)
-            if existing and existing["id"] != user_id:
-                # CPF já cadastrado com outro perfil — une os dados
-                await user_repo.add_phone(existing["id"], phone)
-                PENDING_CONFIRMATIONS.pop(phone, None)
-                return await self._conv.build_reply(
-                    f"CPF já cadastrado! Bem-vindo de volta, {existing['nome'] or 'usuário'}. Seu histórico foi recuperado.",
-                    {},
-                )
-            if user_id:
-                await user_repo.update(user_id, cpf=cpf)
-            PENDING_CONFIRMATIONS.pop(phone, None)
-            return await self._conv.build_reply(
-                "Perfeito! Cadastro completo. Agora pode me dizer o que quer comprar ou vender!", {}
-            )
-
-        # Fluxo de onboarding: aguardando nome (após CPF)
-        if tipo == "aguardando_nome":
-            texto_limpo = text.strip()
-            if texto_limpo:
-                if user:
-                    await user_repo.update(user["id"], nome=texto_limpo)
-                PENDING_CONFIRMATIONS.pop(phone, None)
-                return await self._conv.build_reply(
-                    f"Ótimo, {texto_limpo}! Cadastro completo. Me diga o que quer comprar ou vender!", {}
-                )
-            return await self._conv.build_reply("Qual é o seu nome?", {})
 
         intent = await self._conv.extract_intent(text, contexto="confirmacao")
         aceitou = intent.get("aceitou", False)

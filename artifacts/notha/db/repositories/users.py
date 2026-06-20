@@ -54,6 +54,13 @@ class UserRepository:
                     telefone,
                 )
 
+    async def find_or_create_by_phone(self, telefone: str) -> asyncpg.Record:
+        """Busca usuário pelo telefone; cria registro vazio se for o primeiro contato."""
+        existing = await self.find_by_phone(telefone)
+        if existing:
+            return existing
+        return await self.create_with_phone(telefone)
+
     async def create_with_phone(self, telefone: str, nome: str | None = None) -> asyncpg.Record:
         async with self._db._pool.acquire() as conn:
             async with conn.transaction():
