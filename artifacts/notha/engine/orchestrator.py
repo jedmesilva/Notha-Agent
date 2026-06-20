@@ -32,17 +32,6 @@ def _parece_cpf(texto: str) -> bool:
     return limpo.isdigit() and len(limpo) == 11
 
 
-_SAUDACOES = {
-    "oi", "olá", "ola", "oii", "oiii", "hey", "hi", "hello",
-    "bom dia", "boa tarde", "boa noite", "bom tarde", "boa dia",
-    "e aí", "e ai", "eai", "eaí", "salve", "opa", "opa!", "oi!", "olá!",
-    "tudo bem", "tudo bom", "tudo certo", "como vai",
-}
-
-def _e_saudacao(texto: str) -> bool:
-    """Retorna True se o texto é claramente uma saudação, não um nome."""
-    return texto.lower().strip().rstrip("!?.") in _SAUDACOES
-
 
 def _add_to_history(phone: str, role: str, content: str) -> None:
     if phone not in CONVERSATION_HISTORY:
@@ -166,31 +155,25 @@ class Orchestrator:
                 "CPF registrado! Qual é o seu nome?", {}
             )
 
-        # Tenta extrair nome do intent — se não conseguir, trata o texto direto como nome
-        # (usuário respondeu à pergunta "qual é o seu nome?" e o LLM classificou como "outro")
-        nome_extraido = None
+        # LLM reconheceu o nome explicitamente — salva e pede CPF
         if intent.get("intencao") == "informar_dados" and intent.get("campo") == "nome":
             nome_extraido = intent.get("valor", "").strip() or text.strip()
-        elif intent.get("intencao") == "outro":
-            texto_limpo = text.strip()
-            # Ignora saudações comuns — não são nomes
-            if texto_limpo and not _parece_cpf(texto_limpo) and not _e_saudacao(texto_limpo):
-                nome_extraido = texto_limpo
+            if nome_extraido:
+                user = await user_repo.create_with_phone(phone, nome=nome_extraido)
+                PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": user["id"]}
+                return await self._conv.build_reply(
+                    f"Prazer, {nome_extraido}! Para continuarmos, preciso do seu CPF (só os números).",
+                    {},
+                )
 
-        if nome_extraido:
-            user = await user_repo.create_with_phone(phone, nome=nome_extraido)
-            PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": user["id"]}
-            return await self._conv.build_reply(
-                f"Prazer, {nome_extraido}! Para continuarmos, preciso do seu CPF (só os números).",
-                {},
-            )
-
-        msg = await self._conv.build_reply(
+        # Qualquer outra coisa (saudação, pergunta, etc.): pede o nome
+        # e registra que estamos aguardando — próxima mensagem vai direto para _handle_confirmation
+        PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_nome_inicial"}
+        return await self._conv.build_reply(
             "Olá! Sou o NOTHA, agente de compra e venda de produtos via WhatsApp. "
             "Para começar, qual é o seu nome?",
             {},
         )
-        return msg
 
     async def _handle_list_product(
         self, phone, text, user, user_repo, listing_repo, intent
@@ -328,6 +311,18 @@ class Orchestrator:
         neg_repo, tx_repo, delivery_repo, engine,
     ) -> str:
         tipo = pending.get("tipo")
+
+        # Fluxo de onboarding: aguardando nome (primeiro contato)
+        if tipo == "aguardando_nome_inicial":
+            nome = text.strip()
+            if nome:
+                novo_user = await user_repo.create_with_phone(phone, nome=nome)
+                PENDING_CONFIRMATIONS[phone] = {"tipo": "aguardando_cpf", "user_id": novo_user["id"]}
+                return await self._conv.build_reply(
+                    f"Prazer, {nome}! Para continuarmos, preciso do seu CPF (só os números).",
+                    {},
+                )
+            return await self._conv.build_reply("Qual é o seu nome?", {})
 
         # Fluxo de onboarding: aguardando CPF
         if tipo == "aguardando_cpf":
