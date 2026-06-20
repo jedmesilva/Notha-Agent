@@ -179,7 +179,7 @@ class PricingAgent:
     async def web_search_price(self, query: str) -> str | None:
         """Busca preço de mercado via web search (usa DDGS se disponível)."""
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             with DDGS() as ddgs:
                 results = list(ddgs.text(f"preço {query} usado Brasil site:olx.com.br OR site:mercadolivre.com.br", max_results=5))
                 if results:
