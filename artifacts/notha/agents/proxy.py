@@ -10,10 +10,8 @@ oferecer acima do máximo.
 """
 import json
 import logging
-import os
 from dataclasses import dataclass
-from openai import AsyncOpenAI
-from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+from llm import get_provider
 
 logger = logging.getLogger("notha.agent.proxy")
 
@@ -27,13 +25,6 @@ class ProxyResponse:
     decisao: str
     valor: float
     argumento: str
-
-
-def _make_client() -> AsyncOpenAI:
-    if OPENAI_API_KEY:
-        return AsyncOpenAI(api_key=OPENAI_API_KEY)
-    api_key = os.environ.get("OPENAI_API_KEY", "nokey")
-    return AsyncOpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
 
 
 SELLER_PROXY_PROMPT = """Você representa o VENDEDOR em uma negociação automatizada do NOTHA.
@@ -173,14 +164,6 @@ def _validate_proxy_response(resposta: ProxyResponse, limite: dict, eh_vendedor:
 
 
 class SellerProxyAgent:
-    def __init__(self):
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
-
     async def avaliar(
         self,
         oferta_recebida: float,
@@ -198,14 +181,13 @@ class SellerProxyAgent:
             oferta_atual=oferta_recebida,
         )
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.4,
                 max_tokens=300,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            data = json.loads(resp.choices[0].message.content or "{}")
+            data = json.loads(resp.text or "{}")
             result = ProxyResponse(
                 decisao=data.get("decisao", "contrapropor"),
                 valor=float(data.get("valor", oferta_recebida)),
@@ -225,14 +207,6 @@ class SellerProxyAgent:
 
 
 class BuyerProxyAgent:
-    def __init__(self):
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
-
     async def avaliar(
         self,
         contraproposta: float,
@@ -250,14 +224,13 @@ class BuyerProxyAgent:
             contraproposta=contraproposta,
         )
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.4,
                 max_tokens=300,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            data = json.loads(resp.choices[0].message.content or "{}")
+            data = json.loads(resp.text or "{}")
             result = ProxyResponse(
                 decisao=data.get("decisao", "contrapropor"),
                 valor=float(data.get("valor", contraproposta)),
@@ -277,14 +250,6 @@ class BuyerProxyAgent:
 
 
 class DeliveryProxyAgent:
-    def __init__(self):
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
-
     async def negociar(
         self,
         origem: str,
@@ -303,14 +268,13 @@ class DeliveryProxyAgent:
             historico=json.dumps(historico or []),
         )
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=200,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            data = json.loads(resp.choices[0].message.content or "{}")
+            data = json.loads(resp.text or "{}")
             return ProxyResponse(
                 decisao=data.get("decisao", "recusar"),
                 valor=float(data.get("valor", oferta_entregador)),

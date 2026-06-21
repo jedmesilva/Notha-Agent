@@ -22,22 +22,36 @@ class LLMResponse:
 
 
 class LLMProvider(ABC):
-    """Interface base para todos os provedores de LLM."""
+    """Interface base para todos os provedores de LLM.
+
+    Mensagens seguem o formato canônico OpenAI:
+      {"role": "system"|"user"|"assistant", "content": str | list}
+
+    O provider é responsável por traduzir para o formato nativo (ex: Anthropic).
+    """
 
     @abstractmethod
     async def complete(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """
         Envia mensagens ao LLM e retorna a resposta normalizada.
 
         Args:
-            messages: Histórico no formato canônico (OpenAI-compatible).
-            tools:    Lista de schemas de tools no formato OpenAI function calling.
+            messages:    Histórico no formato canônico OpenAI.
+            tools:       Schemas de tools no formato OpenAI function calling.
+            model:       Sobrescreve o modelo padrão do provider para esta chamada.
+            temperature: Temperatura de amostragem.
+            max_tokens:  Limite de tokens na resposta.
+            json_mode:   Se True, força resposta em JSON válido.
 
         Returns:
-            LLMResponse com texto final ou tool_calls para executar.
+            LLMResponse com .text (str | None) e .tool_calls (list[ToolCall]).
         """
         ...

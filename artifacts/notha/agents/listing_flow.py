@@ -17,9 +17,7 @@ Etapas:
 """
 import json
 import logging
-import os
-from openai import AsyncOpenAI
-from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+from llm import get_provider
 
 logger = logging.getLogger("notha.agent.listing_flow")
 
@@ -45,21 +43,7 @@ CONDICAO_LABEL = {
 }
 
 
-def _make_client() -> AsyncOpenAI:
-    if OPENAI_API_KEY:
-        return AsyncOpenAI(api_key=OPENAI_API_KEY)
-    api_key = os.environ.get("OPENAI_API_KEY", "nokey")
-    return AsyncOpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
-
-
 class ListingFlowAgent:
-    def __init__(self):
-        self._client: AsyncOpenAI | None = None
-
-    def _get_client(self) -> AsyncOpenAI:
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
 
     # ─────────────────────────────────────────────
     # Guardrails — extração com evidência e retry
@@ -79,17 +63,16 @@ class ListingFlowAgent:
     async def _extract(self, system: str, user_msg: str) -> dict:
         """Extração base — use _extract_validated() nas etapas de negócio."""
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[
                     {"role": "system", "content": system + self._EXTRACT_GUARDRAIL},
                     {"role": "user", "content": user_msg},
                 ],
                 temperature=0.0,
                 max_tokens=400,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            return json.loads(resp.choices[0].message.content or "{}")
+            return json.loads(resp.text or "{}")
         except Exception as e:
             logger.error(f"Erro na extração LLM: {e}")
             return {}
@@ -118,14 +101,13 @@ class ListingFlowAgent:
 
         for tentativa in range(max_retries):
             try:
-                resp = await self._get_client().chat.completions.create(
-                    model=OPENAI_MODEL,
+                resp = await get_provider().complete(
                     messages=messages,
                     temperature=0.0,
                     max_tokens=500,
-                    response_format={"type": "json_object"},
+                    json_mode=True,
                 )
-                raw = json.loads(resp.choices[0].message.content or "{}")
+                raw = json.loads(resp.text or "{}")
             except Exception as e:
                 logger.error(f"Extração validada falhou (tentativa {tentativa+1}): {e}")
                 break
@@ -228,8 +210,7 @@ class ListingFlowAgent:
         O LLM só pode redigir a mensagem — não decide dados, não inventa informações.
         """
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[
                     {
                         "role": "system",
@@ -252,7 +233,7 @@ class ListingFlowAgent:
                 temperature=0.4,
                 max_tokens=250,
             )
-            return resp.choices[0].message.content or instrucao
+            return resp.text or instrucao
         except Exception:
             return instrucao
 
@@ -975,8 +956,7 @@ class ListingFlowAgent:
         })
 
         try:
-            resp = await self._get_client().chat.completions.create(
-                model="gpt-4o",
+            resp = await get_provider().complete(
                 messages=[
                     {
                         "role": "system",
@@ -988,11 +968,12 @@ class ListingFlowAgent:
                     },
                     {"role": "user", "content": content},
                 ],
+                model="gpt-4o",
                 max_tokens=600,
                 temperature=0.0,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            raw = json.loads(resp.choices[0].message.content or "{}")
+            raw = json.loads(resp.text or "{}")
             # Normaliza tipos para segurança
             return {
                 "descricao_visual":    str(raw.get("descricao_visual") or ""),

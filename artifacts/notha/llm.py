@@ -1,44 +1,46 @@
-import os
+"""
+Fábrica de providers de LLM.
+
+Seleciona e devolve um singleton do provider configurado via LLM_PROVIDER.
+Os agentes importam get_provider() daqui — nunca instanciam providers diretamente.
+
+Provedores disponíveis:
+  openai    (padrão) — requer OPENAI_API_KEY ou AI_INTEGRATIONS_OPENAI_*
+  anthropic           — requer ANTHROPIC_API_KEY
+
+Modelos configuráveis via variáveis de ambiente:
+  OPENAI_MODEL    (padrão: gpt-4o-mini)
+  ANTHROPIC_MODEL (padrão: claude-3-5-haiku-latest)
+"""
 import logging
+import os
 from providers.base import LLMProvider
 
 logger = logging.getLogger("notha.llm")
 
-SYSTEM_PROMPT = """Você é o Notha, um assistente inteligente e prestativo disponível pelo WhatsApp.
-Responda de forma clara, concisa e amigável. Suas respostas devem ser adequadas para o formato de mensagem do WhatsApp — evite formatações complexas como markdown, use texto simples."""
+_instances: dict[str, LLMProvider] = {}
 
 
-def get_provider() -> LLMProvider:
-    """
-    Retorna o provedor de LLM configurado via variável de ambiente LLM_PROVIDER.
+def get_provider(provider: str | None = None) -> LLMProvider:
+    """Retorna o singleton do provider especificado (ou do configurado em LLM_PROVIDER)."""
+    name = (provider or os.environ.get("LLM_PROVIDER", "openai")).lower()
 
-    Provedores disponíveis:
-      - openai    (padrão) → requer OPENAI_API_KEY ou AI_INTEGRATIONS_OPENAI_*
-      - anthropic           → requer ANTHROPIC_API_KEY
+    if name not in _instances:
+        if name == "openai":
+            from providers.openai_provider import OpenAIProvider
+            _instances[name] = OpenAIProvider()
+            logger.info("Provider LLM inicializado: OpenAI (modelo=%s)",
+                        os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
 
-    Modelos configuráveis via:
-      - OPENAI_MODEL    (padrão: gpt-4o-mini)
-      - ANTHROPIC_MODEL (padrão: claude-3-5-haiku-latest)
-    """
-    provider_name = os.environ.get("LLM_PROVIDER", "openai").lower()
+        elif name == "anthropic":
+            from providers.anthropic_provider import AnthropicProvider
+            _instances[name] = AnthropicProvider()
+            logger.info("Provider LLM inicializado: Anthropic (modelo=%s)",
+                        os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"))
 
-    if provider_name == "openai":
-        from providers.openai_provider import OpenAIProvider
-        logger.info("Usando provedor: OpenAI")
-        return OpenAIProvider(system_prompt=SYSTEM_PROMPT)
+        else:
+            raise RuntimeError(
+                f"Provider '{name}' não reconhecido. Opções válidas: openai, anthropic."
+            )
 
-    if provider_name == "anthropic":
-        from providers.anthropic_provider import AnthropicProvider
-        logger.info("Usando provedor: Anthropic")
-        return AnthropicProvider(system_prompt=SYSTEM_PROMPT)
-
-    raise RuntimeError(
-        f"Provedor '{provider_name}' não reconhecido. "
-        "Opções válidas: openai, anthropic."
-    )
-
-
-async def chat(history: list[dict]) -> str:
-    """Envia o histórico ao provedor configurado e retorna a resposta."""
-    provider = get_provider()
-    return await provider.chat(history)
+    return _instances[name]

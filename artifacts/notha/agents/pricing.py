@@ -7,9 +7,7 @@ Saída estruturada: preco_sugerido, preco_minimo_sugerido, justificativa, confia
 """
 import json
 import logging
-import os
-from openai import AsyncOpenAI
-from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+from llm import get_provider
 
 logger = logging.getLogger("notha.agent.pricing")
 
@@ -73,22 +71,9 @@ Retorne SOMENTE um JSON válido, sem texto fora do JSON:
 """
 
 
-def _make_client() -> AsyncOpenAI:
-    if OPENAI_API_KEY:
-        return AsyncOpenAI(api_key=OPENAI_API_KEY)
-    api_key = os.environ.get("OPENAI_API_KEY", "nokey")
-    return AsyncOpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
-
-
 class PricingAgent:
     def __init__(self, db=None):
-        self._client: AsyncOpenAI | None = None
         self._db = db
-
-    def _get_client(self) -> AsyncOpenAI:
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
 
     async def appraise(
         self,
@@ -152,17 +137,16 @@ class PricingAgent:
         })
 
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[
                     {"role": "system", "content": PRICING_SYSTEM_PROMPT},
                     {"role": "user", "content": user_content},
                 ],
                 temperature=0.2,
                 max_tokens=600,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            raw = resp.choices[0].message.content or "{}"
+            raw = resp.text or "{}"
             result = json.loads(raw)
             result["fontes"] = list(set(result.get("fontes", []) + fontes_usadas))
 

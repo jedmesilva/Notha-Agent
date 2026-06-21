@@ -22,21 +22,30 @@ class OpenAIProvider(LLMProvider):
                 "AI_INTEGRATIONS_OPENAI_BASE_URL e AI_INTEGRATIONS_OPENAI_API_KEY."
             )
 
-        self._model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self._default_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
     async def complete(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        json_mode: bool = False,
     ) -> LLMResponse:
-        kwargs = {
-            "model": self._model,
+        kwargs: dict = {
+            "model": model or self._default_model,
             "messages": messages,
-            "max_completion_tokens": 1024,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
+
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
 
         response = await self._client.chat.completions.create(**kwargs)
         message = response.choices[0].message
@@ -50,6 +59,6 @@ class OpenAIProvider(LLMProvider):
                 )
                 for tc in message.tool_calls
             ]
-            return LLMResponse(text=None, tool_calls=tool_calls)
+            return LLMResponse(text=message.content, tool_calls=tool_calls)
 
-        return LLMResponse(text=message.content.strip())
+        return LLMResponse(text=(message.content or "").strip())

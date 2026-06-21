@@ -10,9 +10,7 @@ NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
 """
 import json
 import logging
-import os
-from openai import AsyncOpenAI
-from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+from llm import get_provider
 from tools.builtin import ALL_BUILTIN_TOOLS
 
 logger = logging.getLogger("notha.agent.conversation")
@@ -29,7 +27,7 @@ _SANITIZE_PROMPT = (
 )
 
 
-async def _sanitize_response(client: AsyncOpenAI, text: str, has_history: bool) -> str:
+async def _sanitize_response(text: str, has_history: bool) -> str:
     """Usa o LLM para detectar e remover saudações do início da resposta.
 
     Chamada leve (temperatura 0, poucos tokens) — só executa quando há histórico,
@@ -40,8 +38,7 @@ async def _sanitize_response(client: AsyncOpenAI, text: str, has_history: bool) 
         return text
 
     try:
-        resp = await client.chat.completions.create(
-            model=OPENAI_MODEL,
+        resp = await get_provider().complete(
             messages=[
                 {"role": "system", "content": _SANITIZE_PROMPT},
                 {"role": "user", "content": text},
@@ -49,7 +46,7 @@ async def _sanitize_response(client: AsyncOpenAI, text: str, has_history: bool) 
             temperature=0.0,
             max_tokens=600,
         )
-        sanitized = resp.choices[0].message.content or text
+        sanitized = resp.text or text
         if sanitized != text:
             logger.warning("Saudação removida pelo revisor: %r → %r", text[:50], sanitized[:50])
         return sanitized
@@ -459,21 +456,7 @@ Outro:
 """
 
 
-def _make_client() -> AsyncOpenAI:
-    if OPENAI_API_KEY:
-        return AsyncOpenAI(api_key=OPENAI_API_KEY)
-    api_key = os.environ.get("OPENAI_API_KEY", "nokey")
-    return AsyncOpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
-
-
 class ConversationAgent:
-    def __init__(self):
-        self._client: AsyncOpenAI | None = None
-
-    def _get_client(self) -> AsyncOpenAI:
-        if self._client is None:
-            self._client = _make_client()
-        return self._client
 
     async def get_tool_calls(
         self,
@@ -494,11 +477,9 @@ class ConversationAgent:
         messages.append({"role": "user", "content": user_message})
 
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=messages,
                 tools=tools,
-                tool_choice="auto",
                 temperature=0.6,
                 max_tokens=500,
             )
@@ -506,24 +487,14 @@ class ConversationAgent:
             logger.error("Erro no get_tool_calls: %s", e)
             return messages, []
 
-        assistant_msg = resp.choices[0].message
+        tool_calls: list[dict] = [
+            {"id": tc.id, "name": tc.name, "arguments": tc.args}
+            for tc in resp.tool_calls
+        ]
 
-        tool_calls: list[dict] = []
-        for tc in (assistant_msg.tool_calls or []):
-            try:
-                args = json.loads(tc.function.arguments)
-            except Exception:
-                args = {}
-            tool_calls.append({
-                "id": tc.id,
-                "name": tc.function.name,
-                "arguments": args,
-            })
-
-        # Adiciona a mensagem do assistant ao histórico de mensagens
         messages.append({
             "role": "assistant",
-            "content": assistant_msg.content,
+            "content": resp.text,
             **({"tool_calls": [
                 {
                     "id": tc["id"],
@@ -567,13 +538,12 @@ class ConversationAgent:
         has_history = sum(1 for m in rebuilt if m["role"] == "user") > 1
 
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=rebuilt,
                 temperature=0.6,
                 max_tokens=500,
             )
-            return resp.choices[0].message.content or "Feito!"
+            return resp.text or "Feito!"
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
@@ -592,25 +562,20 @@ class ConversationAgent:
             messages.append(h)
         messages.append({"role": "user", "content": user_message})
 
-        call_kwargs: dict = dict(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.6,
-            max_tokens=500,
-        )
-        if tools:
-            call_kwargs["tools"] = tools
-            call_kwargs["tool_choice"] = "auto"
-
         has_history = len(history) > 0
         try:
-            resp = await self._get_client().chat.completions.create(**call_kwargs)
+            resp = await get_provider().complete(
+                messages=messages,
+                tools=tools or None,
+                temperature=0.6,
+                max_tokens=500,
+            )
         except Exception as e:
             logger.error("Erro no chat_with_tools: %s", e)
             return "Tive um problema técnico agora. Me manda de novo em instantes!", []
 
-        reply = resp.choices[0].message.content or "Tive um problema técnico."
-        return await _sanitize_response(self._get_client(), reply, has_history), []
+        reply = resp.text or "Tive um problema técnico."
+        return await _sanitize_response(reply, has_history), []
 
     async def respond(
         self,
@@ -637,15 +602,13 @@ class ConversationAgent:
     async def extract_intent(self, mensagem: str, contexto: str = "geral") -> dict:
         prompt = INTENT_EXTRACTION_PROMPT.format(mensagem=mensagem, contexto=contexto)
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=300,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
-            raw = resp.choices[0].message.content or "{}"
-            return json.loads(raw)
+            return json.loads(resp.text or "{}")
         except Exception as e:
             logger.error("Erro ao extrair intenção: %s", e)
             return {"intencao": "outro", "descricao": mensagem}
@@ -657,13 +620,12 @@ class ConversationAgent:
             {"role": "user", "content": f"Instrução: {instrucao}\nContexto: {ctx_str}"},
         ]
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=messages,
                 temperature=0.6,
                 max_tokens=300,
             )
-            return resp.choices[0].message.content or instrucao
+            return resp.text or instrucao
         except Exception as e:
             logger.error("Erro ao construir reply: %s", e)
             return instrucao
@@ -675,13 +637,12 @@ class ConversationAgent:
             {"role": "user", "content": f"Instrução: {instrucao}\nContexto: {ctx_str}"},
         ]
         try:
-            resp = await self._get_client().chat.completions.create(
-                model=OPENAI_MODEL,
+            resp = await get_provider().complete(
                 messages=messages,
                 temperature=0.5,
                 max_tokens=200,
             )
-            return resp.choices[0].message.content or instrucao
+            return resp.text or instrucao
         except Exception as e:
             logger.error("Erro ao construir confirmação: %s", e)
             return instrucao
