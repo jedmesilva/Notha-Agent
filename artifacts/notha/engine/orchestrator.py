@@ -591,12 +591,10 @@ class Orchestrator:
                 return await self._format_search_results(listings, "em outras regiões", prefixo=aviso_ampliacao)
 
         # --- Nada em lugar nenhum ---
-        nome = user.get("apelido") or (user.get("nome") or "").split()[0] or ""
         regiao_original = bairro_busca or cidade_busca or "qualquer região"
         return await self._conv.build_reply(
-            f"Nenhum '{descricao_busca}' disponível agora em {regiao_original}, {nome}. "
-            f"Duas opções: posso te avisar quando aparecer um (é só me pedir!), "
-            f"ou você mesmo pode anunciar que está procurando — assim vendedores te encontram.",
+            f"Nenhum '{descricao_busca}' disponível agora em {regiao_original}. "
+            f"Posso te avisar assim que aparecer um — quer que eu salve esse alerta?",
             {"produto_buscado": descricao_busca, "regiao": regiao_original},
         )
 
