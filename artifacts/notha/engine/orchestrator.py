@@ -522,54 +522,65 @@ class Orchestrator:
 
     async def _handle_search(self, phone, text, user, listing_repo, intent) -> str:
         categoria = intent.get("categoria")
+        descricao_busca = intent.get("descricao_busca") or categoria or "produto"
         cidade_busca: str | None = intent.get("cidade_busca")
         bairro_busca: str | None = intent.get("bairro_busca")
 
+        # --- Nível 1: busca com filtro completo (bairro + cidade) ---
         listings = await listing_repo.find_available(
-            categoria=categoria,
-            limit=5,
-            cidade=cidade_busca,
-            bairro=bairro_busca,
+            categoria=categoria, limit=5,
+            cidade=cidade_busca, bairro=bairro_busca,
         )
-
-        # Se buscou com filtro geográfico e não achou nada, tenta sem filtro e avisa
-        filtrado = bool(cidade_busca or bairro_busca)
-        if not listings and filtrado:
-            listings_sem_filtro = await listing_repo.find_available(categoria=categoria, limit=5)
-            if listings_sem_filtro:
-                regiao_label = bairro_busca or cidade_busca or "essa região"
-                items = [
-                    f"• {l['descricao']} — R${l['preco_anunciado']:.2f}"
-                    f" ({l.get('cidade_vendedor') or 'localização não informada'})"
-                    for l in listings_sem_filtro
-                ]
-                return await self._conv.build_reply(
-                    f"Não achei nada em {regiao_label}, mas encontrei em outras regiões:\n" +
-                    "\n".join(items) + "\n\nQuer negociar algum?",
-                    {},
-                )
-
-        if not listings:
-            return await self._conv.build_reply(
-                "Não encontrei produtos disponíveis no momento. Quer cadastrar um produto para venda?",
-                {},
+        if listings:
+            regiao_label = (
+                f"no bairro {bairro_busca}" if bairro_busca else
+                f"em {cidade_busca}" if cidade_busca else
+                "disponíveis"
             )
+            return await self._format_search_results(listings, regiao_label)
 
-        regiao_label = (
-            f"no bairro {bairro_busca}" if bairro_busca else
-            f"em {cidade_busca}" if cidade_busca else
-            "em qualquer região"
+        # --- Nível 2: se buscou por bairro e não achou, tenta só a cidade ---
+        aviso_ampliacao = ""
+        if bairro_busca and cidade_busca:
+            listings = await listing_repo.find_available(
+                categoria=categoria, limit=5, cidade=cidade_busca,
+            )
+            if listings:
+                aviso_ampliacao = f"Nada no {bairro_busca}, mas achei em {cidade_busca}:"
+                return await self._format_search_results(listings, f"em {cidade_busca}", prefixo=aviso_ampliacao)
+
+        # --- Nível 3: tenta Brasil inteiro ---
+        if cidade_busca or bairro_busca:
+            listings = await listing_repo.find_available(categoria=categoria, limit=5)
+            regiao_original = bairro_busca or cidade_busca or "essa região"
+            if listings:
+                aviso_ampliacao = f"Não encontrei nada em {regiao_original}. Mas tem isso disponível em outras regiões:"
+                return await self._format_search_results(listings, "em outras regiões", prefixo=aviso_ampliacao)
+
+        # --- Nada em lugar nenhum ---
+        nome = user.get("apelido") or (user.get("nome") or "").split()[0] or ""
+        regiao_original = bairro_busca or cidade_busca or "qualquer região"
+        return await self._conv.build_reply(
+            f"Nenhum '{descricao_busca}' disponível agora em {regiao_original}, {nome}. "
+            f"Duas opções: posso te avisar quando aparecer um (é só me pedir!), "
+            f"ou você mesmo pode anunciar que está procurando — assim vendedores te encontram.",
+            {"produto_buscado": descricao_busca, "regiao": regiao_original},
         )
+
+    async def _format_search_results(
+        self, listings: list, regiao_label: str, prefixo: str = ""
+    ) -> str:
         items = [
             f"• {l['descricao']} — R${l['preco_anunciado']:.2f}"
             f" ({l.get('cidade_vendedor') or 'localização não informada'})"
             for l in listings
         ]
-        return await self._conv.build_reply(
-            f"Encontrei {len(listings)} produto(s) {regiao_label}:\n" + "\n".join(items) +
-            "\n\nQuer negociar algum? Me diz qual te interessa!",
-            {},
+        corpo = "\n".join(items) + "\n\nQuer negociar algum? Me diz qual te interessa!"
+        instrucao = (
+            f"{prefixo}\n{corpo}".strip() if prefixo
+            else f"Encontrei {len(listings)} produto(s) {regiao_label}:\n{corpo}"
         )
+        return await self._conv.build_reply(instrucao, {})
 
     async def _handle_negotiation_response(
         self, phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine,
