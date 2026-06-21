@@ -27,30 +27,65 @@ class RestrictionRepository:
         )
         return [dict(r) for r in rows]
 
-    async def list_active_for_llm(self) -> list[dict]:
-        """Retorna todas as restrições ativas em formato compacto para avaliação semântica pelo LLM."""
-        rows = await self._db.fetch_all(
-            """
-            SELECT id, category, description, reason, scope, state_code, municipality
-            FROM restricted_items
-            WHERE is_active = TRUE
-            ORDER BY category
-            """
-        )
-        return [dict(r) for r in rows]
+    async def search_by_terms(
+        self,
+        terms: list[str],
+        state_code: str | None = None,
+        municipality: str | None = None,
+    ) -> list[dict]:
+        """Busca restrições usando termos gerados pelo LLM.
 
-    async def fetch_by_ids(self, ids: list[int]) -> list[dict]:
-        """Busca restrições específicas por ID — usado após o LLM identificar os matches."""
-        if not ids:
+        Para cada termo, verifica se ele:
+          - está entre as keywords do item (ILIKE exato sobre cada keyword)
+          - aparece na descrição do item
+          - aparece no nome da categoria
+
+        Aplica filtro de escopo (nacional / estadual / municipal) se localização informada.
+        Retorna apenas registros realmente encontrados — nunca a lista completa.
+        """
+        if not terms:
             return []
+
+        # Normaliza termos para lowercase
+        terms_lower = [t.lower().strip() for t in terms if t.strip()]
+
         rows = await self._db.fetch_all(
             """
-            SELECT id, category, description, reason, scope, state_code, municipality
-            FROM restricted_items
-            WHERE id = ANY($1::int[]) AND is_active = TRUE
-            ORDER BY category
+            SELECT DISTINCT
+                ri.id, ri.category, ri.description, ri.reason,
+                ri.scope, ri.state_code, ri.municipality
+            FROM restricted_items ri
+            WHERE ri.is_active = TRUE
+              AND (
+                -- Termo encontrado nas keywords cadastradas
+                EXISTS (
+                    SELECT 1 FROM unnest(ri.keywords) AS kw
+                    WHERE EXISTS (
+                        SELECT 1 FROM unnest($1::text[]) AS term
+                        WHERE LOWER(kw) ILIKE '%' || term || '%'
+                           OR term ILIKE '%' || LOWER(kw) || '%'
+                    )
+                )
+                OR
+                -- Termo encontrado na descrição do item
+                EXISTS (
+                    SELECT 1 FROM unnest($1::text[]) AS term
+                    WHERE LOWER(ri.description) ILIKE '%' || term || '%'
+                )
+              )
+              AND (
+                -- Restrição nacional se aplica a todos
+                ri.scope = 'national'
+                -- Restrição estadual: só se localização fornecida e bate
+                OR (ri.scope = 'state'      AND $2::text IS NOT NULL AND ri.state_code = $2)
+                -- Restrição municipal: só se localização fornecida e bate
+                OR (ri.scope = 'municipal'  AND $3::text IS NOT NULL AND ri.municipality ILIKE $3)
+              )
+            ORDER BY ri.category
             """,
-            ids,
+            terms_lower,
+            state_code,
+            municipality,
         )
         return [dict(r) for r in rows]
 

@@ -1,15 +1,18 @@
 """
-Verificação semântica de restrições de produtos.
+Verificação semântica de restrições de produtos — arquitetura correta.
 
 Fluxo:
-  1. Busca todas as categorias de restrição ativas no banco
-  2. LLM avalia semanticamente se o produto descrito se enquadra em alguma delas
-     — independente da língua usada, gírias, sinônimos ou eufemismos
-  3. Se houver match, busca os registros completos pelo ID e retorna os detalhes
-  4. Se não houver match, retorna PERMITIDO
+  1. LLM lê a descrição do usuário e gera termos de busca precisos
+     (nome normalizado, sinônimos, gírias, termos relacionados em PT-BR)
+  2. DB busca APENAS por esses termos — retorna só os registros encontrados,
+     nunca a lista completa. Filtro de localização aplicado automaticamente.
+  3. LLM faz julgamento final: os registros encontrados realmente se aplicam
+     a ESTE produto específico? (elimina falsos positivos — ex: "faca de cozinha"
+     pode casar com keywords de "faca de combate", mas não é a mesma coisa)
+  4. Retorna PERMITIDO ou RESTRITO com base no banco, não em suposições.
 
-O banco é a fonte de verdade das regras.
-O LLM é o intérprete semântico — ele entende o que o produto é, não compara strings.
+O LLM nunca decide por conta própria — só interpreta e busca.
+O banco é a fonte de verdade. O LLM é o intérprete e árbitro semântico.
 """
 import json
 import logging
@@ -18,40 +21,76 @@ from tools.base import Tool
 
 logger = logging.getLogger("notha.tools.restrictions")
 
-_AVALIACAO_PROMPT = """Você é um especialista em classificação de produtos para uma plataforma de marketplace.
+# ── Passo 1: gerar termos de busca ──────────────────────────────────────────
+_PROMPT_GERAR_TERMOS = """Você é um especialista em classificação de produtos para marketplace.
 
-Analise o produto descrito e verifique se ele se enquadra em alguma das categorias de restrição listadas abaixo.
+O usuário quer negociar o seguinte produto:
+"{descricao}"
 
-━━━ PRODUTO DESCRITO PELO USUÁRIO ━━━
-{descricao}
+Sua tarefa: gerar os melhores termos de busca para encontrar esse produto em uma base de dados de itens proibidos.
 
-━━━ CATEGORIAS DE RESTRIÇÃO ATIVAS (do banco de dados) ━━━
-{categorias}
+Gere termos em português brasileiro que incluam:
+- Nome técnico/oficial do produto
+- Nomes populares e variações
+- Gírias e termos informais conhecidos
+- Tradução do nome se estava em outro idioma
+- Termos relacionados à categoria (mas seja específico — "faca de cozinha" não é "arma de combate")
 
-━━━ INSTRUÇÕES ━━━
-- Interprete semanticamente o produto — considere sinônimos, gírias, outros idiomas e eufemismos.
-  Exemplos: "roscoe", "ferro", "glock", "pistola", "gun", "arma" → todos são armas de fogo.
-  "braço" (membro humano), "arm chair" (poltrona) → NÃO são armas.
-- Seja conservador: na dúvida sobre um produto claramente perigoso, inclua no match.
-- Seja preciso: não restrinja produtos legítimos por ambiguidade de linguagem.
-- Retorne SOMENTE JSON válido, sem texto extra.
+Retorne SOMENTE JSON válido:
+{{"produto_identificado": "<nome normalizado do produto>", "termos_busca": ["termo1", "termo2", ...]}}
 
-━━━ FORMATO DE RETORNO ━━━
-Se o produto é permitido:
-{{"permitido": true, "ids_restricoes": []}}
+Máximo 10 termos. Seja específico — não inclua termos genéricos demais que causem falsos positivos."""
 
-Se o produto é restrito (liste os IDs das categorias que se aplicam):
-{{"permitido": false, "ids_restricoes": [1, 5, 12]}}
-"""
+# ── Passo 3: julgamento final ────────────────────────────────────────────────
+_PROMPT_JULGAMENTO = """Você é um especialista em regulamentação de marketplace.
+
+O usuário quer negociar: "{produto_usuario}"
+Produto identificado pelo sistema: "{produto_identificado}"
+
+A busca no banco de dados retornou os seguintes registros de itens possivelmente restritos:
+{registros}
+
+Pergunta: esses registros se aplicam ESPECIFICAMENTE ao produto do usuário?
+
+Considere:
+- Uma "faca de cozinha" NÃO é uma "faca de combate" — mesmo que ambas sejam facas
+- Um "revólver de brinquedo" NÃO é uma arma de fogo real
+- Um "medicamento com receita" NÃO é o mesmo que "droga ilícita"
+- Seja conservador: se o produto do usuário claramente se encaixa na restrição, confirme
+- Seja preciso: não restrinja produtos legítimos por semelhança superficial de nome
+
+Retorne SOMENTE JSON válido:
+
+Se nenhum registro se aplica a este produto específico:
+{{"restrito": false}}
+
+Se algum registro se aplica (liste apenas os IDs que realmente se aplicam):
+{{"restrito": true, "ids_aplicaveis": [1, 5], "justificativa": "<motivo conciso>"}}"""
+
+
+async def _chamar_llm_json(prompt: str, max_tokens: int = 300) -> dict:
+    """Chama o LLM em modo JSON e retorna dict. Falha silenciosa retorna {}."""
+    from llm import get_provider
+    try:
+        resp = await get_provider().complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=max_tokens,
+            json_mode=True,
+        )
+        return json.loads(resp.text or "{}")
+    except Exception as e:
+        logger.error("LLM erro em verificar_restricao: %s", e)
+        return {}
 
 
 class RestrictionCheckTool(Tool):
     name = "verificar_restricao"
     description = (
-        "Verifica se um produto pode ser negociado no NOTHA consultando a base de restrições. "
+        "Verifica se um produto pode ser negociado no NOTHA. "
         "OBRIGATÓRIO chamar antes de aceitar qualquer anúncio de venda ou busca de compra. "
-        "O sistema entende semanticamente o produto — gírias, sinônimos e outros idiomas são reconhecidos. "
-        "Retorna PERMITIDO (produto liberado) ou RESTRITO (com categoria e motivo legal)."
+        "Entende semanticamente o produto — gírias, sinônimos e outros idiomas são reconhecidos. "
+        "Retorna PERMITIDO ou RESTRITO com base em registros reais do banco de dados."
     )
     parameters = {
         "type": "object",
@@ -59,16 +98,35 @@ class RestrictionCheckTool(Tool):
             "descricao_produto": {
                 "type": "string",
                 "description": (
-                    "Descrição completa do produto a verificar, exatamente como o usuário descreveu. "
-                    "Inclua nome, tipo, marca e características relevantes mencionadas. "
+                    "Descrição do produto exatamente como o usuário mencionou. "
+                    "Inclua nome, tipo, marca e características relevantes. "
                     "Exemplos: 'pistola 9mm', 'papagaio silvestre', 'camiseta nike réplica', 'roscoe calibre 38'."
                 ),
-            }
+            },
+            "estado": {
+                "type": "string",
+                "description": (
+                    "Sigla do estado do usuário (ex: 'SP', 'RJ', 'MG') — "
+                    "para aplicar restrições estaduais. Opcional."
+                ),
+            },
+            "municipio": {
+                "type": "string",
+                "description": (
+                    "Município do usuário (ex: 'São Paulo', 'Campinas') — "
+                    "para aplicar restrições municipais. Opcional."
+                ),
+            },
         },
         "required": ["descricao_produto"],
     }
 
-    async def execute(self, descricao_produto: str) -> str:
+    async def execute(
+        self,
+        descricao_produto: str,
+        estado: str | None = None,
+        municipio: str | None = None,
+    ) -> str:
         try:
             from db.connection import get_db
             db = get_db()
@@ -79,66 +137,86 @@ class RestrictionCheckTool(Tool):
             from db.repositories.restrictions import RestrictionRepository
             repo = RestrictionRepository(db)
 
-            # ── Passo 1: busca todas as restrições ativas do banco ───────────
-            restricoes = await repo.list_active_for_llm()
+            # ── Passo 1: LLM gera termos de busca específicos ───────────────
+            resultado_termos = await _chamar_llm_json(
+                _PROMPT_GERAR_TERMOS.format(descricao=descricao_produto),
+                max_tokens=300,
+            )
 
-            if not restricoes:
-                return "PERMITIDO: nenhuma restrição cadastrada no sistema."
+            termos = resultado_termos.get("termos_busca", [])
+            produto_identificado = resultado_termos.get("produto_identificado", descricao_produto)
 
-            # ── Passo 2: LLM avalia semanticamente ──────────────────────────
-            categorias_fmt = "\n".join(
-                f"ID {r['id']}: [{r['category'].replace('_', ' ').upper()}] "
+            if not termos:
+                # Fallback: usa a descrição bruta como único termo
+                termos = [descricao_produto]
+
+            logger.info(
+                "Verificação: produto='%s' termos=%s",
+                produto_identificado, termos[:5]
+            )
+
+            # ── Passo 2: DB busca APENAS pelos termos gerados ───────────────
+            encontrados = await repo.search_by_terms(
+                terms=termos,
+                state_code=estado or None,
+                municipality=municipio or None,
+            )
+
+            if not encontrados:
+                logger.info("Verificação: PERMITIDO — nenhum registro encontrado para '%s'", produto_identificado)
+                return "PERMITIDO: nenhuma restrição encontrada para este produto."
+
+            # ── Passo 3: LLM julga se os registros realmente se aplicam ─────
+            registros_fmt = "\n".join(
+                f"ID {r['id']}: [{r['category'].replace('_',' ').upper()}] "
                 f"{r['description']} — {r['reason']}"
-                for r in restricoes
+                + (f" (estado: {r['state_code']})" if r.get('state_code') else "")
+                + (f" (município: {r['municipality']})" if r.get('municipality') else "")
+                for r in encontrados
             )
 
-            prompt = _AVALIACAO_PROMPT.format(
-                descricao=descricao_produto,
-                categorias=categorias_fmt,
-            )
-
-            from llm import get_provider
-            resp = await get_provider().complete(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+            resultado_julgamento = await _chamar_llm_json(
+                _PROMPT_JULGAMENTO.format(
+                    produto_usuario=descricao_produto,
+                    produto_identificado=produto_identificado,
+                    registros=registros_fmt,
+                ),
                 max_tokens=200,
-                json_mode=True,
             )
 
-            resultado = json.loads(resp.text or '{"permitido": true, "ids_restricoes": []}')
+            if not resultado_julgamento.get("restrito", False):
+                logger.info(
+                    "Verificação: PERMITIDO após julgamento — '%s' não se enquadra nos registros encontrados",
+                    produto_identificado,
+                )
+                return "PERMITIDO: produto não se enquadra nas restrições cadastradas."
 
-            if resultado.get("permitido", True):
-                logger.info("Restrição: PERMITIDO para '%s'", descricao_produto[:60])
-                return "PERMITIDO: nenhuma restrição encontrada para este produto."
-
-            # ── Passo 3: busca os detalhes completos pelos IDs identificados ─
-            ids_match = [int(i) for i in resultado.get("ids_restricoes", []) if str(i).isdigit()]
-            if not ids_match:
-                return "PERMITIDO: nenhuma restrição encontrada para este produto."
-
-            detalhes = await repo.fetch_by_ids(ids_match)
-            if not detalhes:
-                return "PERMITIDO: nenhuma restrição ativa encontrada para este produto."
+            # ── Monta resposta final com os registros confirmados ────────────
+            ids_confirmados = resultado_julgamento.get("ids_aplicaveis", [])
+            registros_confirmados = (
+                [r for r in encontrados if r["id"] in ids_confirmados]
+                if ids_confirmados else encontrados
+            )
 
             logger.warning(
-                "Restrição: RESTRITO para '%s' — categorias: %s",
-                descricao_produto[:60],
-                [r["category"] for r in detalhes],
+                "Verificação: RESTRITO — '%s' | categorias=%s",
+                produto_identificado,
+                [r["category"] for r in registros_confirmados],
             )
 
             linhas = ["RESTRITO: este produto não pode ser negociado no NOTHA.\n"]
-            for r in detalhes:
+            for r in registros_confirmados:
                 categoria = r.get("category", "").replace("_", " ").title()
                 reason = r.get("reason", "")
                 scope = r.get("scope", "national")
                 state_code = r.get("state_code") or ""
-                municipality = r.get("municipality") or ""
+                mun = r.get("municipality") or ""
 
                 location = ""
                 if scope == "state" and state_code:
                     location = f" (estado: {state_code})"
-                elif scope == "municipal" and municipality:
-                    location = f" (município: {municipality})"
+                elif scope == "municipal" and mun:
+                    location = f" (município: {mun})"
 
                 linhas.append(f"- Categoria: {categoria}{location}\n  Motivo: {reason}")
 
