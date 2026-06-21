@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from db.connection import init_pool, close_pool
 from engine.orchestrator import Orchestrator
 from engine.jobs import start_all_jobs
-from whatsapp import send_message, extract_messages
+from whatsapp import send_message, extract_messages, download_media_bytes
+from transcribe import transcribe_audio
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +59,42 @@ async def process_message(phone: str, text: str) -> None:
         logger.error(f"Erro ao processar mensagem de {phone}: {e}")
         try:
             await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
+        except Exception:
+            pass
+
+
+async def process_audio_message(phone: str, media_id: str, mime_type: str) -> None:
+    """Baixa o áudio do WhatsApp, transcreve via Whisper e processa como texto."""
+    try:
+        await send_message(phone, "🎙️ Recebi seu áudio, transcrevendo...")
+    except Exception:
+        pass
+
+    try:
+        audio_bytes, detected_mime = await download_media_bytes(media_id)
+        if not audio_bytes:
+            logger.error(f"Falha ao baixar áudio de {phone} (media_id={media_id})")
+            await send_message(phone, "Não consegui processar seu áudio. Pode tentar enviar como texto?")
+            return
+
+        effective_mime = detected_mime or mime_type
+        transcribed = await transcribe_audio(audio_bytes, effective_mime)
+
+        if not transcribed:
+            logger.warning(f"Transcrição vazia para áudio de {phone}")
+            await send_message(phone, "Não consegui entender o áudio. Pode tentar enviar como texto?")
+            return
+
+        logger.info(f"Áudio transcrito de {phone}: {transcribed[:80]}...")
+
+        reply = await orchestrator.handle_message(phone, transcribed, send_fn=send_message)
+        await send_message(phone, reply)
+        logger.info(f"Resposta ao áudio enviada para {phone}.")
+
+    except Exception as e:
+        logger.error(f"Erro ao processar áudio de {phone}: {e}")
+        try:
+            await send_message(phone, "Ocorreu um erro ao processar seu áudio. Tente enviar como texto.")
         except Exception:
             pass
 
@@ -135,6 +172,19 @@ async def receive_message(request: Request) -> Response:
             text = msg["text"].strip()
             logger.info(f"Mensagem de {phone}: {text[:60]}...")
             asyncio.create_task(process_message(phone, text))
+
+        elif msg_type == "audio":
+            media_id = msg.get("media_id")
+            if media_id:
+                mime = msg.get("media_mime_type", "audio/ogg")
+                logger.info(f"Áudio recebido de {phone}: media_id={media_id} mime={mime}")
+                asyncio.create_task(
+                    process_audio_message(
+                        phone=phone,
+                        media_id=media_id,
+                        mime_type=mime,
+                    )
+                )
 
         elif msg_type in ("image", "document"):
             media_id = msg.get("media_id")

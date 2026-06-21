@@ -74,6 +74,47 @@ async def download_media_as_base64(media_id: str, mime_type: str = "image/jpeg")
         return None
 
 
+async def download_media_bytes(media_id: str) -> tuple[bytes, str] | tuple[None, None]:
+    """Baixa o binário de uma mídia do WhatsApp.
+
+    Retorna (bytes, mime_type) ou (None, None) em caso de falha.
+    Usado para áudios que serão enviados ao Whisper para transcrição.
+    """
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
+    if not token or not media_id:
+        return None, None
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            meta_resp = await client.get(
+                f"{GRAPH_API_URL}/{media_id}",
+                headers=headers,
+            )
+            if meta_resp.status_code != 200:
+                logger.warning(f"Falha ao obter metadata de mídia {media_id}: {meta_resp.status_code}")
+                return None, None
+
+            data = meta_resp.json()
+            download_url = data.get("url")
+            mime_type = data.get("mime_type", "audio/ogg")
+            if not download_url:
+                return None, None
+
+            dl_resp = await client.get(download_url, headers=headers)
+            if dl_resp.status_code != 200:
+                logger.warning(f"Falha ao baixar mídia {media_id}: {dl_resp.status_code}")
+                return None, None
+
+            content_type = dl_resp.headers.get("content-type", mime_type).split(";")[0].strip()
+            return dl_resp.content, content_type
+
+    except Exception as e:
+        logger.warning(f"Falha ao baixar bytes de mídia {media_id}: {e}")
+        return None, None
+
+
 async def send_message(to: str, text: str) -> dict:
     token = os.environ["WHATSAPP_ACCESS_TOKEN"]
     phone_number_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"]
@@ -98,16 +139,16 @@ async def send_message(to: str, text: str) -> dict:
 
 
 def extract_messages(body: dict) -> list[dict]:
-    """Extrai mensagens de texto, imagem e documento do payload do webhook.
+    """Extrai mensagens de texto, áudio, imagem e documento do payload do webhook.
 
     Campos de cada mensagem retornada:
       from            — telefone do remetente
       id              — message_id (para deduplicação)
-      type            — "text" | "image" | "document"
+      type            — "text" | "audio" | "image" | "document"
       text            — corpo de texto ou legenda (str, pode ser vazio)
       media_id        — ID da mídia no WhatsApp (None para texto)
       media_mime_type — tipo MIME informado pelo WhatsApp (None para texto)
-      caption         — legenda enviada com a imagem/documento (None para texto)
+      caption         — legenda enviada com a imagem/documento (None para texto/áudio)
     """
     messages = []
     try:
@@ -127,6 +168,18 @@ def extract_messages(body: dict) -> list[dict]:
                             "text": msg["text"]["body"],
                             "media_id": None,
                             "media_mime_type": None,
+                            "caption": None,
+                        })
+
+                    elif msg_type == "audio":
+                        audio = msg.get("audio", {})
+                        messages.append({
+                            "from": sender,
+                            "id": msg_id,
+                            "type": "audio",
+                            "text": "",
+                            "media_id": audio.get("id"),
+                            "media_mime_type": audio.get("mime_type", "audio/ogg"),
                             "caption": None,
                         })
 
