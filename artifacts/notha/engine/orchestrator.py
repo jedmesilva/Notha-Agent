@@ -127,7 +127,25 @@ class Orchestrator:
             ConversationRepository(db),
         )
 
-    async def handle_message(self, phone: str, text: str) -> str:
+    # Ferramentas que podem demorar e justificam uma mensagem de "aguarde"
+    _SLOW_TOOLS = {"buscar_produto", "listar_produto", "pesquisar_web", "verificar_restricao"}
+
+    # Fallback de mensagens de espera por ferramenta (quando o LLM não gera texto interim)
+    _WAIT_MSG_FALLBACK = {
+        "buscar_produto": "🔍 Pesquisando produtos disponíveis, um momento...",
+        "listar_produto": "📝 Iniciando o cadastro do produto, um momento...",
+        "pesquisar_web": "🌐 Consultando informações na web, um momento...",
+        "verificar_restricao": "⏳ Verificando restrições, um momento...",
+    }
+
+    async def handle_message(self, phone: str, text: str, send_fn=None) -> str:
+        """Processa a mensagem do usuário e retorna a resposta final.
+
+        send_fn: coroutine opcional (phone, text) → None.
+        Quando fornecida, mensagens intermediárias (ex: "aguarde, pesquisando...")
+        são enviadas proativamente antes de ferramentas lentas, sem esperar o
+        usuário perguntar de novo pelo resultado.
+        """
         db = self._db or get_db()
 
         if db is None:
@@ -184,6 +202,27 @@ class Orchestrator:
             user_message=text,
             tools=NOTHA_TOOLS,
         )
+
+        # Se há ferramentas lentas, envia mensagem de "aguarde" imediatamente
+        # antes de executá-las — assim o usuário sabe que algo está acontecendo
+        if send_fn and tool_calls:
+            slow_tools = [tc for tc in tool_calls if tc["name"] in self._SLOW_TOOLS]
+            if slow_tools:
+                # Tenta usar o texto que o LLM gerou na fase 1 (mais natural)
+                interim_text = next(
+                    (m.get("content") for m in reversed(messages)
+                     if m["role"] == "assistant" and m.get("content")),
+                    None,
+                )
+                if not interim_text:
+                    # Fallback: mensagem template baseada na primeira ferramenta lenta
+                    interim_text = self._WAIT_MSG_FALLBACK.get(slow_tools[0]["name"])
+                if interim_text:
+                    try:
+                        await send_fn(phone, interim_text)
+                        logger.info("Mensagem intermediária enviada para %s: %s", phone, interim_text[:60])
+                    except Exception as e:
+                        logger.warning("Falha ao enviar mensagem intermediária: %s", e)
 
         # Código executa deterministicamente o que o LLM decidiu
         # e devolve o resultado real do banco para o LLM gerar resposta precisa

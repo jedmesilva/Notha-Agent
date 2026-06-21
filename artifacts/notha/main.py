@@ -51,7 +51,7 @@ async def process_message(phone: str, text: str) -> None:
         return
 
     try:
-        reply = await orchestrator.handle_message(phone, text)
+        reply = await orchestrator.handle_message(phone, text, send_fn=send_message)
         await send_message(phone, reply)
         logger.info(f"Resposta enviada para {phone}.")
     except Exception as e:
