@@ -224,12 +224,21 @@ class Orchestrator:
                     except Exception as e:
                         logger.warning("Falha ao enviar mensagem intermediária: %s", e)
 
+        # Ferramentas que alteram dados do usuário no banco — exigem recarregar contexto
+        _USER_DATA_TOOLS = {
+            "atualizar_nome", "atualizar_apelido", "atualizar_cpf",
+            "atualizar_chave_pix", "atualizar_endereco", "atualizar_localizacao",
+        }
+
         # Código executa deterministicamente o que o LLM decidiu
         # e devolve o resultado real do banco para o LLM gerar resposta precisa
         tool_results: dict[str, str] = {}
         override_reply: str | None = None
+        user_data_changed = False
 
         for tc in tool_calls:
+            if tc["name"] in _USER_DATA_TOOLS:
+                user_data_changed = True
             result_text, complex_reply = await self._execute_tool(
                 tc, phone, text, user,
                 user_repo, listing_repo, neg_repo, engine, active_negs,
@@ -238,6 +247,13 @@ class Orchestrator:
             tool_results[tc["id"]] = result_text
             if complex_reply is not None:
                 override_reply = complex_reply
+
+        # Se alguma ferramenta atualizou dados do usuário, recarrega do banco
+        # para que o contexto passado ao LLM na fase 2 reflita o estado real
+        if user_data_changed:
+            user = await user_repo.find_by_id(user_id) or user
+            seller_profile = await user_repo.get_seller_profile(user_id)
+            contexto = self._build_context(user, active_negs, seller_profile, phone=phone)
 
         if override_reply:
             final_reply = override_reply
