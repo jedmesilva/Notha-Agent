@@ -13,6 +13,7 @@ import logging
 import re
 from llm import get_provider
 from tools.builtin import ALL_BUILTIN_TOOLS
+from guardrail import validar_resposta
 
 logger = logging.getLogger("notha.agent.conversation")
 
@@ -592,6 +593,7 @@ class ConversationAgent:
         self,
         messages: list[dict],
         tool_results: dict[str, str],
+        contexto: str = "",
     ) -> str:
         """Fase 2 do tool calling: gera a resposta final com os resultados das ferramentas.
 
@@ -601,6 +603,7 @@ class ConversationAgent:
         que o LLM "reinicie" a conversa com saudações.
 
         tool_results: dict de tool_call_id → resultado descritivo (dados reais do banco).
+        contexto: string de contexto do usuário (do _build_context) para o guardrail.
         """
         tool_context = "\n\n━━━ DADOS OBTIDOS PELAS FERRAMENTAS ━━━\n"
         for result in tool_results.values():
@@ -622,6 +625,10 @@ class ConversationAgent:
         )
         user_greeted = _is_pure_greeting(last_user_msg)
 
+        history_for_guardrail = [
+            m for m in rebuilt if m.get("role") in ("user", "assistant")
+        ]
+
         try:
             resp = await get_provider().complete(
                 messages=rebuilt,
@@ -629,7 +636,10 @@ class ConversationAgent:
                 max_tokens=500,
             )
             reply = resp.text or "Feito!"
-            return await _sanitize_response(reply, has_history, user_greeted)
+            sanitized = await _sanitize_response(reply, has_history, user_greeted)
+            return await validar_resposta(
+                sanitized, history_for_guardrail, contexto, last_user_msg
+            )
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
@@ -662,7 +672,10 @@ class ConversationAgent:
             return "Tive um problema técnico agora. Me manda de novo em instantes!", []
 
         reply = resp.text or "Tive um problema técnico."
-        return await _sanitize_response(reply, has_history, user_greeted), []
+        sanitized = await _sanitize_response(reply, has_history, user_greeted)
+        history_for_guardrail = list(history) + [{"role": "user", "content": user_message}]
+        validated = await validar_resposta(sanitized, history_for_guardrail, contexto, user_message)
+        return validated, []
 
     async def respond(
         self,
@@ -735,7 +748,8 @@ class ConversationAgent:
                 max_tokens=500,
             )
             reply = resp.text or instrucao
-            return await _sanitize_response(reply, has_history, user_greeted)
+            sanitized = await _sanitize_response(reply, has_history, user_greeted)
+            return await validar_resposta(sanitized, history, contexto, last_user_msg)
         except Exception as e:
             logger.error("Erro no speak: %s", e)
             return instrucao

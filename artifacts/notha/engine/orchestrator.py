@@ -204,7 +204,7 @@ class Orchestrator:
             final_reply = override_reply
         elif tool_calls:
             # Fase 2: LLM recebe os resultados reais e gera resposta natural
-            final_reply = await self._conv.get_reply_after_tools(messages, tool_results)
+            final_reply = await self._conv.get_reply_after_tools(messages, tool_results, contexto=contexto)
         else:
             last_assistant = next(
                 (m["content"] for m in reversed(messages) if m["role"] == "assistant"),
