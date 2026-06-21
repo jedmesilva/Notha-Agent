@@ -5,15 +5,15 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.111.0",
-    "asyncpg>=0.30.0",
-    "ddgs>=9.14.4",
+    "asyncpg==0.30.0",
+    "ddgs==9.14.4",
     "duckduckgo-search>=7.0.0",
     "fastapi==0.115.6",
     "httpx==0.28.1",
     "openai==1.59.3",
-    "pint>=0.25.3",
+    "pint==0.25.3",
     "python-dotenv==1.0.1",
     "pytz>=2026.2",
-    "sympy>=1.14.0",
+    "sympy==1.14.0",
     "uvicorn[standard]==0.32.1",
 ]
