@@ -11,7 +11,7 @@ from db.connection import DB, get_db
 from db.repositories import (
     UserRepository, ListingRepository, ListingFlowRepository,
     NegotiationRepository, TransactionRepository, DeliveryRepository,
-    ConversationRepository, BuscaSalvaRepository,
+    ConversationRepository, SavedSearchRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
@@ -23,9 +23,9 @@ from phone_timezone import infer_timezone
 
 _BUILTIN_TOOL_MAP = {
     web_search.name: web_search,
-    currency.name: currency,
-    math.name: math,
-    units.name: units,
+    currency.name:   currency,
+    math.name:       math,
+    units.name:      units,
     datetime_tool.name: datetime_tool,
 }
 
@@ -79,16 +79,16 @@ def _is_valid_name(name: str) -> bool:
 def _detect_document_type(caption: str) -> str:
     """Infers document type from the caption sent with the image.
 
-    Returns: 'rg' | 'cnh' | 'passaporte' | 'desconhecido'
+    Returns: 'national_id' | 'drivers_license' | 'passport' | 'unknown'
     """
     text = caption.lower()
     if any(p in text for p in ("rg", "identidade", "registro geral", "carteira de identidade")):
-        return "rg"
+        return "national_id"
     if any(p in text for p in ("cnh", "habilitação", "habilitacao", "carteira de motorista")):
-        return "cnh"
+        return "drivers_license"
     if "passaporte" in text:
-        return "passaporte"
-    return "desconhecido"
+        return "passport"
+    return "unknown"
 
 
 def _memory_add(phone: str, role: str, content: str) -> None:
@@ -128,13 +128,13 @@ class Orchestrator:
         )
 
     # Tools that may take a while and justify a "please wait" message
-    _SLOW_TOOLS = {"buscar_produto", "listar_produto", "pesquisar_web", "verificar_restricao"}
+    _SLOW_TOOLS = {"search_product", "list_product", "pesquisar_web", "verificar_restricao"}
 
     # Wait message fallback by tool (when the LLM doesn't generate interim text)
     _WAIT_MSG_FALLBACK = {
-        "buscar_produto": "🔍 Pesquisando produtos disponíveis, um momento...",
-        "listar_produto": "📝 Iniciando o cadastro do produto, um momento...",
-        "pesquisar_web": "🌐 Consultando informações na web, um momento...",
+        "search_product":    "🔍 Pesquisando produtos disponíveis, um momento...",
+        "list_product":      "📝 Iniciando o cadastro do produto, um momento...",
+        "pesquisar_web":     "🌐 Consultando informações na web, um momento...",
         "verificar_restricao": "⏳ Verificando restrições, um momento...",
     }
 
@@ -151,10 +151,10 @@ class Orchestrator:
             return await self._no_db_fallback(phone, text)
 
         user_repo, listing_repo, neg_repo, tx_repo, delivery_repo, conv_repo = self._repos(db)
-        engine = NegotiationEngine(db)
+        engine    = NegotiationEngine(db)
         flow_repo = ListingFlowRepository(db)
 
-        user = await user_repo.find_or_create_by_phone(phone)
+        user    = await user_repo.find_or_create_by_phone(phone)
         user_id = user["id"]
 
         # Check if there is an active product listing flow for this phone
@@ -207,14 +207,12 @@ class Orchestrator:
         if send_fn and tool_calls:
             slow_tools = [tc for tc in tool_calls if tc["name"] in self._SLOW_TOOLS]
             if slow_tools:
-                # Try to use the text the LLM generated in phase 1 (more natural)
                 interim_text = next(
                     (m.get("content") for m in reversed(messages)
                      if m["role"] == "assistant" and m.get("content")),
                     None,
                 )
                 if not interim_text:
-                    # Fallback: template message based on the first slow tool
                     interim_text = self._WAIT_MSG_FALLBACK.get(slow_tools[0]["name"])
                 if interim_text:
                     try:
@@ -225,8 +223,8 @@ class Orchestrator:
 
         # Tools that modify user data in the DB — require reloading context
         _USER_DATA_TOOLS = {
-            "atualizar_nome", "atualizar_apelido", "atualizar_cpf",
-            "atualizar_chave_pix", "atualizar_endereco", "atualizar_localizacao",
+            "update_name", "update_nickname", "update_tax_id",
+            "update_pix_key", "update_address", "update_location",
         }
 
         # Code deterministically executes what the LLM decided
@@ -306,14 +304,14 @@ class Orchestrator:
         name = tc["name"]
         args = tc["arguments"]
 
-        if name == "atualizar_nome":
-            name_val = args.get("nome", "").strip()
+        if name == "update_name":
+            name_val = args.get("name", "").strip()
             if _is_valid_name(name_val):
-                await user_repo.update(user["id"], nome=name_val)
-                updated_user = await user_repo.find_by_id(user["id"])
-                saved_name = updated_user.get("nome") if updated_user else name_val
-                saved_nickname = updated_user.get("apelido") if updated_user else ""
-                cpf_registered = bool(updated_user.get("cpf")) if updated_user else False
+                await user_repo.update(user["id"], full_name=name_val)
+                updated_user     = await user_repo.find_by_id(user["id"])
+                saved_name       = updated_user.get("full_name") if updated_user else name_val
+                saved_nickname   = updated_user.get("nickname")  if updated_user else ""
+                cpf_registered   = bool(updated_user.get("tax_id")) if updated_user else False
                 logger.info("Name updated via tool: '%s' (user_id=%s)", saved_name, user["id"])
                 result = (
                     f"Nome legal salvo no banco: '{saved_name}'. "
@@ -324,68 +322,71 @@ class Orchestrator:
                 logger.warning("Name rejected by validation: '%s'", name_val)
                 result = (
                     f"Nome '{name_val}' rejeitado (parece saudação ou inválido). "
-                    f"Nome atual no banco: '{user.get('nome') or 'vazio'}'."
+                    f"Nome atual no banco: '{user.get('full_name') or 'vazio'}'."
                 )
             return result, None
 
-        if name == "atualizar_apelido":
-            nickname = args.get("apelido", "").strip()
+        if name == "update_nickname":
+            nickname = args.get("nickname", "").strip()
             if nickname and len(nickname) >= 2:
-                await user_repo.update_apelido(user["id"], nickname)
+                await user_repo.update_nickname(user["id"], nickname)
                 logger.info("Nickname updated via tool: '%s' (user_id=%s)", nickname, user["id"])
                 result = (
                     f"Apelido salvo no banco: '{nickname}'. "
                     f"O usuário agora será chamado de '{nickname}'. "
-                    f"Nome legal permanece: '{user.get('nome') or 'não informado'}'."
+                    f"Nome legal permanece: '{user.get('full_name') or 'não informado'}'."
                 )
             else:
                 result = "Apelido vazio ou muito curto — nenhuma alteração feita."
             return result, None
 
-        if name == "atualizar_cpf":
-            raw_cpf = args.get("cpf", "").strip()
-            cpf = re.sub(r"[\.\-\s]", "", raw_cpf)
+        if name == "update_tax_id":
+            raw_cpf = args.get("tax_id", "").strip()
+            cpf     = re.sub(r"[\.\-\s]", "", raw_cpf)
             if _looks_like_cpf(cpf):
-                existing = await user_repo.find_by_cpf(cpf)
+                existing = await user_repo.find_by_tax_id(cpf)
                 if existing and existing["id"] != user["id"]:
                     await user_repo.add_phone(existing["id"], phone)
                     logger.info("CPF already existed — phone transferred to user_id=%s", existing["id"])
-                    result = f"CPF já estava cadastrado para '{existing.get('nome') or 'usuário'}'. Histórico recuperado."
+                    result = f"CPF já estava cadastrado para '{existing.get('full_name') or 'usuário'}'. Histórico recuperado."
                 else:
-                    await user_repo.update(user["id"], cpf=cpf)
+                    await user_repo.update(user["id"], tax_id=cpf)
                     logger.info("CPF updated via tool (user_id=%s)", user["id"])
-                    result = f"CPF '{cpf}' salvo no banco para user_id={user['id']}. Nome: '{user.get('nome') or 'vazio'}'."
+                    result = f"CPF '{cpf}' salvo no banco para user_id={user['id']}. Nome: '{user.get('full_name') or 'vazio'}'."
             else:
                 logger.warning("Invalid CPF received: '%s'", raw_cpf)
-                result = f"CPF '{raw_cpf}' inválido (precisa ter 11 dígitos). CPF atual no banco: {'registrado' if user.get('cpf') else 'vazio'}."
+                result = f"CPF '{raw_cpf}' inválido (precisa ter 11 dígitos). CPF atual no banco: {'registrado' if user.get('tax_id') else 'vazio'}."
             return result, None
 
-        if name == "atualizar_chave_pix":
-            pix_key = args.get("chave", "").strip()
+        if name == "update_pix_key":
+            pix_key = args.get("pix_key", "").strip()
             if pix_key:
-                await user_repo.upsert_seller_profile(user["id"], chave_pix=pix_key)
+                await user_repo.upsert_seller_profile(user["id"], pix_key=pix_key)
                 logger.info("Pix key updated (user_id=%s)", user["id"])
                 result = f"Chave Pix '{pix_key}' salva no banco para user_id={user['id']}."
             else:
                 result = "Chave Pix vazia — nenhuma alteração feita."
             return result, None
 
-        if name == "atualizar_endereco":
-            address = args.get("endereco", "").strip()
+        if name == "update_address":
+            address = args.get("address", "").strip()
             if address:
-                await user_repo.upsert_seller_profile(user["id"], endereco_retirada=address)
+                await user_repo.upsert_seller_profile(user["id"], pickup_address=address)
                 logger.info("Address updated (user_id=%s)", user["id"])
                 result = f"Endereço de retirada '{address}' salvo no banco para user_id={user['id']}."
             else:
                 result = "Endereço vazio — nenhuma alteração feita."
             return result, None
 
-        if name == "atualizar_localizacao":
-            city = args.get("cidade", "").strip() or None
-            neighborhood = args.get("bairro", "").strip() or None
+        if name == "update_location":
+            city         = args.get("city", "").strip()         or None
+            neighborhood = args.get("neighborhood", "").strip() or None
             if city or neighborhood:
-                await user_repo.update_localizacao(user["id"], cidade=city, bairro=neighborhood)
-                logger.info("Location updated (user_id=%s): city=%s neighborhood=%s", user["id"], city, neighborhood)
+                await user_repo.update_location(user["id"], city=city, neighborhood=neighborhood)
+                logger.info(
+                    "Location updated (user_id=%s): city=%s neighborhood=%s",
+                    user["id"], city, neighborhood,
+                )
                 parts = []
                 if city:
                     parts.append(f"cidade='{city}'")
@@ -396,40 +397,46 @@ class Orchestrator:
                 result = "Nenhuma localização informada — nenhuma alteração feita."
             return result, None
 
-        if name == "salvar_interesse":
-            description = args.get("descricao_busca", "").strip()
+        if name == "save_interest":
+            description = args.get("search_description", "").strip()
             if not description:
                 return "Descrição de busca vazia — interesse não salvo.", None
             db = self._db or get_db()
             if db:
-                busca_repo = BuscaSalvaRepository(db)
-                alert_record = await busca_repo.criar(
+                search_repo  = SavedSearchRepository(db)
+                alert_record = await search_repo.create(
                     user_id=user["id"],
                     phone=phone,
-                    descricao_busca=description,
-                    categoria=args.get("categoria", "").strip() or None,
-                    cidade_busca=args.get("cidade_busca", "").strip() or None,
-                    bairro_busca=args.get("bairro_busca", "").strip() or None,
+                    search_description=description,
+                    category=args.get("category", "").strip() or None,
+                    search_city=args.get("search_city", "").strip() or None,
+                    search_neighborhood=args.get("search_neighborhood", "").strip() or None,
                 )
-                logger.info("Interest alert saved (user_id=%s): '%s' id=%s", user["id"], description, alert_record["id"])
-                result = f"Alerta de interesse salvo (id={alert_record['id']}): '{description}'. Usuário será notificado via WhatsApp assim que aparecer um produto compatível."
+                logger.info(
+                    "Interest alert saved (user_id=%s): '%s' id=%s",
+                    user["id"], description, alert_record["id"],
+                )
+                result = (
+                    f"Alerta de interesse salvo (id={alert_record['id']}): '{description}'. "
+                    "Usuário será notificado via WhatsApp assim que aparecer um produto compatível."
+                )
             else:
                 result = "Banco indisponível — interesse não salvo."
             return result, None
 
-        if name == "cancelar_alertas":
+        if name == "cancel_alerts":
             db = self._db or get_db()
             if db:
-                busca_repo = BuscaSalvaRepository(db)
-                alerts = await busca_repo.listar_por_user(user["id"])
-                await busca_repo.cancelar_todas_do_user(user["id"])
+                search_repo = SavedSearchRepository(db)
+                alerts      = await search_repo.find_by_user(user["id"])
+                await search_repo.cancel_all_by_user(user["id"])
                 logger.info("Alerts cancelled (user_id=%s): %d alerts", user["id"], len(alerts))
                 result = f"{len(alerts)} alerta(s) de busca cancelado(s) para user_id={user['id']}."
             else:
                 result = "Banco indisponível — alertas não cancelados."
             return result, None
 
-        if name == "listar_produto":
+        if name == "list_product":
             db = self._db or get_db()
             complex_reply = await self._start_listing_flow(
                 phone=phone,
@@ -442,12 +449,12 @@ class Orchestrator:
             )
             return "fluxo de cadastro iniciado", complex_reply
 
-        if name == "buscar_produto":
+        if name == "search_product":
             intent = {
-                "categoria": args.get("categoria"),
-                "descricao_busca": args.get("descricao_busca"),
-                "cidade_busca": args.get("cidade_busca", "").strip() or None,
-                "bairro_busca": args.get("bairro_busca", "").strip() or None,
+                "category":           args.get("category"),
+                "search_description": args.get("search_description"),
+                "search_city":        args.get("search_city", "").strip() or None,
+                "search_neighborhood": args.get("search_neighborhood", "").strip() or None,
             }
             complex_reply = await self._handle_search(
                 phone, text, user, listing_repo, intent,
@@ -469,7 +476,7 @@ class Orchestrator:
         history: list[dict] | None = None,
     ) -> str | None:
         """Checks whether the message is a confirmation/rejection of an active negotiation."""
-        intent = await self._conv.extract_intent(text, contexto="negociacao_ativa")
+        intent      = await self._conv.extract_intent(text, contexto="negociacao_ativa")
         intent_type = intent.get("intencao", "outro")
         if intent_type in ("confirmacao", "recusa"):
             return await self._handle_negotiation_response(
@@ -496,27 +503,27 @@ class Orchestrator:
     def _build_context(self, user, active_negs: list, seller_profile=None, phone: str = "") -> str:
         """Builds context with real DB data for the LLM.
 
-        Includes name, nickname, CPF, identity verification, seller profile
+        Includes name, nickname, tax_id, identity verification, seller profile
         and active negotiations — all from the DB, nothing invented.
         """
         parts = []
 
-        name = user.get("nome") or ""
-        nickname = user.get("apelido") or ""
-        cpf = user.get("cpf") or ""
-        user_id = user.get("id", "?")
-        identity_status = user.get("status_identidade") or "nao_verificado"
+        full_name       = user.get("full_name") or ""
+        nickname        = user.get("nickname")  or ""
+        tax_id          = user.get("tax_id")    or ""
+        user_id         = user.get("id", "?")
+        identity_status = user.get("identity_status") or "unverified"
 
         # Legal name
-        if not name:
+        if not full_name:
             parts.append("STATUS: usuário sem nome cadastrado — peça o nome completo")
-        elif not _is_valid_name(name):
+        elif not _is_valid_name(full_name):
             parts.append(
-                f"STATUS: nome='{name}' parece incorreto — "
+                f"STATUS: nome='{full_name}' parece incorreto — "
                 "capture o nome real se o usuário mencionar"
             )
         else:
-            parts.append(f"nome: {name}")
+            parts.append(f"nome: {full_name}")
 
         # Nickname (how to address the user)
         if nickname:
@@ -524,35 +531,40 @@ class Orchestrator:
         else:
             parts.append("apelido: não definido")
 
-        # CPF and identity verification
-        parts.append(f"CPF: {'registrado (✓)' if cpf else 'não registrado'}")
+        # Tax ID and identity verification
+        parts.append(f"CPF: {'registrado (✓)' if tax_id else 'não registrado'}")
 
         _IDENTITY_LABEL = {
-            "nao_verificado": "não verificado",
-            "em_analise": "em análise (documento enviado)",
-            "verificado": "verificado (✓)",
-            "rejeitado": "rejeitado (documento inválido — peça novo envio)",
+            "unverified":  "não verificado",
+            "under_review": "em análise (documento enviado)",
+            "verified":    "verificado (✓)",
+            "rejected":    "rejeitado (documento inválido — peça novo envio)",
         }
         parts.append(f"identidade: {_IDENTITY_LABEL.get(identity_status, identity_status)}")
         parts.append(f"user_id: {user_id}")
 
         # User's home address (city/neighborhood — for deliveries)
-        home_city = user.get("cidade") or ""
-        home_neighborhood = user.get("bairro") or ""
+        home_city         = user.get("city")         or ""
+        home_neighborhood = user.get("neighborhood") or ""
         if home_city or home_neighborhood:
             loc_parts = []
             if home_neighborhood:
                 loc_parts.append(f"bairro={home_neighborhood}")
             if home_city:
                 loc_parts.append(f"cidade={home_city}")
-            parts.append(f"mora em: {', '.join(loc_parts)} (endereço de moradia — para entregas; região de BUSCA é perguntada na hora)")
+            parts.append(
+                f"mora em: {', '.join(loc_parts)} "
+                "(endereço de moradia — para entregas; região de BUSCA é perguntada na hora)"
+            )
         else:
-            parts.append("mora em: não informado (se quiser usar como referência de busca, pergunte cidade/bairro de moradia)")
+            parts.append(
+                "mora em: não informado (se quiser usar como referência de busca, pergunte cidade/bairro de moradia)"
+            )
 
         # Seller profile
         if seller_profile:
-            pix_key = seller_profile.get("chave_pix") or ""
-            address = seller_profile.get("endereco_retirada") or ""
+            pix_key = seller_profile.get("pix_key")     or ""
+            address = seller_profile.get("pickup_address") or ""
             parts.append(f"chave Pix: {pix_key if pix_key else 'não cadastrada'}")
             if address:
                 parts.append(f"endereço retirada: {address}")
@@ -564,7 +576,7 @@ class Orchestrator:
             neg = active_negs[0]
             parts.append(
                 f"negociação ativa: id={neg['id']}, status={neg['status']}, "
-                f"valor=R${neg.get('preco_atual_proposto', 0):.2f}"
+                f"valor=R${neg.get('current_price', 0):.2f}"
             )
         else:
             parts.append("sem negociações ativas")
@@ -576,19 +588,21 @@ class Orchestrator:
 
         return " | ".join(parts)
 
-    async def _handle_list_product(self, phone, text, user, user_repo, listing_repo, intent,
-                                   history: list[dict] | None = None, context: str = "") -> str:
-        check = await user_repo.check_missing_fields(user["id"], "listar_produto")
-        if check["falta"]:
-            missing_fields = ", ".join(check["falta"])
+    async def _handle_list_product(
+        self, phone, text, user, user_repo, listing_repo, intent,
+        history: list[dict] | None = None, context: str = "",
+    ) -> str:
+        check = await user_repo.check_missing_fields(user["id"], "list_product")
+        if check["missing"]:
+            missing_fields = ", ".join(check["missing"])
             return await self._conv.speak(
                 f"Para listar um produto, preciso de: {missing_fields}. Peça de forma natural.",
                 history, context,
             )
 
-        description = intent.get("descricao", text)
-        category = intent.get("categoria")
-        informed_price = intent.get("preco_informado")
+        description    = intent.get("description", text)
+        category       = intent.get("category")
+        informed_price = intent.get("asking_price")
 
         similar_history = []
         if category:
@@ -603,12 +617,12 @@ class Orchestrator:
         )
 
         PENDING_CONFIRMATIONS[phone] = {
-            "tipo": "confirmar_preco_listing",
-            "appraisal": appraisal,
-            "descricao": description,
-            "categoria": category,
-            "preco_informado": informed_price,
-            "seller_id": user["id"],
+            "tipo":           "confirmar_preco_listing",
+            "appraisal":      appraisal,
+            "description":    description,
+            "category":       category,
+            "asking_price":   informed_price,
+            "seller_id":      user["id"],
         }
 
         price_alert = ""
@@ -623,13 +637,15 @@ class Orchestrator:
             history, context,
         )
 
-    async def _handle_search(self, phone, text, user, listing_repo, intent,
-                             history: list[dict] | None = None, context: str = "") -> str:
-        history = history or []
-        category = intent.get("categoria")
-        search_desc = intent.get("descricao_busca") or category or "produto"
-        city_filter: str | None = intent.get("cidade_busca")
-        neighborhood_filter: str | None = intent.get("bairro_busca")
+    async def _handle_search(
+        self, phone, text, user, listing_repo, intent,
+        history: list[dict] | None = None, context: str = "",
+    ) -> str:
+        history           = history or []
+        category          = intent.get("category")
+        search_desc       = intent.get("search_description") or category or "produto"
+        city_filter       = intent.get("search_city")
+        neighborhood_filter = intent.get("search_neighborhood")
 
         # Level 1: search with full filter (neighborhood + city)
         listings = await listing_repo.find_available(
@@ -644,14 +660,16 @@ class Orchestrator:
             )
             return await self._format_search_results(listings, region_label, history, context)
 
-        # Level 2: if searched by neighborhood and found nothing, try just the city
+        # Level 2: try just the city
         if neighborhood_filter and city_filter:
             listings = await listing_repo.find_available(
                 categoria=category, limit=5, cidade=city_filter,
             )
             if listings:
                 prefix = f"Nada no {neighborhood_filter}, mas achei em {city_filter}:"
-                return await self._format_search_results(listings, f"em {city_filter}", history, context, prefixo=prefix)
+                return await self._format_search_results(
+                    listings, f"em {city_filter}", history, context, prefixo=prefix
+                )
 
         # Level 3: try all of Brazil
         if city_filter or neighborhood_filter:
@@ -659,7 +677,9 @@ class Orchestrator:
             original_region = neighborhood_filter or city_filter or "essa região"
             if listings:
                 prefix = f"Não encontrei nada em {original_region}. Mas tem isso disponível em outras regiões:"
-                return await self._format_search_results(listings, "em outras regiões", history, context, prefixo=prefix)
+                return await self._format_search_results(
+                    listings, "em outras regiões", history, context, prefixo=prefix
+                )
 
         # Nothing anywhere
         original_region = neighborhood_filter or city_filter or "qualquer região"
@@ -673,15 +693,15 @@ class Orchestrator:
         """Checks saved searches and notifies via WhatsApp anyone interested in this listing."""
         try:
             from whatsapp import send_message as _wpp_send
-            busca_repo = BuscaSalvaRepository(db)
-            alerts = await busca_repo.listar_ativas()
+            search_repo = SavedSearchRepository(db)
+            alerts      = await search_repo.find_active()
             for alert in alerts:
-                if not busca_repo.matches(alert, listing):
+                if not search_repo.matches(alert, listing):
                     continue
-                product_name = listing.get("descricao") or "Produto"
-                city = listing.get("cidade_vendedor") or ""
-                price = listing.get("preco_anunciado") or 0
-                loc_text = f" em {city}" if city else ""
+                product_name = listing.get("description") or "Produto"
+                city         = listing.get("seller_city") or ""
+                price        = listing.get("listed_price") or 0
+                loc_text     = f" em {city}" if city else ""
                 notification = (
                     f"Achei um produto que pode te interessar{loc_text}!\n\n"
                     f"📦 {product_name}\n"
@@ -690,7 +710,7 @@ class Orchestrator:
                 )
                 try:
                     await _wpp_send(alert["phone"], notification)
-                    await busca_repo.registrar_notificacao(alert["id"])
+                    await search_repo.record_notification(alert["id"])
                     logger.info(
                         "Notification sent: alert_id=%s phone=%s listing_id=%s",
                         alert["id"], alert["phone"], listing.get("id"),
@@ -702,11 +722,11 @@ class Orchestrator:
 
     async def _format_search_results(
         self, listings: list, regiao_label: str,
-        history: list[dict] | None = None, context: str = "", prefixo: str = ""
+        history: list[dict] | None = None, context: str = "", prefixo: str = "",
     ) -> str:
         items = [
-            f"• {l['descricao']} — R${l['preco_anunciado']:.2f}"
-            f" ({l.get('cidade_vendedor') or 'localização não informada'})"
+            f"• {l['description']} — R${l['listed_price']:.2f}"
+            f" ({l.get('seller_city') or 'localização não informada'})"
             for l in listings
         ]
         body = "\n".join(items)
@@ -722,15 +742,15 @@ class Orchestrator:
         history: list[dict] | None = None,
         context: str = "",
     ) -> str:
-        history = history or []
+        history  = history or []
         accepted = intent.get("aceitou", False)
-        status = neg["status"]
+        status   = neg["status"]
 
-        if status == "proposta_ao_vendedor":
+        if status == "pending_seller":
             if accepted:
                 await engine.accept_seller_proposal(neg["id"])
                 return await self._conv.speak(
-                    f"Proposta de R${neg['preco_atual_proposto']:.2f} confirmada. Comunique de forma positiva e informe que o comprador será notificado.",
+                    f"Proposta de R${neg['current_price']:.2f} confirmada. Comunique de forma positiva e informe que o comprador será notificado.",
                     history, context,
                 )
             else:
@@ -740,11 +760,11 @@ class Orchestrator:
                     history, context,
                 )
 
-        if status == "proposta_ao_comprador":
+        if status == "pending_buyer":
             if accepted:
                 await engine.accept_buyer_proposal(neg["id"])
                 return await self._conv.speak(
-                    f"Negócio fechado em R${neg['preco_atual_proposto']:.2f}! Comunique o fechamento e informe que o link de pagamento será gerado.",
+                    f"Negócio fechado em R${neg['current_price']:.2f}! Comunique o fechamento e informe que o link de pagamento será gerado.",
                     history, context,
                 )
             else:
@@ -767,10 +787,10 @@ class Orchestrator:
         neg_repo, tx_repo, delivery_repo, engine,
         history: list[dict] | None = None, context: str = "",
     ) -> str:
-        history = history or []
+        history   = history or []
         conf_type = pending.get("tipo")
-        intent = await self._conv.extract_intent(text, contexto="confirmacao")
-        accepted = intent.get("aceitou", False)
+        intent    = await self._conv.extract_intent(text, contexto="confirmacao")
+        accepted  = intent.get("aceitou", False)
 
         if conf_type == "confirmar_preco_listing":
             PENDING_CONFIRMATIONS.pop(phone, None)
@@ -780,14 +800,14 @@ class Orchestrator:
                     history, context,
                 )
             appraisal = pending["appraisal"]
-            listing = await listing_repo.create(
+            listing   = await listing_repo.create(
                 seller_id=pending["seller_id"],
-                descricao=pending["descricao"],
-                categoria=pending.get("categoria"),
-                preco_informado_vendedor=pending.get("preco_informado"),
-                preco_sugerido=appraisal["preco_sugerido"],
-                preco_anunciado=appraisal["preco_sugerido"],
-                preco_minimo=appraisal["preco_minimo_sugerido"],
+                description=pending["description"],
+                category=pending.get("category"),
+                asking_price=pending.get("asking_price"),
+                suggested_price=appraisal["preco_sugerido"],
+                listed_price=appraisal["preco_sugerido"],
+                floor_price=appraisal["preco_minimo_sugerido"],
                 appraisal_data=appraisal,
             )
             db = self._db or get_db()
@@ -813,9 +833,9 @@ class Orchestrator:
         history: list[dict] | None = None, context: str = "",
     ) -> str:
         """Starts the product listing flow (state machine persisted in the DB)."""
-        check = await user_repo.check_missing_fields(user["id"], "listar_produto")
-        if check["falta"]:
-            missing_fields = ", ".join(check["falta"])
+        check = await user_repo.check_missing_fields(user["id"], "list_product")
+        if check["missing"]:
+            missing_fields = ", ".join(check["missing"])
             return await self._conv.speak(
                 f"Para listar um produto, preciso de: {missing_fields}. Peça de forma natural.",
                 history or [], context,
@@ -823,11 +843,11 @@ class Orchestrator:
 
         flow_repo = ListingFlowRepository(db)
 
-        # Cancel any stuck flow (step != concluido)
+        # Cancel any stuck flow (step != done)
         await flow_repo.cancel(phone)
 
         # Create new flow
-        flow = await flow_repo.create(user["id"], phone)
+        await flow_repo.create(user["id"], phone)
 
         first_question = await self._listing_flow_agent.start()
         return first_question
@@ -862,7 +882,7 @@ class Orchestrator:
         await conv_repo.add(user["id"], "user", text)
 
         # Auto-processing step: send "please wait" → process → return confirmation
-        if next_step == "processando":
+        if next_step == "processing":
             if reply:
                 from whatsapp import send_message as _wpp_send
                 await _wpp_send(phone, reply)
@@ -874,9 +894,8 @@ class Orchestrator:
                     listing_repo=listing_repo,
                     db=db,
                 )
-                current_photos = _parse_jsonb(updated_flow.get("fotos"), [])
-                # next step can be "confirmar" (normal) or "revisar_condicao" (visual inconsistency)
-                next_step_proc = processed_data.get("step_next", "confirmar")
+                current_photos    = _parse_jsonb(updated_flow.get("photos"), [])
+                next_step_proc    = processed_data.get("step_next", "confirm")
                 await flow_repo.update_step(updated_flow["id"], next_step_proc, processed_data, current_photos)
                 await conv_repo.add(user["id"], "assistant", confirm_msg)
                 return confirm_msg
@@ -909,30 +928,30 @@ class Orchestrator:
         flow_repo: ListingFlowRepository,
     ) -> str:
         """Creates the listing in the DB with all collected data and marks the flow as done."""
-        appraisal = data.get("appraisal", {})
+        appraisal    = data.get("appraisal", {})
         product_name = " ".join(
-            filter(None, [data.get("marca"), data.get("modelo"), data.get("versao")])
-        ) or data.get("descricao", "Produto")
+            filter(None, [data.get("brand"), data.get("model"), data.get("version")])
+        ) or data.get("description", "Produto")
 
         listing = await listing_repo.create(
             seller_id=user["id"],
-            descricao=data.get("descricao", product_name),
-            categoria=data.get("categoria"),
-            fotos=[f["media_id"] for f in photos if f.get("media_id")],
-            preco_informado_vendedor=data.get("preco_desejado"),
-            preco_sugerido=appraisal.get("preco_sugerido"),
-            preco_anunciado=data.get("preco_anunciado") or appraisal.get("preco_sugerido", 0),
-            preco_minimo=data.get("preco_minimo") or appraisal.get("preco_minimo_sugerido", 0),
+            description=data.get("description", product_name),
+            category=data.get("category"),
+            photos=[f["media_id"] for f in photos if f.get("media_id")],
+            asking_price=data.get("asking_price"),
+            suggested_price=appraisal.get("preco_sugerido"),
+            listed_price=data.get("listed_price") or appraisal.get("preco_sugerido", 0),
+            floor_price=data.get("floor_price") or appraisal.get("preco_minimo_sugerido", 0),
             appraisal_data=appraisal,
-            marca=data.get("marca"),
-            modelo=data.get("modelo"),
-            versao=data.get("versao"),
-            estado_uso=data.get("estado_uso"),
-            condicao=data.get("condicao"),
-            tem_nota_fiscal=data.get("tem_nota_fiscal"),
-            preco_minimo_vendedor=data.get("preco_minimo_vendedor"),
-            info_web=data.get("info_web"),
-            cidade_vendedor=data.get("cidade_vendedor"),
+            brand=data.get("brand"),
+            model=data.get("model"),
+            version=data.get("version"),
+            usage_state=data.get("usage_state"),
+            condition=data.get("condition"),
+            has_receipt=data.get("has_receipt"),
+            seller_min_price=data.get("seller_min_price"),
+            web_info=data.get("web_info"),
+            seller_city=data.get("seller_city"),
             vision_analysis=data.get("vision_analysis"),
         )
 
@@ -943,7 +962,7 @@ class Orchestrator:
             import asyncio as _asyncio
             _asyncio.create_task(self._notify_interested_users(dict(listing), db))
 
-        price = data.get("preco_anunciado") or appraisal.get("preco_sugerido", 0) or 0
+        price = data.get("listed_price") or appraisal.get("preco_sugerido", 0) or 0
         return (
             f"Produto anunciado com sucesso! ID #{listing['id']}.\n"
             f"Nome: {product_name}\n"
@@ -962,7 +981,7 @@ class Orchestrator:
         Central media router.
 
         Priority:
-        1. If there is an active listing flow at the 'fotos' step → routes to listing agent
+        1. If there is an active listing flow at the 'photos_upload' step → routes to listing agent
         2. Otherwise → identifies as identity document
         """
         db = self._db or get_db()
@@ -975,15 +994,15 @@ class Orchestrator:
         user = await user_repo.find_or_create_by_phone(phone)
 
         active_flow = await flow_repo.get_active(phone)
-        if active_flow and active_flow["step"] == "fotos":
+        if active_flow and active_flow["step"] == "photos_upload":
             current_photos, reply = await self._listing_flow_agent.handle_media(
                 flow=dict(active_flow),
                 media_id=media_id,
                 mime_type=mime_type,
                 caption=caption or "",
             )
-            current_data = _parse_jsonb(active_flow.get("dados"), {})
-            await flow_repo.update_step(active_flow["id"], "fotos", current_data, current_photos)
+            current_data = _parse_jsonb(active_flow.get("data"), {})
+            await flow_repo.update_step(active_flow["id"], "photos_upload", current_data, current_photos)
             if reply:
                 await conv_repo.add(user["id"], "assistant", reply)
             return reply
@@ -1002,9 +1021,9 @@ class Orchestrator:
 
         Flow:
         1. Finds user in DB (creates if first contact)
-        2. Detects document type from caption (rg, cnh, passaporte)
+        2. Detects document type from caption (national_id, drivers_license, passport)
         3. Downloads image from WhatsApp and uploads to Supabase Storage
-        4. Registers in DB and updates status_identidade to 'em_analise'
+        4. Registers in DB and updates identity_status to 'under_review'
         5. Returns a natural-language message to the user
         """
         from storage.identity import processar_documento_identidade
@@ -1015,10 +1034,9 @@ class Orchestrator:
 
         user_repo, *_ = self._repos(db)
         user = await user_repo.find_or_create_by_phone(phone)
-        user_id = user["id"]
-        display_name = user.get("apelido") or (user.get("nome") or "").split()[0] or ""
+        user_id      = user["id"]
+        display_name = user.get("nickname") or (user.get("full_name") or "").split()[0] or ""
 
-        # Detect document type from the caption sent with the image
         doc_type = _detect_document_type(caption or "")
 
         try:
@@ -1039,11 +1057,11 @@ class Orchestrator:
                 "Pode enviar de novo? Se persistir, tente em formato JPG ou PNG."
             )
 
-        prefix = f"{display_name}, " if display_name else ""
+        prefix    = f"{display_name}, " if display_name else ""
         doc_label = {
-            "rg": "RG",
-            "cnh": "CNH",
-            "passaporte": "passaporte",
+            "national_id":      "RG",
+            "drivers_license":  "CNH",
+            "passport":         "passaporte",
         }.get(doc_type, "documento")
 
         return (

@@ -9,31 +9,31 @@ class TransactionRepository:
     async def create(
         self,
         negotiation_id: int,
-        valor_produto: float,
-        modalidade_entrega: str,
-        chave_pix_vendedor: str,
-        valor_entrega: float = 0,
-        entregador_id: int | None = None,
-        chave_pix_entregador: str | None = None,
-        taxa_notha: float = 0,
+        product_amount: float,
+        delivery_mode: str,
+        seller_pix_key: str,
+        delivery_amount: float = 0,
+        courier_id: int | None = None,
+        courier_pix_key: str | None = None,
+        notha_fee: float = 0,
     ) -> asyncpg.Record:
         return await self._db.fetch_one(
             """
             INSERT INTO transactions
-                (negotiation_id, valor_produto, valor_entrega, taxa_notha, modalidade_entrega,
-                 chave_pix_vendedor, chave_pix_entregador, entregador_id,
-                 status, status_retencao)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pendente', 'retido_aguardando_entrega')
+                (negotiation_id, product_amount, delivery_amount, notha_fee, delivery_mode,
+                 seller_pix_key, courier_pix_key, courier_id,
+                 status, retention_status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'held_pending_delivery')
             RETURNING *
             """,
             negotiation_id,
-            valor_produto,
-            valor_entrega,
-            taxa_notha,
-            modalidade_entrega,
-            chave_pix_vendedor,
-            chave_pix_entregador,
-            entregador_id,
+            product_amount,
+            delivery_amount,
+            notha_fee,
+            delivery_mode,
+            seller_pix_key,
+            courier_pix_key,
+            courier_id,
         )
 
     async def find_by_id(self, transaction_id: int) -> asyncpg.Record | None:
@@ -48,47 +48,64 @@ class TransactionRepository:
 
     async def set_asaas_charge(self, transaction_id: int, asaas_charge_id: str) -> None:
         await self._db.execute(
-            "UPDATE transactions SET asaas_charge_id = $1, status = 'cobranca_criada', updated_at = now() WHERE id = $2",
+            """
+            UPDATE transactions
+            SET asaas_charge_id = $1, status = 'charge_created', updated_at = now()
+            WHERE id = $2
+            """,
             asaas_charge_id,
             transaction_id,
         )
 
     async def set_paid(self, transaction_id: int) -> None:
         await self._db.execute(
-            "UPDATE transactions SET status = 'pago', updated_at = now() WHERE id = $1",
+            "UPDATE transactions SET status = 'paid', updated_at = now() WHERE id = $1",
             transaction_id,
         )
 
-    async def set_retention_status(self, transaction_id: int, status_retencao: str, prazo_estorno_automatico=None) -> None:
+    async def set_retention_status(
+        self,
+        transaction_id: int,
+        retention_status: str,
+        auto_refund_deadline=None,
+        # Legacy keyword alias
+        prazo_estorno_automatico=None,
+    ) -> None:
+        deadline = auto_refund_deadline if auto_refund_deadline is not None else prazo_estorno_automatico
         await self._db.execute(
             """
             UPDATE transactions SET
-                status_retencao = $1,
-                prazo_estorno_automatico = $2,
-                updated_at = now()
+                retention_status     = $1,
+                auto_refund_deadline = $2,
+                updated_at           = now()
             WHERE id = $3
             """,
-            status_retencao,
-            prazo_estorno_automatico,
+            retention_status,
+            deadline,
             transaction_id,
         )
 
     async def set_transfer_ids(
         self,
         transaction_id: int,
+        transfer_id_seller: str | None = None,
+        transfer_id_courier: str | None = None,
+        # Legacy keyword aliases
         transfer_id_vendedor: str | None = None,
         transfer_id_entregador: str | None = None,
     ) -> None:
+        effective_seller  = transfer_id_seller  if transfer_id_seller  is not None else transfer_id_vendedor
+        effective_courier = transfer_id_courier if transfer_id_courier is not None else transfer_id_entregador
         await self._db.execute(
             """
             UPDATE transactions SET
-                asaas_transfer_id_vendedor = COALESCE($1, asaas_transfer_id_vendedor),
-                asaas_transfer_id_entregador = COALESCE($2, asaas_transfer_id_entregador),
-                updated_at = now()
+                asaas_transfer_id_seller  = COALESCE($1, asaas_transfer_id_seller),
+                asaas_transfer_id_courier = COALESCE($2, asaas_transfer_id_courier),
+                updated_at                = now()
             WHERE id = $3
             """,
-            transfer_id_vendedor,
-            transfer_id_entregador,
+            effective_seller,
+            effective_courier,
             transaction_id,
         )
 
@@ -96,17 +113,17 @@ class TransactionRepository:
         return await self._db.fetch_all(
             """
             SELECT * FROM transactions
-            WHERE status_retencao = 'retido_aguardando_decisao_pos_falha'
-              AND prazo_estorno_automatico < now()
+            WHERE retention_status = 'held_pending_decision'
+              AND auto_refund_deadline < now()
             """
         )
 
     async def get_total_retained(self) -> float:
         val = await self._db.fetch_val(
             """
-            SELECT COALESCE(SUM(valor_produto + valor_entrega), 0)
+            SELECT COALESCE(SUM(product_amount + delivery_amount), 0)
             FROM transactions
-            WHERE status_retencao IN ('retido_aguardando_entrega', 'retido_aguardando_decisao_pos_falha')
+            WHERE retention_status IN ('held_pending_delivery', 'held_pending_decision')
             """
         )
         return float(val or 0)

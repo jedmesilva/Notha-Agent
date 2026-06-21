@@ -13,24 +13,24 @@ class NegotiationRepository:
         self,
         listing_id: int,
         buyer_id: int,
-        modo: str = "proxy",
-        limite_comprador: dict | None = None,
-        limite_vendedor: dict | None = None,
+        mode: str = "proxy",
+        buyer_limits: dict | None = None,
+        seller_limits: dict | None = None,
     ) -> asyncpg.Record:
         now = datetime.utcnow()
         return await self._db.fetch_one(
             """
             INSERT INTO negotiations
-                (listing_id, buyer_id, modo, status, limite_comprador, limite_vendedor,
+                (listing_id, buyer_id, mode, status, buyer_limits, seller_limits,
                  responder_until, expires_at)
-            VALUES ($1, $2, $3, 'ativa', $4, $5, $6, $7)
+            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7)
             RETURNING *
             """,
             listing_id,
             buyer_id,
-            modo,
-            json.dumps(limite_comprador) if limite_comprador else None,
-            json.dumps(limite_vendedor) if limite_vendedor else None,
+            mode,
+            json.dumps(buyer_limits) if buyer_limits else None,
+            json.dumps(seller_limits) if seller_limits else None,
             now + timedelta(minutes=ROUND_TIMEOUT_MINUTES),
             now + timedelta(hours=TOTAL_EXPIRATION_HOURS),
         )
@@ -42,31 +42,45 @@ class NegotiationRepository:
 
     async def find_active_by_listing(self, listing_id: int) -> asyncpg.Record | None:
         return await self._db.fetch_one(
-            "SELECT * FROM negotiations WHERE listing_id = $1 AND status = 'ativa' ORDER BY created_at DESC LIMIT 1",
+            """
+            SELECT * FROM negotiations
+            WHERE listing_id = $1 AND status = 'active'
+            ORDER BY created_at DESC LIMIT 1
+            """,
             listing_id,
         )
 
     async def find_active_by_buyer(self, buyer_id: int) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
-            "SELECT * FROM negotiations WHERE buyer_id = $1 AND status IN ('ativa', 'proposta_ao_vendedor', 'proposta_ao_comprador')",
+            """
+            SELECT * FROM negotiations
+            WHERE buyer_id = $1
+              AND status IN ('active', 'pending_seller', 'pending_buyer')
+            """,
             buyer_id,
         )
 
-    async def set_status(self, negotiation_id: int, status: str) -> None:
+    async def update_status(self, negotiation_id: int, status: str) -> None:
         await self._db.execute(
             "UPDATE negotiations SET status = $1 WHERE id = $2",
             status,
             negotiation_id,
         )
 
-    async def update_offer(self, negotiation_id: int, price: float, status: str | None = None) -> None:
+    # Keep legacy alias used by engine code
+    async def set_status(self, negotiation_id: int, status: str) -> None:
+        await self.update_status(negotiation_id, status)
+
+    async def update_price_and_status(
+        self, negotiation_id: int, price: float, status: str | None = None
+    ) -> None:
         if status:
             await self._db.execute(
                 """
                 UPDATE negotiations SET
-                    preco_atual_proposto = $1,
-                    status = $2,
-                    tentativas_humanas = tentativas_humanas + 1,
+                    current_price   = $1,
+                    status          = $2,
+                    human_attempts  = human_attempts + 1,
                     responder_until = $3
                 WHERE id = $4
                 """,
@@ -77,26 +91,32 @@ class NegotiationRepository:
             )
         else:
             await self._db.execute(
-                "UPDATE negotiations SET preco_atual_proposto = $1 WHERE id = $2",
+                "UPDATE negotiations SET current_price = $1 WHERE id = $2",
                 price,
                 negotiation_id,
             )
 
-    async def update_seller_limit(self, negotiation_id: int, limite_vendedor: dict) -> None:
+    # Legacy alias used by engine
+    async def update_offer(
+        self, negotiation_id: int, price: float, status: str | None = None
+    ) -> None:
+        await self.update_price_and_status(negotiation_id, price, status)
+
+    async def update_seller_limit(self, negotiation_id: int, seller_limits: dict) -> None:
         await self._db.execute(
-            "UPDATE negotiations SET limite_vendedor = $1 WHERE id = $2",
-            json.dumps(limite_vendedor),
+            "UPDATE negotiations SET seller_limits = $1 WHERE id = $2",
+            json.dumps(seller_limits),
             negotiation_id,
         )
 
     async def find_timed_out(self) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
-            "SELECT * FROM negotiations WHERE status = 'ativa' AND responder_until < now()"
+            "SELECT * FROM negotiations WHERE status = 'active' AND responder_until < now()"
         )
 
     async def find_totally_expired(self) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
-            "SELECT * FROM negotiations WHERE status = 'ativa' AND expires_at < now()"
+            "SELECT * FROM negotiations WHERE status = 'active' AND expires_at < now()"
         )
 
     async def add_offer(
@@ -106,9 +126,11 @@ class NegotiationRepository:
         proposed_value: float,
         extra_context: str | None = None,
     ) -> asyncpg.Record:
+        """author: buyer | seller | system"""
         return await self._db.fetch_one(
             """
-            INSERT INTO negotiation_offers (negotiation_id, autor, valor_proposto, contexto_extra)
+            INSERT INTO negotiation_offers
+                (negotiation_id, author, proposed_value, extra_context)
             VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
@@ -120,7 +142,7 @@ class NegotiationRepository:
 
     async def get_offers(self, negotiation_id: int) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
-            "SELECT * FROM negotiation_offers WHERE negotiation_id = $1 ORDER BY timestamp ASC",
+            "SELECT * FROM negotiation_offers WHERE negotiation_id = $1 ORDER BY created_at ASC",
             negotiation_id,
         )
 
@@ -135,7 +157,7 @@ class NegotiationRepository:
         return await self._db.fetch_one(
             """
             INSERT INTO proxy_negotiation_rounds
-                (negotiation_id, rodada, valor_proposto, argumento_vendedor, argumento_comprador)
+                (negotiation_id, round_number, proposed_value, seller_argument, buyer_argument)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             """,
@@ -149,35 +171,44 @@ class NegotiationRepository:
     async def confirm_proxy_round(
         self,
         round_id: int,
+        confirmed_by_seller: bool | None = None,
+        confirmed_by_buyer: bool | None = None,
+        # Legacy keyword args accepted for compatibility
         confirmado_pelo_vendedor: bool | None = None,
         confirmado_pelo_comprador: bool | None = None,
     ) -> None:
-        if confirmado_pelo_vendedor is not None:
+        effective_seller = confirmed_by_seller if confirmed_by_seller is not None else confirmado_pelo_vendedor
+        effective_buyer  = confirmed_by_buyer  if confirmed_by_buyer  is not None else confirmado_pelo_comprador
+        if effective_seller is not None:
             await self._db.execute(
-                "UPDATE proxy_negotiation_rounds SET confirmado_pelo_vendedor = $1 WHERE id = $2",
-                confirmado_pelo_vendedor,
+                "UPDATE proxy_negotiation_rounds SET confirmed_by_seller = $1 WHERE id = $2",
+                effective_seller,
                 round_id,
             )
-        if confirmado_pelo_comprador is not None:
+        if effective_buyer is not None:
             await self._db.execute(
-                "UPDATE proxy_negotiation_rounds SET confirmado_pelo_comprador = $1 WHERE id = $2",
-                confirmado_pelo_comprador,
+                "UPDATE proxy_negotiation_rounds SET confirmed_by_buyer = $1 WHERE id = $2",
+                effective_buyer,
                 round_id,
             )
 
     async def get_proxy_rounds(self, negotiation_id: int) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
-            "SELECT * FROM proxy_negotiation_rounds WHERE negotiation_id = $1 ORDER BY rodada ASC",
+            """
+            SELECT * FROM proxy_negotiation_rounds
+            WHERE negotiation_id = $1
+            ORDER BY round_number ASC
+            """,
             negotiation_id,
         )
 
     async def get_rejected_values(self, negotiation_id: int) -> list[float]:
         rows = await self._db.fetch_all(
             """
-            SELECT valor_proposto FROM proxy_negotiation_rounds
+            SELECT proposed_value FROM proxy_negotiation_rounds
             WHERE negotiation_id = $1
-            AND (confirmado_pelo_vendedor = FALSE OR confirmado_pelo_comprador = FALSE)
+              AND (confirmed_by_seller = FALSE OR confirmed_by_buyer = FALSE)
             """,
             negotiation_id,
         )
-        return [r["valor_proposto"] for r in rows]
+        return [r["proposed_value"] for r in rows]

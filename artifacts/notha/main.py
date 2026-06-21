@@ -104,7 +104,7 @@ async def process_media(phone: str, media_id: str, mime_type: str, caption: str)
     Routes received image/document.
 
     Priority:
-    1. If there is an active product listing flow at the 'fotos' step → routes to listing flow
+    1. If there is an active product listing flow at the 'photos_upload' step → routes to listing flow
     2. Otherwise → treats as identity document
     """
     try:
@@ -165,7 +165,7 @@ async def receive_message(request: Request) -> Response:
                 except KeyError:
                     pass
 
-        phone = msg["from"]
+        phone    = msg["from"]
         msg_type = msg.get("type", "text")
 
         if msg_type == "text":
@@ -210,7 +210,7 @@ async def asaas_webhook(request: Request) -> Response:
     except Exception:
         return Response(status_code=200)
 
-    event = body.get("event", "")
+    event   = body.get("event", "")
     payment = body.get("payment", {})
     logger.info(f"Asaas event received: {event} — charge_id={payment.get('id')}")
 
@@ -232,7 +232,7 @@ async def _handle_payment_confirmed(payment: dict) -> None:
     if not charge_id:
         return
 
-    tx_repo = TransactionRepository(db)
+    tx_repo  = TransactionRepository(db)
     neg_repo = NegotiationRepository(db)
 
     row = await db.fetch_one(
@@ -243,7 +243,7 @@ async def _handle_payment_confirmed(payment: dict) -> None:
         return
 
     await tx_repo.set_paid(row["id"])
-    await neg_repo.set_status(row["negotiation_id"], "paga")
+    await neg_repo.update_status(row["negotiation_id"], "paid")
     logger.info(f"Payment confirmed: transaction_id={row['id']}, negotiation_id={row['negotiation_id']}")
 
 
@@ -269,27 +269,27 @@ async def health() -> dict:
     from db.repositories import TransactionRepository
     db_ok = get_pool() is not None
 
-    saldo_retido = None
+    retained = None
     if db_ok:
         try:
             from db.connection import get_db
             db = get_db()
             if db:
-                tx_repo = TransactionRepository(db)
-                saldo_retido = await tx_repo.get_total_retained()
+                tx_repo  = TransactionRepository(db)
+                retained = await tx_repo.get_total_retained()
         except Exception:
             pass
 
     return {
-        "status": "ok",
-        "version": "2.0.0",
-        "database": "conectado" if db_ok else "desconectado",
-        "saldo_retido_total": saldo_retido,
+        "status":            "ok",
+        "version":           "2.0.0",
+        "database":          "conectado" if db_ok else "desconectado",
+        "saldo_retido_total": retained,
     }
 
 
 @app.get("/admin/listings")
-async def list_listings(status: str = "disponivel", limit: int = 20) -> dict:
+async def list_listings(status: str = "available", limit: int = 20) -> dict:
     """Admin endpoint: lists products by status."""
     from db.connection import get_db
     from db.repositories import ListingRepository
@@ -297,7 +297,7 @@ async def list_listings(status: str = "disponivel", limit: int = 20) -> dict:
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
     repo = ListingRepository(db)
-    rows = await repo.find_available(limit=limit) if status == "disponivel" else []
+    rows = await repo.find_available(limit=limit) if status == "available" else []
     return {"listings": [dict(r) for r in rows], "total": len(rows)}
 
 
@@ -310,7 +310,7 @@ async def conciliacao() -> dict:
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
     tx_repo = TransactionRepository(db)
-    total = await tx_repo.get_total_retained()
+    total   = await tx_repo.get_total_retained()
     return {
         "saldo_retido_total_notha": total,
         "nota": "Compare este valor com o saldo real da conta Asaas da MAISOR CAPITAL. Divergência é bug crítico.",
@@ -327,13 +327,13 @@ async def identidade_pendentes(limit: int = 50) -> dict:
 
     rows = await db.fetch_all(
         """
-        SELECT d.id, d.user_id, d.tipo, d.url_imagem, d.status,
-               d.criado_em, d.whatsapp_media_id,
-               u.nome, u.apelido, u.cpf
-        FROM documentos_identidade d
+        SELECT d.id, d.user_id, d.document_type, d.image_url, d.status,
+               d.created_at, d.whatsapp_media_id,
+               u.full_name, u.nickname, u.tax_id
+        FROM identity_documents d
         JOIN users u ON u.id = d.user_id
-        WHERE d.status = 'em_analise'
-        ORDER BY d.criado_em ASC
+        WHERE d.status = 'under_review'
+        ORDER BY d.created_at ASC
         LIMIT $1
         """,
         limit,
@@ -350,17 +350,17 @@ async def aprovar_documento(doc_id: int) -> dict:
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    doc = await db.fetch_one("SELECT * FROM documentos_identidade WHERE id = $1", doc_id)
+    doc = await db.fetch_one("SELECT * FROM identity_documents WHERE id = $1", doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
 
     from datetime import datetime
     await db.execute(
-        "UPDATE documentos_identidade SET status='aprovado', analisado_em=$1, analisado_por='admin' WHERE id=$2",
+        "UPDATE identity_documents SET status='approved', reviewed_at=$1, reviewed_by='admin' WHERE id=$2",
         datetime.utcnow(), doc_id,
     )
     user_repo = UserRepository(db)
-    await user_repo.update_identidade_status(doc["user_id"], "verificado")
+    await user_repo.update_identity_status(doc["user_id"], "verified")
 
     return {"ok": True, "doc_id": doc_id, "user_id": doc["user_id"]}
 
@@ -374,20 +374,20 @@ async def rejeitar_documento(doc_id: int, motivo: str = "") -> dict:
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    doc = await db.fetch_one("SELECT * FROM documentos_identidade WHERE id = $1", doc_id)
+    doc = await db.fetch_one("SELECT * FROM identity_documents WHERE id = $1", doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Documento não encontrado")
 
     from datetime import datetime
     await db.execute(
         """
-        UPDATE documentos_identidade
-        SET status='rejeitado', motivo_rejeicao=$1, analisado_em=$2, analisado_por='admin'
+        UPDATE identity_documents
+        SET status='rejected', rejection_reason=$1, reviewed_at=$2, reviewed_by='admin'
         WHERE id=$3
         """,
         motivo, datetime.utcnow(), doc_id,
     )
     user_repo = UserRepository(db)
-    await user_repo.update_identidade_status(doc["user_id"], "rejeitado")
+    await user_repo.update_identity_status(doc["user_id"], "rejected")
 
     return {"ok": True, "doc_id": doc_id, "user_id": doc["user_id"], "motivo": motivo}

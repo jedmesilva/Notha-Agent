@@ -1,2 +1,3 @@
 - [NOTHA arquitetura multi-agente](notha-architecture.md) — guard rails de preço são sempre código determinístico, nunca LLM; proxies propõem, código valida antes de qualquer ação financeira
 - [NOTHA lazy init OpenAI](notha-openai-lazy.md) — AsyncOpenAI deve ser inicializado de forma lazy (não no __init__) para evitar crash na startup sem OPENAI_API_KEY configurada
+- [NOTHA padronização inglês](notha-english-standardization.md) — todo código interno está em inglês; textos ao usuário ficam em português; migration 006 aplica renomeações no Supabase

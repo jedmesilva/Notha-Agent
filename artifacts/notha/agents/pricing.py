@@ -95,9 +95,9 @@ class PricingAgent:
         if historico_similares:
             sources_used.append("historico_interno")
             prices = [
-                h.get("preco_final", h.get("preco_anunciado", 0))
+                h.get("final_price", h.get("listed_price", 0))
                 for h in historico_similares
-                if h.get("preco_final") or h.get("preco_anunciado")
+                if h.get("final_price") or h.get("listed_price")
             ]
             if prices:
                 avg = sum(prices) / len(prices)
@@ -193,7 +193,7 @@ class PricingAgent:
         web_context = await self.web_search_price(descricao)
         hist = list(historico_similares or [])
         if web_context:
-            hist = [{"descricao": "mercado_externo", "preco_final": None, "_web": web_context}] + hist
+            hist = [{"description": "external_market", "final_price": None, "_web": web_context}] + hist
 
         result = await self.appraise(
             descricao=descricao,

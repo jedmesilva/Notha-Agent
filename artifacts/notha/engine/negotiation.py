@@ -40,12 +40,12 @@ class NegotiationEngine:
     ) -> str:
         """Deterministic logic for direct negotiation mode."""
         if offer >= min_price:
-            return "aceitar"
+            return "accept"
         if offer >= min_price * 0.9 and not extra_context:
-            return "contrapropor"
+            return "counter"
         if extra_context:
-            return "avaliar_contexto"
-        return "recusar"
+            return "evaluate_context"
+        return "reject"
 
     async def _contextual_evaluator(
         self, offer: float, min_price: float, extra_context: str
@@ -82,7 +82,7 @@ class NegotiationEngine:
             logger.error(f"Contextual evaluator failed: {e}")
             return 0.0
 
-    async def decidir_oferta(
+    async def decide_offer(
         self,
         negotiation_id: int,
         offer: float,
@@ -92,21 +92,30 @@ class NegotiationEngine:
         """Direct mode: evaluates an offer and returns a decision with value."""
         decision = self._evaluate_direct_offer(offer, min_price, extra_context)
 
-        if decision == "aceitar":
-            return {"decisao": "aceitar", "valor": offer}
+        if decision == "accept":
+            return {"decision": "accept", "value": offer}
 
-        if decision == "contrapropor":
+        if decision == "counter":
             counteroffer = round((offer + min_price) / 2, 2)
-            return {"decisao": "contrapropor", "valor": counteroffer}
+            return {"decision": "counter", "value": counteroffer}
 
-        if decision == "avaliar_contexto" and extra_context:
+        if decision == "evaluate_context" and extra_context:
             adjustment = await self._contextual_evaluator(offer, min_price, extra_context)
             adjusted_price = min_price * (1 - adjustment)
             if offer >= adjusted_price:
-                return {"decisao": "aceitar_com_justificativa", "valor": offer, "ajuste_aplicado": adjustment}
-            return {"decisao": "recusar", "valor": min_price}
+                return {"decision": "accept_with_context", "value": offer, "adjustment_applied": adjustment}
+            return {"decision": "reject", "value": min_price}
 
-        return {"decisao": "recusar", "valor": min_price}
+        return {"decision": "reject", "value": min_price}
+
+    # Legacy alias
+    async def decidir_oferta(self, negotiation_id, offer, min_price, extra_context=None):
+        result = await self.decide_offer(negotiation_id, offer, min_price, extra_context)
+        return {
+            "decisao": result.get("decision"),
+            "valor": result.get("value"),
+            **{k: v for k, v in result.items() if k not in ("decision", "value")},
+        }
 
     def _fallback_intersection(self, buyer_max: float, seller_min: float) -> float | None:
         if buyer_max < seller_min:
@@ -120,23 +129,23 @@ class NegotiationEngine:
         """
         neg = await self._neg_repo.find_by_id(negotiation_id)
         if not neg:
-            return {"status": "erro", "motivo": "negociacao_nao_encontrada"}
+            return {"status": "error", "reason": "negotiation_not_found"}
 
         listing = await self._listing_repo.find_by_id(neg["listing_id"])
         if not listing:
-            return {"status": "erro", "motivo": "listing_nao_encontrado"}
+            return {"status": "error", "reason": "listing_not_found"}
 
         import json
-        buyer_limits = json.loads(neg["limite_comprador"]) if neg["limite_comprador"] else {}
-        seller_limits = json.loads(neg["limite_vendedor"]) if neg["limite_vendedor"] else {
-            "minimo": listing["preco_minimo"],
-            "ideal": listing["preco_anunciado"],
+        buyer_limits  = json.loads(neg["buyer_limits"])  if neg["buyer_limits"]  else {}
+        seller_limits = json.loads(neg["seller_limits"]) if neg["seller_limits"] else {
+            "minimo": listing["floor_price"],
+            "ideal":  listing["listed_price"],
         }
         appraisal_data = json.loads(listing["appraisal_data"]) if listing["appraisal_data"] else {}
 
         history = []
         rejected = await self._neg_repo.get_rejected_values(negotiation_id)
-        current_offer = buyer_limits.get("ideal", listing["preco_anunciado"] * 0.9)
+        current_offer = buyer_limits.get("ideal", listing["listed_price"] * 0.9)
 
         existing_rounds = await self._neg_repo.get_proxy_rounds(negotiation_id)
         start_round = len(existing_rounds)
@@ -159,7 +168,7 @@ class NegotiationEngine:
             if seller_resp.decision == "aceitar":
                 await self._neg_repo.add_proxy_round(
                     negotiation_id, round_num, current_offer,
-                    seller_argument=f"ACEITO: {seller_resp.argument}",
+                    seller_argument=f"ACCEPTED: {seller_resp.argument}",
                 )
                 return await self._propose_to_humans(negotiation_id, current_offer)
 
@@ -183,11 +192,11 @@ class NegotiationEngine:
             )
 
             history.append({
-                "rodada": round_num,
-                "valor_vendedor": seller_resp.value,
-                "arg_vendedor": seller_resp.argument,
-                "valor_comprador": buyer_resp.value,
-                "arg_comprador": buyer_resp.argument,
+                "round":          round_num,
+                "seller_value":   seller_resp.value,
+                "seller_arg":     seller_resp.argument,
+                "buyer_value":    buyer_resp.value,
+                "buyer_arg":      buyer_resp.argument,
             })
 
             if buyer_resp.decision == "aceitar":
@@ -197,84 +206,83 @@ class NegotiationEngine:
 
         fallback_value = self._fallback_intersection(
             buyer_limits.get("maximo", 0),
-            seller_limits.get("minimo", listing["preco_minimo"]),
+            seller_limits.get("minimo", listing["floor_price"]),
         )
         if fallback_value is None:
-            await self._neg_repo.set_status(negotiation_id, "sem_acordo")
+            await self._neg_repo.update_status(negotiation_id, "no_deal")
             logger.info(f"Negotiation {negotiation_id}: no agreement (fallback impossible)")
-            return {"status": "sem_acordo"}
+            return {"status": "no_deal"}
 
         return await self._propose_to_humans(negotiation_id, fallback_value)
 
     async def _propose_to_humans(self, negotiation_id: int, price: float) -> dict:
         """Proposes a price to the seller and then the buyer, sequentially."""
-        import json
         neg = await self._neg_repo.find_by_id(negotiation_id)
         if not neg:
-            return {"status": "erro"}
+            return {"status": "error"}
 
-        attempts = neg["tentativas_humanas"] or 0
+        attempts = neg["human_attempts"] or 0
         if attempts >= MAX_HUMAN_ATTEMPTS:
-            await self._neg_repo.set_status(negotiation_id, "sem_acordo")
-            return {"status": "sem_acordo", "motivo": "max_tentativas_atingido"}
+            await self._neg_repo.update_status(negotiation_id, "no_deal")
+            return {"status": "no_deal", "reason": "max_attempts_reached"}
 
-        await self._neg_repo.update_offer(negotiation_id, price, status="proposta_ao_vendedor")
+        await self._neg_repo.update_price_and_status(negotiation_id, price, "pending_seller")
 
         listing = await self._listing_repo.find_by_id(neg["listing_id"])
         seller_id = listing["seller_id"]
 
         await self._notify(
             seller_id,
-            "proposta_ao_vendedor",
-            {"valor": price, "negotiation_id": negotiation_id},
+            "pending_seller",
+            {"value": price, "negotiation_id": negotiation_id},
         )
 
         logger.info(f"Negotiation {negotiation_id}: proposal R${price:.2f} sent to seller {seller_id}")
-        return {"status": "proposta_ao_vendedor", "valor": price, "negotiation_id": negotiation_id}
+        return {"status": "pending_seller", "value": price, "negotiation_id": negotiation_id}
 
     async def accept_seller_proposal(self, negotiation_id: int) -> dict:
         """Called when the seller confirms the proposal."""
         neg = await self._neg_repo.find_by_id(negotiation_id)
         if not neg:
-            return {"status": "erro"}
+            return {"status": "error"}
 
-        price = neg["preco_atual_proposto"]
-        await self._neg_repo.set_status(negotiation_id, "proposta_ao_comprador")
+        price = neg["current_price"]
+        await self._neg_repo.update_status(negotiation_id, "pending_buyer")
         await self._notify(
             neg["buyer_id"],
-            "proposta_ao_comprador",
-            {"valor": price, "negotiation_id": negotiation_id},
+            "pending_buyer",
+            {"value": price, "negotiation_id": negotiation_id},
         )
-        return {"status": "proposta_ao_comprador", "valor": price}
+        return {"status": "pending_buyer", "value": price}
 
     async def reject_seller_proposal(self, negotiation_id: int) -> dict:
         """Seller rejected — records the rejection and restarts proxies."""
         neg = await self._neg_repo.find_by_id(negotiation_id)
         if not neg:
-            return {"status": "erro"}
-        price = neg["preco_atual_proposto"]
+            return {"status": "error"}
+        price = neg["current_price"]
         rounds = await self._neg_repo.get_proxy_rounds(negotiation_id)
         if rounds:
-            await self._neg_repo.confirm_proxy_round(rounds[-1]["id"], confirmado_pelo_vendedor=False)
-        await self._neg_repo.set_status(negotiation_id, "ativa")
+            await self._neg_repo.confirm_proxy_round(rounds[-1]["id"], confirmed_by_seller=False)
+        await self._neg_repo.update_status(negotiation_id, "active")
         logger.info(f"Negotiation {negotiation_id}: seller rejected R${price:.2f}, restarting proxies")
         return await self.negotiate_between_proxies(negotiation_id)
 
     async def accept_buyer_proposal(self, negotiation_id: int) -> dict:
         """Buyer accepts — negotiation closed."""
-        await self._neg_repo.set_status(negotiation_id, "aceita")
+        await self._neg_repo.update_status(negotiation_id, "accepted")
         logger.info(f"Negotiation {negotiation_id}: ACCEPTED by both sides")
-        return {"status": "aceita", "negotiation_id": negotiation_id}
+        return {"status": "accepted", "negotiation_id": negotiation_id}
 
     async def reject_buyer_proposal(self, negotiation_id: int) -> dict:
         """Buyer rejected — records the rejection and restarts proxies."""
         neg = await self._neg_repo.find_by_id(negotiation_id)
         if not neg:
-            return {"status": "erro"}
+            return {"status": "error"}
         rounds = await self._neg_repo.get_proxy_rounds(negotiation_id)
         if rounds:
-            await self._neg_repo.confirm_proxy_round(rounds[-1]["id"], confirmado_pelo_comprador=False)
-        await self._neg_repo.set_status(negotiation_id, "ativa")
+            await self._neg_repo.confirm_proxy_round(rounds[-1]["id"], confirmed_by_buyer=False)
+        await self._neg_repo.update_status(negotiation_id, "active")
         return await self.negotiate_between_proxies(negotiation_id)
 
     async def _notify(self, user_id: int, event: str, data: dict) -> None:

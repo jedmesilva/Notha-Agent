@@ -101,14 +101,14 @@ async def processar_documento_identidade(
     except Exception:
         url_assinada = ""
 
-    # Registra no banco e marca status do usuário como em_analise
+    # Register in the DB and mark user identity_status as under_review
     doc = None
     if user_repo:
         try:
-            doc = await user_repo.registrar_documento_identidade(
+            doc = await user_repo.register_identity_document(
                 user_id=user_id,
-                url_imagem=object_path,      # Caminho interno no bucket
-                tipo=tipo,
+                image_url=object_path,       # Internal path in the bucket
+                document_type=tipo,
                 whatsapp_media_id=media_id,
             )
             logger.info(

@@ -11,7 +11,7 @@ class ListingFlowRepository:
         return await self._db.fetch_one(
             """
             SELECT * FROM listing_flows
-            WHERE phone = $1 AND step != 'concluido'
+            WHERE phone = $1 AND step != 'done'
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -21,8 +21,8 @@ class ListingFlowRepository:
     async def create(self, user_id: int, phone: str) -> asyncpg.Record:
         return await self._db.fetch_one(
             """
-            INSERT INTO listing_flows (user_id, phone, step, dados, fotos)
-            VALUES ($1, $2, 'produto', '{}', '[]')
+            INSERT INTO listing_flows (user_id, phone, step, data, photos)
+            VALUES ($1, $2, 'product', '{}', '[]')
             RETURNING *
             """,
             user_id,
@@ -33,38 +33,38 @@ class ListingFlowRepository:
         self,
         flow_id: int,
         step: str,
-        dados: dict,
-        fotos: list | None = None,
+        data: dict,
+        photos: list | None = None,
     ) -> None:
-        if fotos is not None:
+        if photos is not None:
             await self._db.execute(
                 """
                 UPDATE listing_flows
-                SET step = $1, dados = $2::jsonb, fotos = $3::jsonb, updated_at = NOW()
+                SET step = $1, data = $2::jsonb, photos = $3::jsonb, updated_at = NOW()
                 WHERE id = $4
                 """,
                 step,
-                json.dumps(dados, ensure_ascii=False),
-                json.dumps(fotos, ensure_ascii=False),
+                json.dumps(data, ensure_ascii=False),
+                json.dumps(photos, ensure_ascii=False),
                 flow_id,
             )
         else:
             await self._db.execute(
                 """
                 UPDATE listing_flows
-                SET step = $1, dados = $2::jsonb, updated_at = NOW()
+                SET step = $1, data = $2::jsonb, updated_at = NOW()
                 WHERE id = $3
                 """,
                 step,
-                json.dumps(dados, ensure_ascii=False),
+                json.dumps(data, ensure_ascii=False),
                 flow_id,
             )
 
-    async def add_foto(self, flow_id: int, media_id: str, mime_type: str, caption: str = "") -> None:
+    async def add_photo(self, flow_id: int, media_id: str, mime_type: str, caption: str = "") -> None:
         await self._db.execute(
             """
             UPDATE listing_flows
-            SET fotos = fotos || $1::jsonb, updated_at = NOW()
+            SET photos = photos || $1::jsonb, updated_at = NOW()
             WHERE id = $2
             """,
             json.dumps([{"media_id": media_id, "mime_type": mime_type, "caption": caption}]),
@@ -73,15 +73,15 @@ class ListingFlowRepository:
 
     async def mark_done(self, flow_id: int) -> None:
         await self._db.execute(
-            "UPDATE listing_flows SET step = 'concluido', updated_at = NOW() WHERE id = $1",
+            "UPDATE listing_flows SET step = 'done', updated_at = NOW() WHERE id = $1",
             flow_id,
         )
 
     async def cancel(self, phone: str) -> None:
         await self._db.execute(
             """
-            UPDATE listing_flows SET step = 'concluido', updated_at = NOW()
-            WHERE phone = $1 AND step != 'concluido'
+            UPDATE listing_flows SET step = 'done', updated_at = NOW()
+            WHERE phone = $1 AND step != 'done'
             """,
             phone,
         )

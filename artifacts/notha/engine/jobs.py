@@ -42,34 +42,40 @@ async def check_round_timeouts() -> None:
     if not db:
         return
 
-    neg_repo = NegotiationRepository(db)
+    neg_repo     = NegotiationRepository(db)
     listing_repo = ListingRepository(db)
 
     try:
         timed_out = await neg_repo.find_timed_out()
         for neg in timed_out:
-            await neg_repo.set_status(neg["id"], "expirada_por_timeout")
+            await neg_repo.update_status(neg["id"], "timed_out")
             logger.info(f"Negotiation {neg['id']} expired by round timeout.")
 
             await listing_repo.add_to_interest_queue(
                 listing_id=neg["listing_id"],
                 buyer_id=neg["buyer_id"],
-                oferta_inicial=neg["preco_atual_proposto"],
+                initial_offer=neg["current_price"],
             )
 
             next_in_queue = await listing_repo.next_in_queue(neg["listing_id"])
             if next_in_queue:
                 await listing_repo.remove_from_queue(next_in_queue["id"])
                 from engine.negotiation import NegotiationEngine
-                engine = NegotiationEngine(db)
+                NegotiationEngine(db)
                 await neg_repo.create(
                     listing_id=neg["listing_id"],
                     buyer_id=next_in_queue["buyer_id"],
-                    limite_comprador={"maximo": next_in_queue["oferta_inicial"], "ideal": next_in_queue["oferta_inicial"]},
+                    buyer_limits={
+                        "maximo": next_in_queue["initial_offer"],
+                        "ideal":  next_in_queue["initial_offer"],
+                    },
                 )
-                logger.info(f"Next in queue: buyer_id={next_in_queue['buyer_id']} for listing={neg['listing_id']}")
+                logger.info(
+                    f"Next in queue: buyer_id={next_in_queue['buyer_id']} "
+                    f"for listing={neg['listing_id']}"
+                )
             else:
-                await listing_repo.set_status(neg["listing_id"], "disponivel")
+                await listing_repo.set_status(neg["listing_id"], "available")
 
     except Exception as e:
         logger.error(f"Error in check_round_timeouts: {e}")
@@ -80,7 +86,7 @@ async def check_total_expirations() -> None:
     if not db:
         return
 
-    neg_repo = NegotiationRepository(db)
+    neg_repo     = NegotiationRepository(db)
     listing_repo = ListingRepository(db)
 
     try:
@@ -88,8 +94,8 @@ async def check_total_expirations() -> None:
         for neg in expired:
             queue_count = await listing_repo.get_queue_count(neg["listing_id"])
             if queue_count == 0:
-                await neg_repo.set_status(neg["id"], "expirada")
-                await listing_repo.set_status(neg["listing_id"], "disponivel")
+                await neg_repo.update_status(neg["id"], "expired")
+                await listing_repo.set_status(neg["listing_id"], "available")
                 logger.info(f"Negotiation {neg['id']} fully expired. Listing returned to catalog.")
     except Exception as e:
         logger.error(f"Error in check_total_expirations: {e}")
@@ -101,9 +107,9 @@ async def check_overdue_pickups() -> None:
         return
 
     delivery_repo = DeliveryRepository(db)
-    listing_repo = ListingRepository(db)
-    neg_repo = NegotiationRepository(db)
-    tx_repo = TransactionRepository(db)
+    listing_repo  = ListingRepository(db)
+    neg_repo      = NegotiationRepository(db)
+    tx_repo       = TransactionRepository(db)
 
     try:
         overdue = await delivery_repo.find_overdue_pickups()
@@ -115,17 +121,20 @@ async def check_overdue_pickups() -> None:
             if not neg:
                 continue
 
-            await listing_repo.set_status(neg["listing_id"], "disponivel")
+            await listing_repo.set_status(neg["listing_id"], "available")
 
             tx = await tx_repo.find_by_negotiation(neg["id"])
             if tx:
                 deadline = datetime.utcnow() + timedelta(days=REFUND_DEADLINE_AFTER_FAILURE_DAYS)
                 await tx_repo.set_retention_status(
                     tx["id"],
-                    "retido_aguardando_decisao_pos_falha",
-                    prazo_estorno_automatico=deadline,
+                    "held_pending_decision",
+                    auto_refund_deadline=deadline,
                 )
-                logger.info(f"Transaction {tx['id']} scheduled for automatic refund in {REFUND_DEADLINE_AFTER_FAILURE_DAYS} days.")
+                logger.info(
+                    f"Transaction {tx['id']} scheduled for automatic refund "
+                    f"in {REFUND_DEADLINE_AFTER_FAILURE_DAYS} days."
+                )
 
     except Exception as e:
         logger.error(f"Error in check_overdue_pickups: {e}")
@@ -137,7 +146,7 @@ async def check_automatic_refunds() -> None:
         return
 
     tx_repo = TransactionRepository(db)
-    asaas = AsaasClient()
+    asaas   = AsaasClient()
 
     try:
         pending = await tx_repo.find_pending_refunds()
@@ -146,9 +155,9 @@ async def check_automatic_refunds() -> None:
                 if tx["asaas_charge_id"]:
                     await asaas.refund(
                         charge_id=tx["asaas_charge_id"],
-                        idempotency_key=f"estorno-{tx['id']}",
+                        idempotency_key=f"refund-{tx['id']}",
                     )
-                await tx_repo.set_retention_status(tx["id"], "estornado_automaticamente")
+                await tx_repo.set_retention_status(tx["id"], "auto_refunded")
                 logger.info(f"Automatic refund executed for transaction {tx['id']}.")
             except Exception as e:
                 logger.error(f"Automatic refund failed tx={tx['id']}: {e}")
@@ -168,8 +177,8 @@ async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
 async def start_all_jobs() -> None:
     """Starts all periodic jobs as asyncio tasks."""
     logger.info("Starting NOTHA periodic jobs...")
-    asyncio.create_task(_run_job("check_round_timeouts", check_round_timeouts, 60))
+    asyncio.create_task(_run_job("check_round_timeouts",   check_round_timeouts,   60))
     asyncio.create_task(_run_job("check_total_expirations", check_total_expirations, 300))
-    asyncio.create_task(_run_job("check_overdue_pickups", check_overdue_pickups, 300))
+    asyncio.create_task(_run_job("check_overdue_pickups",  check_overdue_pickups,  300))
     asyncio.create_task(_run_job("check_automatic_refunds", check_automatic_refunds, 300))
     logger.info("Periodic jobs started.")

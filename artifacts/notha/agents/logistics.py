@@ -72,10 +72,10 @@ class LogisticsAgent:
                 if result.decision == "aceitar" and result.value <= max_delivery:
                     logger.info(f"Courier {courier['user_id']} accepted for R${result.value:.2f}")
                     return {
-                        "user_id": courier["user_id"],
-                        "chave_pix": courier["chave_pix"],
-                        "valor_negociado": result.value,
-                        "argumento_final": result.argument,
+                        "user_id":        courier["user_id"],
+                        "pix_key":        courier["pix_key"],
+                        "agreed_value":   result.value,
+                        "final_argument": result.argument,
                     }
 
                 if result.decision == "recusar":

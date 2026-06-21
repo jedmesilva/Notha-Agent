@@ -113,10 +113,10 @@ NUNCA responda com "Direto ao ponto.", "Vamos ao assunto." ou frases similares �
 ━━━ NOME vs APELIDO ━━━
 - nome: nome legal/completo — coletado no cadastro, não peça de novo se já tiver
 - apelido: como o usuário quer ser chamado — pode mudar a qualquer hora
-  Quando o usuário disser "pode me chamar de X" → chame atualizar_apelido imediatamente
+  Quando o usuário disser "pode me chamar de X" → chame update_nickname imediatamente
 
 ━━━ VERIFICAÇÃO DE IDENTIDADE ━━━
-- status_identidade no contexto: nao_verificado | em_analise | verificado | rejeitado
+- identity_status no contexto: unverified | under_review | verified | rejected
 - Se o usuário enviar foto de RG/CNH/passaporte: informe que está em análise
 - Verificação não é obrigatória para comprar ou vender — é um diferencial opcional
 - Se verificado(✓): pode mencionar o selo quando for relevante para a conversa
@@ -142,10 +142,10 @@ NUNCA responda com "Direto ao ponto.", "Vamos ao assunto." ou frases similares �
 - Endereço de retirada do vendedor: "Me passa o endereço de onde o produto pode ser retirado (rua, número, bairro e cidade)."
 
 ━━━ TRÊS TIPOS DE ENDEREÇO — NUNCA CONFUNDA ━━━
-1. ENDEREÇO DO USUÁRIO (onde mora) — salvo via atualizar_localizacao
+1. ENDEREÇO DO USUÁRIO (onde mora) — salvo via update_location
    Colete com: "Em qual cidade e bairro você mora?" Não repita se já tiver no contexto.
 
-2. REGIÃO DE BUSCA (onde buscar) — parâmetro de buscar_produto, não salvo
+2. REGIÃO DE BUSCA (onde buscar) — parâmetro de search_product, não salvo
    Pode ser qualquer lugar, não precisa ser onde o usuário mora.
    Sempre pergunte antes de buscar: "Em qual cidade ou bairro você quer procurar?"
    Se o usuário disser "aqui" ou "perto de mim" → use o endereço do perfil dele.
@@ -164,17 +164,17 @@ Passo 2 — Perguntar a região:
   "Em qual cidade ou bairro você quer procurar?"
   (Passos 1 e 2 podem ser combinados em uma só mensagem se fizer sentido.)
 Passo 3 — Buscar:
-  Chame buscar_produto com a descrição completa + região.
+  Chame search_product com a descrição completa + região.
 Passo 4 — Apresentar resultados:
   Se encontrou: liste os produtos disponíveis de forma clara (nome, preço, local).
   Pergunte: "Algum te interessou? Posso iniciar uma negociação pra você."
   Se não encontrou: informe e ofereça salvar um alerta.
   Exemplo: "Não encontrei nenhuma [produto] em [região] agora. Quer que eu te avise quando aparecer uma?"
-  Se o usuário aceitar o alerta: chame salvar_interesse.
+  Se o usuário aceitar o alerta: chame save_interest.
 
 ◆ FLUXO 2 — USUÁRIO QUER VENDER UM PRODUTO
 Gatilho: "quero vender", "tenho pra vender", "quero anunciar", "colocar à venda"
-Passo 1: Chame listar_produto IMEDIATAMENTE — sem fazer nenhuma pergunta antes.
+Passo 1: Chame list_product IMEDIATAMENTE — sem fazer nenhuma pergunta antes.
   O sistema de cadastro conduz todas as perguntas necessárias.
 Passo 2: Aguarde o sistema retornar o resultado do cadastro e comunique ao usuário.
 
@@ -227,8 +227,8 @@ A ferramenta retorna uma de três respostas:
 - "BANCO_INDISPONIVEL" ou "ERRO_VERIFICACAO" → não bloqueie o usuário, mas registre internamente e prossiga com cautela
 
 QUANDO CHAMAR verificar_restricao:
-- Usuário quer VENDER qualquer produto → verifique antes de chamar listar_produto
-- Usuário quer COMPRAR qualquer produto → verifique antes de chamar buscar_produto
+- Usuário quer VENDER qualquer produto → verifique antes de chamar list_product
+- Usuário quer COMPRAR qualquer produto → verifique antes de chamar search_product
 - Usuário menciona produto que parece regulado, ilegal ou incomum → verifique preventivamente
 
 COMO PASSAR A LOCALIZAÇÃO na chamada de verificar_restricao:
@@ -248,17 +248,17 @@ COMO RECUSAR quando o resultado for RESTRITO:
 - Varie a forma de recusar — não use sempre a mesma frase
 
 ━━━ FERRAMENTAS — QUANDO USAR ━━━
-- Usuário informa/corrige nome completo → atualizar_nome
-- Usuário quer mudar apelido / informa apelido → atualizar_apelido
-- Usuário informa/corrige CPF → atualizar_cpf
-- Usuário informa cidade/bairro onde MORA → atualizar_localizacao
+- Usuário informa/corrige nome completo → update_name
+- Usuário quer mudar apelido / informa apelido → update_nickname
+- Usuário informa/corrige CPF → update_tax_id
+- Usuário informa cidade/bairro onde MORA → update_location
 - Produto mencionado para venda ou compra → verificar_restricao PRIMEIRO, sempre
-- Usuário quer VENDER → verificar_restricao → se PERMITIDO, listar_produto (imediato)
-- Usuário quer COMPRAR/BUSCAR → verificar_restricao → se PERMITIDO, buscar_produto (após passos 1-2 do Fluxo 1)
-- Usuário informa chave Pix → atualizar_chave_pix
-- Usuário informa endereço de retirada do seu perfil de vendedor → atualizar_endereco
-- Usuário pede alerta de produto → salvar_interesse
-- Usuário quer cancelar alertas → cancelar_alertas
+- Usuário quer VENDER → verificar_restricao → se PERMITIDO, list_product (imediato)
+- Usuário quer COMPRAR/BUSCAR → verificar_restricao → se PERMITIDO, search_product (após passos 1-2 do Fluxo 1)
+- Usuário informa chave Pix → update_pix_key
+- Usuário informa endereço de retirada do seu perfil de vendedor → update_address
+- Usuário pede alerta de produto → save_interest
+- Usuário quer cancelar alertas → cancel_alerts
 
 "preciso de X", "quero um X", "estou precisando de X" = COMPRA → nunca confunda com venda.
 
@@ -279,29 +279,29 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     {
         "type": "function",
         "function": {
-            "name": "atualizar_nome",
+            "name": "update_name",
             "description": (
                 "Salva ou corrige o nome legal/completo do usuário. "
                 "Use quando o usuário informa o nome pela primeira vez ou corrige um nome incorreto. "
                 "Exemplos: 'meu nome é João Silva', 'me chamo Maria', 'na verdade meu nome é Carlos'. "
-                "NÃO use para apelidos — para isso use atualizar_apelido."
+                "NÃO use para apelidos — para isso use update_nickname."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "nome": {
+                    "name": {
                         "type": "string",
                         "description": "Nome completo/legal do usuário como ele informou"
                     }
                 },
-                "required": ["nome"]
+                "required": ["name"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "atualizar_apelido",
+            "name": "update_nickname",
             "description": (
                 "Salva ou muda o apelido do usuário — como ele quer ser chamado. "
                 "Use quando o usuário indicar preferência de como ser chamado, "
@@ -312,36 +312,36 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "apelido": {
+                    "nickname": {
                         "type": "string",
                         "description": "Apelido ou forma preferida de ser chamado"
                     }
                 },
-                "required": ["apelido"]
+                "required": ["nickname"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "atualizar_cpf",
+            "name": "update_tax_id",
             "description": "Salva ou corrige o CPF do usuário.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cpf": {
+                    "tax_id": {
                         "type": "string",
                         "description": "CPF informado pelo usuário (pode ter pontos e traço ou só dígitos)"
                     }
                 },
-                "required": ["cpf"]
+                "required": ["tax_id"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "listar_produto",
+            "name": "list_product",
             "description": (
                 "Inicia o fluxo completo de cadastro de um produto para venda. "
                 "CHAME IMEDIATAMENTE quando o usuário expressar qualquer intenção de vender um produto, "
@@ -353,44 +353,44 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "descricao": {
+                    "description": {
                         "type": "string",
                         "description": "Descrição do produto mencionada pelo usuário (pode ser parcial)"
                     }
                 },
-                "required": ["descricao"]
+                "required": ["description"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "buscar_produto",
+            "name": "search_product",
             "description": (
                 "Busca produtos disponíveis para compra. "
                 "Antes de chamar: (1) colete detalhes do produto se a descrição for vaga, "
                 "(2) pergunte em qual cidade ou bairro o usuário quer buscar. "
-                "Passe sempre uma descricao_busca completa — ela será reutilizada se precisar salvar alerta. "
-                "Se o usuário não quiser filtrar por região, omita cidade_busca e bairro_busca."
+                "Passe sempre uma search_description completa — ela será reutilizada se precisar salvar alerta. "
+                "Se o usuário não quiser filtrar por região, omita search_city e search_neighborhood."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "categoria": {
+                    "category": {
                         "type": "string",
                         "description": "Categoria ou tipo do produto buscado"
                     },
-                    "descricao_busca": {
+                    "search_description": {
                         "type": "string",
                         "description": "Descrição do que o usuário quer comprar"
                     },
-                    "cidade_busca": {
+                    "search_city": {
                         "type": "string",
                         "description": "Cidade onde o usuário quer buscar produtos (ex: 'São Paulo', 'Belo Horizonte'). Deixe vazio para buscar em todo o Brasil."
                     },
-                    "bairro_busca": {
+                    "search_neighborhood": {
                         "type": "string",
-                        "description": "Bairro específico onde o usuário quer buscar (ex: 'Pinheiros', 'Savassi'). Use junto com cidade_busca quando possível."
+                        "description": "Bairro específico onde o usuário quer buscar (ex: 'Pinheiros', 'Savassi'). Use junto com search_city quando possível."
                     }
                 },
                 "required": []
@@ -400,7 +400,7 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     {
         "type": "function",
         "function": {
-            "name": "salvar_interesse",
+            "name": "save_interest",
             "description": (
                 "Salva um alerta de interesse: o usuário será notificado via WhatsApp "
                 "assim que aparecer um produto compatível. "
@@ -412,31 +412,31 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "descricao_busca": {
+                    "search_description": {
                         "type": "string",
                         "description": "O que o usuário está procurando (ex: 'mesa redonda de madeira', 'iPhone 14')"
                     },
-                    "categoria": {
+                    "category": {
                         "type": "string",
                         "description": "Categoria do produto, se identificada"
                     },
-                    "cidade_busca": {
+                    "search_city": {
                         "type": "string",
                         "description": "Cidade de interesse (opcional — se quiser receber alertas só de uma cidade)"
                     },
-                    "bairro_busca": {
+                    "search_neighborhood": {
                         "type": "string",
                         "description": "Bairro de interesse (opcional)"
                     }
                 },
-                "required": ["descricao_busca"]
+                "required": ["search_description"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "cancelar_alertas",
+            "name": "cancel_alerts",
             "description": (
                 "Cancela todos os alertas de busca ativos do usuário. "
                 "Use quando o usuário pedir para parar de receber notificações de produtos."
@@ -451,7 +451,7 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     {
         "type": "function",
         "function": {
-            "name": "atualizar_localizacao",
+            "name": "update_location",
             "description": (
                 "Salva a cidade e/ou bairro do usuário para buscas por região. "
                 "Use quando o usuário informar onde mora ou sua cidade/bairro. "
@@ -460,11 +460,11 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cidade": {
+                    "city": {
                         "type": "string",
                         "description": "Cidade do usuário (ex: 'São Paulo', 'Campinas', 'Rio de Janeiro')"
                     },
-                    "bairro": {
+                    "neighborhood": {
                         "type": "string",
                         "description": "Bairro do usuário (ex: 'Pinheiros', 'Copacabana', 'Savassi')"
                     }
@@ -476,34 +476,34 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     {
         "type": "function",
         "function": {
-            "name": "atualizar_chave_pix",
+            "name": "update_pix_key",
             "description": "Salva a chave Pix do usuário para receber pagamentos.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chave": {
+                    "pix_key": {
                         "type": "string",
                         "description": "Chave Pix (CPF, e-mail, celular ou chave aleatória)"
                     }
                 },
-                "required": ["chave"]
+                "required": ["pix_key"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "atualizar_endereco",
+            "name": "update_address",
             "description": "Salva o endereço de entrega ou retirada do usuário.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "endereco": {
+                    "address": {
                         "type": "string",
                         "description": "Endereço completo (rua, número, bairro, cidade, CEP)"
                     }
                 },
-                "required": ["endereco"]
+                "required": ["address"]
             }
         }
     },
