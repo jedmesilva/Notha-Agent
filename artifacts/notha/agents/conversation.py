@@ -541,27 +541,39 @@ class ConversationAgent:
         messages: list[dict],
         tool_results: dict[str, str],
     ) -> str:
-        """Fase 2 do tool calling: envia os resultados reais das tools e obtém a resposta final.
+        """Fase 2 do tool calling: gera a resposta final com os resultados das ferramentas.
+
+        Os resultados são injetados no system prompt como contexto adicional — não como
+        mensagens role:'tool'. Isso garante que a mensagem do usuário permaneça como
+        último item da cadeia, preservando a continuidade conversacional e evitando
+        que o LLM "reinicie" a conversa com saudações.
 
         tool_results: dict de tool_call_id → resultado descritivo (dados reais do banco).
         """
-        for tool_id, result in tool_results.items():
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_id,
-                "content": result,
-            })
+        tool_context = "\n\n━━━ DADOS OBTIDOS PELAS FERRAMENTAS ━━━\n"
+        for result in tool_results.values():
+            tool_context += result + "\n"
+        tool_context += "━━━ FIM DOS DADOS ━━━"
 
-        has_history = any(m["role"] == "user" for m in messages[1:])
+        rebuilt: list[dict] = []
+        for msg in messages:
+            if msg["role"] == "system":
+                rebuilt.append({"role": "system", "content": msg["content"] + tool_context})
+            elif msg["role"] == "assistant" and msg.get("tool_calls"):
+                continue
+            else:
+                rebuilt.append(msg)
+
+        has_history = sum(1 for m in rebuilt if m["role"] == "user") > 1
+
         try:
             resp = await self._get_client().chat.completions.create(
                 model=OPENAI_MODEL,
-                messages=messages,
+                messages=rebuilt,
                 temperature=0.6,
                 max_tokens=500,
             )
-            reply = resp.choices[0].message.content or "Feito!"
-            return await _sanitize_response(self._get_client(), reply, has_history)
+            return resp.choices[0].message.content or "Feito!"
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
