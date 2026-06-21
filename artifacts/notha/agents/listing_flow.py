@@ -2,17 +2,18 @@
 ListingFlowAgent — máquina de estados para cadastro completo de produto via WhatsApp.
 
 Etapas:
-  produto       → O que você quer vender?
-  marca_modelo  → Marca, modelo e versão
-  estado_uso    → Novo ou usado?
-  condicao      → Estado de conservação
-  nota_fiscal   → Tem nota fiscal?
-  fotos         → Fotos do produto (múltiplas; texto = "pronto")
-  endereco      → Endereço de retirada
-  preco         → Preço desejado e mínimo aceitável
-  processando   → [automático] busca web + banco + visão + precificação
-  confirmar     → Resumo e confirmação
-  concluido     → Listing criado
+  produto          → O que você quer vender?
+  marca_modelo     → Marca, modelo e versão
+  estado_uso       → Novo ou usado?
+  condicao         → Estado de conservação
+  nota_fiscal      → Tem nota fiscal?
+  fotos            → Fotos do produto (múltiplas; texto = "pronto")
+  endereco         → Endereço de retirada
+  preco            → Preço desejado e mínimo aceitável
+  processando      → [automático] busca web + banco + visão + precificação
+  revisar_condicao → [condicional] pausa quando visão detecta condição inconsistente
+  confirmar        → Resumo e confirmação
+  concluido        → Listing criado
 """
 import json
 import logging
@@ -287,15 +288,16 @@ class ListingFlowAgent:
         fotos = _parse_jsonb(flow.get("fotos"), [])
 
         handlers = {
-            "produto":      self._step_produto,
-            "marca_modelo": self._step_marca_modelo,
-            "estado_uso":   self._step_estado_uso,
-            "condicao":     self._step_condicao,
-            "nota_fiscal":  self._step_nota_fiscal,
-            "fotos":        self._step_fotos_texto,
-            "endereco":     self._step_endereco,
-            "preco":        self._step_preco,
-            "confirmar":    self._step_confirmar,
+            "produto":          self._step_produto,
+            "marca_modelo":     self._step_marca_modelo,
+            "estado_uso":       self._step_estado_uso,
+            "condicao":         self._step_condicao,
+            "nota_fiscal":      self._step_nota_fiscal,
+            "fotos":            self._step_fotos_texto,
+            "endereco":         self._step_endereco,
+            "preco":            self._step_preco,
+            "revisar_condicao": self._step_revisar_condicao,
+            "confirmar":        self._step_confirmar,
         }
 
         handler = handlers.get(step)
@@ -552,6 +554,78 @@ class ListingFlowAgent:
         )
         return dados, fotos, reply, False
 
+    async def _step_revisar_condicao(self, dados, fotos, text):
+        """
+        Pausa ativada quando a análise visual detecta inconsistência com a condição declarada.
+
+        Mostra ao vendedor o que foi detectado nas fotos e oferece duas opções:
+          1. Manter a condição declarada (ele confirma que está certo)
+          2. Corrigir a condição (escolhe uma das 5 opções)
+
+        Só avança para 'confirmar' após uma resposta válida.
+        """
+        vision_data = _parse_jsonb(dados.get("vision_analysis"), {})
+        descricao_visual = vision_data.get("descricao_visual", "") if vision_data else ""
+        condicao_atual = dados.get("condicao", "conservado")
+
+        # Tenta extrair a nova condição ou confirmação de manutenção
+        opcoes_validas = list(CONDICAO_LABEL.keys())
+        opcoes_texto = "\n".join(
+            f"  {i+1}. {v}" for i, v in enumerate(CONDICAO_LABEL.values())
+        )
+
+        ext = await self._extract_validated(
+            system=(
+                "O vendedor está respondendo sobre o estado de conservação do produto.\n"
+                "Ele pode estar confirmando a condição já declarada ou corrigindo para uma nova.\n\n"
+                "Extraia:\n"
+                "  'manteve': true se confirmou manter a condição atual, false se quer corrigir.\n"
+                "  'nova_condicao': valor da nova condição se ele corrigiu, null se manteve.\n"
+                f"Valores válidos para 'nova_condicao': {', '.join(opcoes_validas)}.\n"
+                "Mapeamento de números: 1=como_novo, 2=bom, 3=conservado, 4=desgastado, 5=com_defeito.\n"
+                "Palavras de confirmação: sim, mantenho, está correto, pode deixar, é isso mesmo.\n"
+                "Se ambíguo, manteve=false e nova_condicao=null (pede nova resposta)."
+            ),
+            user_msg=text,
+            validators={
+                "manteve":       self._val_bool,
+                "nova_condicao": self._val_condicao,
+            },
+        )
+
+        manteve = ext.get("manteve")
+        nova_condicao = ext.get("nova_condicao")
+
+        if manteve is True:
+            # Vendedor confirma a condição original — registra e segue
+            dados["condicao_revisada"] = False
+            dados["step_next"] = "confirmar"
+            reply = await self._reply(
+                f"O vendedor manteve a condição declarada: {CONDICAO_LABEL.get(condicao_atual, condicao_atual)}. "
+                "Diga que está registrado e que vamos seguir para o resumo do anúncio."
+            )
+            return dados, fotos, reply, False
+
+        if nova_condicao:
+            # Vendedor corrigiu a condição — atualiza e segue
+            dados["condicao"] = nova_condicao
+            dados["descricao_condicao"] = f"Corrigido pelo vendedor após análise visual: {text.strip()}"
+            dados["condicao_revisada"] = True
+            dados["step_next"] = "confirmar"
+            reply = await self._reply(
+                f"O vendedor corrigiu a condição para: {CONDICAO_LABEL.get(nova_condicao, nova_condicao)}. "
+                "Confirme a correção e diga que vamos seguir para o resumo."
+            )
+            return dados, fotos, reply, False
+
+        # Resposta ambígua — reapresenta as opções
+        msg = await self._reply(
+            f"Não entendi a resposta. Apresente as opções de condição e pergunte qual se aplica:\n"
+            f"{opcoes_texto}\n"
+            "Ou diga 'sim' para confirmar a condição já declarada."
+        )
+        return dados, fotos, msg, False
+
     async def _step_confirmar(self, dados, fotos, text):
         ext = await self._extract_validated(
             system=(
@@ -700,6 +774,7 @@ class ListingFlowAgent:
                     f"Condição inconsistente: vendedor declarou '{condicao}' "
                     f"mas visão detectou: {vision_data.get('descricao_visual', '')[:100]}"
                 )
+                dados["_condicao_inconsistente"] = True
 
         # Recalcula nome_produto com campos eventualmente enriquecidos pela visão
         marca   = dados.get("marca") or ""
@@ -750,7 +825,8 @@ class ListingFlowAgent:
 
         dados["preco_anunciado"]     = preco_anunciado
         dados["preco_minimo"]        = preco_minimo
-        dados["step_next"]           = "confirmar"
+        # Se a visão detectou inconsistência de condição, pausa para revisão antes de confirmar
+        dados["step_next"] = "revisar_condicao" if dados.get("_condicao_inconsistente") else "confirmar"
 
         # Alerta de discrepância de preço
         alerta_preco = ""
@@ -787,13 +863,6 @@ class ListingFlowAgent:
             f"Retirada: {endereco or 'não informado'}",
         ]
 
-        # Alerta de inconsistência de condição detectada pela visão
-        if vision_data and not vision_data.get("condicao_consistente", True):
-            linhas.append(
-                f"Atenção: a análise das fotos sugere que o estado pode ser diferente do declarado. "
-                f"({vision_data.get('descricao_visual', '')[:120]})"
-            )
-
         if preco_desejado:
             linhas.append(f"Seu preço: R$ {preco_desejado:.2f}")
         if preco_min_vend:
@@ -805,6 +874,25 @@ class ListingFlowAgent:
         linhas.append(f"Será anunciado por: R$ {preco_anunciado:.2f}")
 
         resumo = "\n".join(linhas)
+
+        # Se condição inconsistente → retorna mensagem de revisão, não de confirmação
+        if dados.get("_condicao_inconsistente"):
+            condicao_declarada_label = CONDICAO_LABEL.get(condicao, condicao)
+            descricao_vis = descricao_visual_txt[:200] if descricao_visual_txt else "não disponível"
+            msg = await self._reply(
+                f"A análise das fotos detectou uma possível inconsistência na condição declarada.\n"
+                f"Condição declarada: {condicao_declarada_label}.\n"
+                f"O que foi observado nas fotos: {descricao_vis}\n\n"
+                "Peça que o vendedor confirme se a condição está correta ou corrija para uma das opções:\n"
+                "1. Como novo (sem marcas de uso)\n"
+                "2. Bom estado (uso leve, poucas marcas)\n"
+                "3. Conservado (uso normal, pequenos desgastes)\n"
+                "4. Desgastado (uso intenso, marcas visíveis)\n"
+                "5. Com defeito (descreva o defeito)\n"
+                "Ou diga 'sim' para confirmar a condição já declarada."
+            )
+            return dados, msg
+
         msg = await self._reply(
             f"Apresente o resumo do anúncio e pergunte se confirma:\n\n{resumo}"
         )

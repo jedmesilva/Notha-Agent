@@ -654,7 +654,9 @@ class Orchestrator:
                     db=db,
                 )
                 fotos_atuais = _parse_jsonb(flow_atualizado.get("fotos"), [])
-                await flow_repo.update_step(flow_atualizado["id"], "confirmar", dados_proc, fotos_atuais)
+                # step_next pode ser "confirmar" (normal) ou "revisar_condicao" (inconsistência visual)
+                proximo_step = dados_proc.get("step_next", "confirmar")
+                await flow_repo.update_step(flow_atualizado["id"], proximo_step, dados_proc, fotos_atuais)
                 await conv_repo.add(user["id"], "assistant", msg_confirmar)
                 return msg_confirmar
             return reply or "Processando seu produto..."
