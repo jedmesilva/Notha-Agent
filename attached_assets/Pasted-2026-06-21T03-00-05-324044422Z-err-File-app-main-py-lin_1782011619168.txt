@@ -1,0 +1,1001 @@
+2026-06-21T03:00:05.324044422Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:00:05.324046762Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:00:05.324047152Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:00:05.324049332Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:00:05.324050292Z [err]      from llm import get_provider
+2026-06-21T03:00:05.324052262Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:00:05.324053682Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:00:05.324054572Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:00:05.324060112Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:00:05.324064592Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:00:05.324552488Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:00:05.324556247Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:00:05.324558997Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:00:05.324561427Z [err]      import anthropic
+2026-06-21T03:00:05.324563757Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:00:06.533704642Z [err]  Traceback (most recent call last):
+2026-06-21T03:00:06.533709332Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:00:06.533713092Z [err]      sys.exit(main())
+2026-06-21T03:00:06.533716982Z [err]               ^^^^^^
+2026-06-21T03:00:06.533721021Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:00:06.533725311Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:00:06.533728821Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.533734381Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:00:06.533739081Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:00:06.533742301Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.533745651Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:00:06.533748821Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:00:06.533751841Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.533755341Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:00:06.533758791Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:00:06.533761831Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.533765761Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:00:06.533768801Z [err]      run(
+2026-06-21T03:00:06.533771971Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:00:06.533774621Z [err]      server.run()
+2026-06-21T03:00:06.533779191Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:00:06.533782561Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:00:06.534133737Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:00:06.534134997Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534140707Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:00:06.534144307Z [err]      return runner.run(main)
+2026-06-21T03:00:06.534148407Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534151277Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:00:06.534154557Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:00:06.534157307Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534159677Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:00:06.534162067Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:00:06.534164737Z [err]      await self._serve(sockets)
+2026-06-21T03:00:06.534167427Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:00:06.534169977Z [err]      config.load()
+2026-06-21T03:00:06.534172476Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:00:06.534175296Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:00:06.534177776Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534182376Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:00:06.534185616Z [err]      raise exc from None
+2026-06-21T03:00:06.534187906Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:00:06.534190106Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:00:06.534192346Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534538132Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:00:06.534541642Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:00:06.534547752Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:00:06.534550452Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:06.534556522Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:00:06.534556692Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:00:06.534563852Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:00:06.534565952Z [err]      from llm import get_provider
+2026-06-21T03:00:06.534569192Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:00:06.534572752Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:00:06.534575652Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:00:06.534581472Z [err]      from providers.base import LLMProvider
+2026-06-21T03:00:06.534581802Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:00:06.534586382Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:00:06.534589122Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:00:06.534591762Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:00:06.534594482Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:00:06.534597082Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:00:06.534601422Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:00:06.534604492Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:00:06.534607992Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:00:06.534610892Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:00:06.534614052Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:00:06.534616562Z [err]      import anthropic
+2026-06-21T03:00:06.534619032Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:00:07.316021727Z [err]  Traceback (most recent call last):
+2026-06-21T03:00:07.316028147Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:00:07.316031966Z [err]      sys.exit(main())
+2026-06-21T03:00:07.316034746Z [err]               ^^^^^^
+2026-06-21T03:00:07.316037626Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:00:07.316040496Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:00:07.316043146Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316046456Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:00:07.316049456Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:00:07.316053196Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316056556Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:00:07.316059396Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:00:07.316062276Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316065346Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:00:07.316068236Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:00:07.316070806Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316073716Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:00:07.316076496Z [err]      run(
+2026-06-21T03:00:07.316079646Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:00:07.316082246Z [err]      server.run()
+2026-06-21T03:00:07.316084696Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:00:07.316087526Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:00:07.316388124Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316393383Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:00:07.316398823Z [err]      return runner.run(main)
+2026-06-21T03:00:07.316401143Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:00:07.316405343Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316410203Z [err]      raise exc from None
+2026-06-21T03:00:07.316412283Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:00:07.316419373Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:00:07.316419583Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:00:07.316426013Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316428283Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:00:07.316431593Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:00:07.316435713Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316438143Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:00:07.316444713Z [err]      await self._serve(sockets)
+2026-06-21T03:00:07.316446133Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:00:07.316449653Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:00:07.316454183Z [err]      config.load()
+2026-06-21T03:00:07.316457643Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:00:07.316460883Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:00:07.316463933Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316643301Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:00:07.316646241Z [err]      from llm import get_provider
+2026-06-21T03:00:07.316650531Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:00:07.316653221Z [err]      from providers.base import LLMProvider
+2026-06-21T03:00:07.316658471Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:00:07.316662690Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:07.316665620Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:00:07.316668490Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:00:07.316671580Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:00:07.316674970Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:00:07.316677450Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:00:07.316680480Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:00:07.316683500Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:00:07.316686690Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:00:07.316689080Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:00:07.316692080Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:00:07.316695090Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:00:07.316698790Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:00:07.316701620Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:00:07.316703970Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:00:07.316957847Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:00:07.316961207Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:00:07.316964217Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:00:07.316966577Z [err]      import anthropic
+2026-06-21T03:00:07.316969037Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:00:08.367428449Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:00:08.367509828Z [err]  Traceback (most recent call last):
+2026-06-21T03:00:08.367526658Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:00:08.367533408Z [err]      sys.exit(main())
+2026-06-21T03:00:08.367537578Z [err]               ^^^^^^
+2026-06-21T03:00:08.367543818Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:00:08.367548388Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:00:08.367552798Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367557398Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:00:08.367567408Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:00:08.367572378Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367576717Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:00:08.367580897Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:00:08.367586227Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367590077Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:00:08.367593877Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:00:08.367597997Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367602777Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:00:08.367607257Z [err]      run(
+2026-06-21T03:00:08.367610887Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:00:08.367615027Z [err]      server.run()
+2026-06-21T03:00:08.367618587Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:00:08.367914404Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:00:08.367920145Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367925785Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:00:08.367930005Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:00:08.367935214Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367937004Z [err]      return runner.run(main)
+2026-06-21T03:00:08.367945594Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367946264Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:00:08.367951494Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:00:08.367955814Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:00:08.367960844Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367964644Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:00:08.367968674Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:00:08.367972664Z [err]      await self._serve(sockets)
+2026-06-21T03:00:08.367977044Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:00:08.367980594Z [err]      config.load()
+2026-06-21T03:00:08.367984424Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:00:08.367988324Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:00:08.367991974Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.367997424Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:00:08.368001914Z [err]      raise exc from None
+2026-06-21T03:00:08.368417819Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:00:08.368422999Z [err]      from llm import get_provider
+2026-06-21T03:00:08.368427339Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:00:08.368432759Z [err]      from providers.base import LLMProvider
+2026-06-21T03:00:08.368436779Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:00:08.368446749Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:08.368451929Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:00:08.368455849Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:00:08.368460139Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:00:08.368463919Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:00:08.368468039Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:00:08.368471759Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:00:08.368477308Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:00:08.368482368Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:00:08.368486538Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:00:08.368492458Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:00:08.368497038Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:00:08.368501568Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:00:08.368506108Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:00:08.368511018Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:00:08.368745116Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:00:08.368748355Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:00:08.368752085Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:00:08.368755675Z [err]      import anthropic
+2026-06-21T03:00:08.368759125Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:00:09.336051816Z [err]  Traceback (most recent call last):
+2026-06-21T03:00:09.336057516Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:00:09.336060546Z [err]      sys.exit(main())
+2026-06-21T03:00:09.336063636Z [err]               ^^^^^^
+2026-06-21T03:00:09.336066746Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:00:09.336069976Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:00:09.336074616Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336077756Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:00:09.336081056Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:00:09.336085006Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336088565Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:00:09.336091995Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:00:09.336094995Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336097975Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:00:09.336101335Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:00:09.336104375Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336107215Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:00:09.336338473Z [err]      run(
+2026-06-21T03:00:09.336343663Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:00:09.336346903Z [err]      server.run()
+2026-06-21T03:00:09.336349923Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:00:09.336352393Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:00:09.336355233Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336357782Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:00:09.336360272Z [err]      return runner.run(main)
+2026-06-21T03:00:09.336362872Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336365272Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:00:09.336367502Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:00:09.336369812Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336372322Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:00:09.336374902Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:00:09.336377622Z [err]      await self._serve(sockets)
+2026-06-21T03:00:09.336380122Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:00:09.336387412Z [err]      config.load()
+2026-06-21T03:00:09.336389842Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:00:09.336393102Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:00:09.336395572Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336397942Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:00:09.336845368Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:00:09.336847988Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:00:09.336848258Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336851148Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:00:09.336851778Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:00:09.336853778Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:00:09.336856938Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:00:09.336860918Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:00:09.336864388Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:00:09.336867798Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:00:09.336871498Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:00:09.336876738Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:00:09.336880718Z [err]      raise exc from None
+2026-06-21T03:00:09.336885738Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:00:09.336893638Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:00:09.336894008Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:00:09.336899097Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:00:09.336900107Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:00:09.336905397Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:00:09.336909617Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:00:09.337468131Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:00:09.337471141Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:00:09.337474481Z [err]      from llm import get_provider
+2026-06-21T03:00:09.337477341Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:00:09.337480501Z [err]      from providers.base import LLMProvider
+2026-06-21T03:00:09.337483551Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:00:09.337486251Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:00:09.337489381Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:00:09.337492241Z [err]      import anthropic
+2026-06-21T03:00:09.337494961Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.257371604Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.257372914Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.257376674Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.257379794Z [err]      sys.exit(main())
+2026-06-21T03:09:32.257385204Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.257386584Z [err]               ^^^^^^
+2026-06-21T03:09:32.257394234Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.257394524Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.257401464Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.257402864Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.257407703Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.257410783Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.257413783Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.257418693Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.257421193Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.257427603Z [err]      run(
+2026-06-21T03:09:32.257427783Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.257436493Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.257437743Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.257442873Z [err]      server.run()
+2026-06-21T03:09:32.257446953Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.257451073Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.258301654Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258307134Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.258311094Z [err]      return runner.run(main)
+2026-06-21T03:09:32.258314534Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258318224Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.258321674Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.258325303Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258329033Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.258333913Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.258337623Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.258341623Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.258344853Z [err]      config.load()
+2026-06-21T03:09:32.258348313Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.258351603Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.258354903Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258358193Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.258361564Z [err]      raise exc from None
+2026-06-21T03:09:32.258365054Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.258368424Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.258371814Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258375104Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.258943488Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.258943578Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.258953388Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.258954428Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.258961388Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.258963058Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.258969358Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.258969558Z [err]      from llm import get_provider
+2026-06-21T03:09:32.258976977Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.258977367Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.258983497Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.258985507Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.258988547Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.258991777Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.258994907Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.258997757Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.259000937Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.259003567Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.259006387Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.259008887Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.259375343Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.259381053Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259383493Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.259388133Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.259392833Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.259396853Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.259399763Z [err]      import anthropic
+2026-06-21T03:09:32.259403263Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.259406863Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.259411413Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259412393Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.259419323Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.259419773Z [err]      sys.exit(main())
+2026-06-21T03:09:32.259425193Z [err]               ^^^^^^
+2026-06-21T03:09:32.259427403Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.259431073Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.259433852Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259437452Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.259450552Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259453452Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.259456152Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.259490612Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.259839879Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.259844029Z [err]      run(
+2026-06-21T03:09:32.259849459Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.259851469Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.259858079Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.259859039Z [err]      server.run()
+2026-06-21T03:09:32.259865559Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.259865809Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.259872319Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.259873219Z [err]      config.load()
+2026-06-21T03:09:32.259877579Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259880039Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.259883529Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.259887599Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.259888469Z [err]      return runner.run(main)
+2026-06-21T03:09:32.259895819Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259895999Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.259903438Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.259903658Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.259907518Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.259910258Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.260493782Z [err]      raise exc from None
+2026-06-21T03:09:32.260497132Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.260500072Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.260502572Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.260505312Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.260508272Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.260511342Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.260514192Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.260516952Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.260520102Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.260522912Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.260525202Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.260527912Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.260530422Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.260533102Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.260535562Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.260538142Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.260540542Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.260542992Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.260545432Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.261445153Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.261447613Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.261450013Z [err]      from llm import get_provider
+2026-06-21T03:09:32.261452923Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.261455373Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.261459063Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.261461703Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.261463963Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.261466113Z [err]      import anthropic
+2026-06-21T03:09:32.261468313Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.261470713Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.261472763Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.261475213Z [err]      sys.exit(main())
+2026-06-21T03:09:32.261477373Z [err]               ^^^^^^
+2026-06-21T03:09:32.261479523Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.261481683Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.261483972Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.261486182Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.261488642Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.261491062Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.261493262Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.261495502Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.261497692Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262185765Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.262188355Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.262191215Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262193875Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.262196395Z [err]      run(
+2026-06-21T03:09:32.262198715Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.262201035Z [err]      server.run()
+2026-06-21T03:09:32.262204285Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.262206875Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.262209255Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262211905Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.262214295Z [err]      return runner.run(main)
+2026-06-21T03:09:32.262216535Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262219005Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.262221475Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.262224045Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262226425Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.262228744Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.262231124Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.262233394Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.262235684Z [err]      config.load()
+2026-06-21T03:09:32.262872499Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.262874989Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.262877219Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262881078Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.262883358Z [err]      raise exc from None
+2026-06-21T03:09:32.262885838Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.262888038Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.262890448Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262892698Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.262894858Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.262897098Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.262899298Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.262903668Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.262905848Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.262908558Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.262911168Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.262913338Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.262915608Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.262917808Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.263586242Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.263589252Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.263591802Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.263594322Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.263596632Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.263599142Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.263601442Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.263603912Z [err]      from llm import get_provider
+2026-06-21T03:09:32.263606342Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.263608802Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.263611112Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.263613482Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.263615732Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.263618252Z [err]      import anthropic
+2026-06-21T03:09:32.263620502Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.263622842Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.263625192Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.263627651Z [err]      sys.exit(main())
+2026-06-21T03:09:32.263630001Z [err]               ^^^^^^
+2026-06-21T03:09:32.263632441Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.263634631Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.263636931Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.263639181Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.264245095Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.264247415Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264249755Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.264252215Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.264254555Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264256845Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.264259075Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.264262225Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264264415Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.264266735Z [err]      run(
+2026-06-21T03:09:32.264269465Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.264271625Z [err]      server.run()
+2026-06-21T03:09:32.264273795Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.264275795Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.264278844Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264281214Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.264283234Z [err]      return runner.run(main)
+2026-06-21T03:09:32.264285304Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264287574Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.264289884Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.264291924Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264294214Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.264906789Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.264909579Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.264912079Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.264914609Z [err]      config.load()
+2026-06-21T03:09:32.264917789Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.264920079Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.264922219Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264924449Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.264926799Z [err]      raise exc from None
+2026-06-21T03:09:32.264928999Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.264931338Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.264933728Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264935868Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.264938088Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.264940418Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.264942668Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.264944998Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.264947318Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.264949948Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.265585901Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.265588271Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.265590691Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.265593101Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.265595301Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.265597701Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.265599881Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.265602031Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.265604141Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.265606311Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.265608651Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.265610811Z [err]      from llm import get_provider
+2026-06-21T03:09:32.265612881Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.265614921Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.265617061Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.265619211Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.265621671Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.265624171Z [err]      import anthropic
+2026-06-21T03:09:32.265626311Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.265628451Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.265630871Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.265633931Z [err]      sys.exit(main())
+2026-06-21T03:09:32.266884829Z [err]               ^^^^^^
+2026-06-21T03:09:32.266887109Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.266889548Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.266891988Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.266894678Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.266896928Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.266899228Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.266901728Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.266903918Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.266906218Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.266909068Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.266911288Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.266913498Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.266915548Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.266917878Z [err]      run(
+2026-06-21T03:09:32.266919978Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.266922148Z [err]      server.run()
+2026-06-21T03:09:32.266924278Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.266926538Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.266929028Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.266931258Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.266933478Z [err]      return runner.run(main)
+2026-06-21T03:09:32.267555672Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.267558172Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.267560412Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.267562732Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.267565072Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.267567622Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.267570132Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.267572422Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.267574542Z [err]      config.load()
+2026-06-21T03:09:32.267576742Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.267578942Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.267581062Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.267583262Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.267585692Z [err]      raise exc from None
+2026-06-21T03:09:32.267587822Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.267589952Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.267592052Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.267594212Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.267596442Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.267598962Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.268240785Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.268243405Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.268245835Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.268248205Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.268250645Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.268252995Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.268255575Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.268257765Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.268260025Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.268262315Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.268264525Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.268266775Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.268269295Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.268272485Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.268274845Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.268277194Z [err]      from llm import get_provider
+2026-06-21T03:09:32.268279674Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.268281804Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.268284244Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.268286414Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.269076937Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.269079247Z [err]      import anthropic
+2026-06-21T03:09:32.269081567Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.269083897Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.269086097Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.269088267Z [err]      sys.exit(main())
+2026-06-21T03:09:32.269090517Z [err]               ^^^^^^
+2026-06-21T03:09:32.269092997Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.269095297Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.269097547Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.269099727Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.269102327Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.269104737Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.269106946Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.269109126Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.269111366Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.269113616Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.269116206Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.269118386Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.269120456Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.269122666Z [err]      run(
+2026-06-21T03:09:32.269124856Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.271099046Z [err]      server.run()
+2026-06-21T03:09:32.271104086Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.271106426Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.271112906Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.271113086Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.271122516Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.271122816Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.271126646Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.271130646Z [err]      raise exc from None
+2026-06-21T03:09:32.271132756Z [err]      return runner.run(main)
+2026-06-21T03:09:32.271139015Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.271139175Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.271144075Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.271147105Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.271149985Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.271152695Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.271155385Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.271158385Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.271161305Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.271164225Z [err]      config.load()
+2026-06-21T03:09:32.271166715Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.272064276Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.272069086Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.272073056Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.272076786Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.272080866Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.272087786Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.272092246Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.272097196Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.272101216Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.272106406Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.272110766Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.272114236Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.272119406Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.272122706Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.272126776Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.272130526Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.272133916Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.272137356Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.272140556Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.272143886Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.272537011Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.272541191Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.272544431Z [err]      from llm import get_provider
+2026-06-21T03:09:32.272546511Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.272550941Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.272553171Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.272557921Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.272558751Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.272563711Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.272565601Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.272570071Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.272571851Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.272577001Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.272578081Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.272580991Z [err]      import anthropic
+2026-06-21T03:09:32.272583931Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.272586551Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.272589041Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.272591751Z [err]      sys.exit(main())
+2026-06-21T03:09:32.272594581Z [err]               ^^^^^^
+2026-06-21T03:09:32.272597811Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.272600481Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.272606121Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.274720970Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.274723950Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.274726520Z [err]      run(
+2026-06-21T03:09:32.274729090Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.274731750Z [err]      server.run()
+2026-06-21T03:09:32.274734470Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.274736700Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.274738980Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.274741360Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.274744730Z [err]      return runner.run(main)
+2026-06-21T03:09:32.274747190Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.274749730Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.274752110Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.274755310Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.274758200Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.274760640Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.274762940Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.274765400Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.274767839Z [err]      config.load()
+2026-06-21T03:09:32.274770599Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.274773289Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.275415424Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.275417974Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.275420953Z [err]      raise exc from None
+2026-06-21T03:09:32.275423623Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.275426373Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.275429333Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.275431673Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.275434003Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.275436523Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.275448993Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.275452113Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.275454543Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.275456983Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.275459333Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.275461813Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.275464023Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.275466863Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.275469343Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.275471663Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.276106806Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.276109086Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.276111726Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.276114316Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.276116586Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.276119116Z [err]      from llm import get_provider
+2026-06-21T03:09:32.276121826Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.276124106Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.276126146Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.276128196Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.276130476Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.276132976Z [err]      import anthropic
+2026-06-21T03:09:32.276135246Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:32.276137746Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.276140116Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.276142406Z [err]      sys.exit(main())
+2026-06-21T03:09:32.276144816Z [err]               ^^^^^^
+2026-06-21T03:09:32.276147156Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.276149896Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.276152886Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276155206Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.276157496Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.276159936Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276858479Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.276861399Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.276863969Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276866489Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.276869309Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.276871809Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276874329Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.276876729Z [err]      run(
+2026-06-21T03:09:32.276879419Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.276881859Z [err]      server.run()
+2026-06-21T03:09:32.276884229Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.276887139Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.276889869Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276892149Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.276894759Z [err]      return runner.run(main)
+2026-06-21T03:09:32.276897509Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276899959Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.276902489Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.276904679Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.276906999Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.276909139Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.277593171Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.277595551Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.277598621Z [err]      config.load()
+2026-06-21T03:09:32.424131635Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:32.424136575Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:32.424139015Z [err]      sys.exit(main())
+2026-06-21T03:09:32.424141225Z [err]               ^^^^^^
+2026-06-21T03:09:32.424143795Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:32.424146005Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:32.424148315Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424150555Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:32.424152725Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:32.424155015Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424157195Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:32.424159385Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:32.424161595Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424163805Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:32.424166305Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:32.424168495Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424170835Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:32.424173365Z [err]      run(
+2026-06-21T03:09:32.424175545Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:32.424177695Z [err]      server.run()
+2026-06-21T03:09:32.424179865Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:32.424187705Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:32.424982577Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424985127Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:32.424987827Z [err]      return runner.run(main)
+2026-06-21T03:09:32.424990217Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424992837Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:32.424995007Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:32.424997537Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.424999967Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:32.425002127Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:32.425004317Z [err]      await self._serve(sockets)
+2026-06-21T03:09:32.425006767Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:32.425009037Z [err]      config.load()
+2026-06-21T03:09:32.425011217Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:32.425013457Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:32.425015647Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.425017907Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:32.425020057Z [err]      raise exc from None
+2026-06-21T03:09:32.425022627Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:32.425025047Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:32.425027467Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.425029777Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:32.425713059Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:32.425716759Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:32.425719169Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:32.425721589Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:32.425723759Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:32.425726029Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:32.425728259Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:32.425730319Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:32.425732929Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:32.425734979Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:32.425737309Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.425740349Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:32.425742529Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:32.425744649Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:32.425746949Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:32.425749099Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:32.425751609Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:32.425754359Z [err]      from llm import get_provider
+2026-06-21T03:09:32.425756569Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:32.425758739Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:32.426339994Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:32.426342354Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:32.426344914Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:32.426347234Z [err]      import anthropic
+2026-06-21T03:09:32.426350423Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:33.403063152Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:33.403071911Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:33.403076981Z [err]      sys.exit(main())
+2026-06-21T03:09:33.403081991Z [err]               ^^^^^^
+2026-06-21T03:09:33.403085861Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:33.403347698Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:33.403355398Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403359658Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:33.403363668Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:33.403366478Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403369378Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:33.403371938Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:33.403374278Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403377858Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:33.403380388Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:33.403382678Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403385028Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:33.403387518Z [err]      run(
+2026-06-21T03:09:33.403389758Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:33.403858434Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:33.403863794Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403869654Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:33.403870414Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:33.403873684Z [err]      raise exc from None
+2026-06-21T03:09:33.403877154Z [err]      await self._serve(sockets)
+2026-06-21T03:09:33.403877994Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:33.403882764Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:33.403888424Z [err]      config.load()
+2026-06-21T03:09:33.403893124Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:33.403899353Z [err]      server.run()
+2026-06-21T03:09:33.403911493Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:33.403918143Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:33.403922573Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403927313Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:33.403932183Z [err]      return runner.run(main)
+2026-06-21T03:09:33.403936123Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403949063Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:33.403952603Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:33.403957183Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.403961413Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:33.404518767Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:33.404522197Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:33.404524937Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:33.404529507Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.404531817Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:33.404537597Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:33.404539807Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:33.404543816Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:33.404546226Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:33.404550996Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:33.404553556Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:33.404558276Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:33.404561626Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:33.404564606Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:33.404567856Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:33.404572786Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:33.404576336Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:33.404579436Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:33.404582596Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:33.404585716Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:33.405110971Z [err]      from llm import get_provider
+2026-06-21T03:09:33.405113881Z [err]    File "/app/llm.py", line 17, in <module>
+2026-06-21T03:09:33.405116751Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:33.405119551Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:33.405125541Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:33.405128291Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:33.405133371Z [err]      import anthropic
+2026-06-21T03:09:33.405136271Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:34.370599952Z [err]  Traceback (most recent call last):
+2026-06-21T03:09:34.370610751Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-21T03:09:34.370618581Z [err]      sys.exit(main())
+2026-06-21T03:09:34.370624461Z [err]               ^^^^^^
+2026-06-21T03:09:34.370629671Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-21T03:09:34.370634511Z [err]      return self.main(*args, **kwargs)
+2026-06-21T03:09:34.370640221Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.370644301Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-21T03:09:34.370648271Z [err]      rv = self.invoke(ctx)
+2026-06-21T03:09:34.370652801Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.370656981Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-21T03:09:34.370661081Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-21T03:09:34.370665031Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.370668691Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-21T03:09:34.370672911Z [err]      return callback(*args, **kwargs)
+2026-06-21T03:09:34.370677321Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.370682051Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-21T03:09:34.370686531Z [err]      run(
+2026-06-21T03:09:34.370690541Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-21T03:09:34.370694491Z [err]      server.run()
+2026-06-21T03:09:34.370698070Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-21T03:09:34.370702050Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-21T03:09:34.371061897Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371069886Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-21T03:09:34.371070306Z [err]      from providers.base import LLMProvider
+2026-06-21T03:09:34.371074746Z [err]      return runner.run(main)
+2026-06-21T03:09:34.371079126Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371083586Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-21T03:09:34.371087686Z [err]      return self._loop.run_until_complete(task)
+2026-06-21T03:09:34.371093226Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371097566Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-21T03:09:34.371101796Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-21T03:09:34.371105746Z [err]      await self._serve(sockets)
+2026-06-21T03:09:34.371109727Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-21T03:09:34.371113677Z [err]      config.load()
+2026-06-21T03:09:34.371117967Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-21T03:09:34.371121957Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-21T03:09:34.371125927Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371129987Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-21T03:09:34.371133767Z [err]      raise exc from None
+2026-06-21T03:09:34.371137847Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-21T03:09:34.371144317Z [err]      module = importlib.import_module(module_str)
+2026-06-21T03:09:34.371149137Z [err]    File "/app/providers/__init__.py", line 3, in <module>
+2026-06-21T03:09:34.371152587Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371158407Z [err]      from .anthropic_provider import AnthropicProvider
+2026-06-21T03:09:34.371161646Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-21T03:09:34.371165926Z [err]    File "/app/providers/anthropic_provider.py", line 2, in <module>
+2026-06-21T03:09:34.371170286Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-21T03:09:34.371173856Z [err]      import anthropic
+2026-06-21T03:09:34.371176846Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-21T03:09:34.371182826Z [err]  ModuleNotFoundError: No module named 'anthropic'
+2026-06-21T03:09:34.371183806Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-21T03:09:34.371188806Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-21T03:09:34.371192756Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-21T03:09:34.371196806Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-21T03:09:34.371200196Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-21T03:09:34.371203976Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-21T03:09:34.371207516Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-21T03:09:34.371210976Z [err]      from engine.orchestrator import Orchestrator
+2026-06-21T03:09:34.371214196Z [err]    File "/app/engine/__init__.py", line 1, in <module>
+2026-06-21T03:09:34.371217756Z [err]      from engine.negotiation import NegotiationEngine
+2026-06-21T03:09:34.371221616Z [err]    File "/app/engine/negotiation.py", line 15, in <module>
+2026-06-21T03:09:34.371225686Z [err]      from agents.proxy import BuyerProxyAgent, SellerProxyAgent, ValorForaDosLimites
+2026-06-21T03:09:34.371229286Z [err]    File "/app/agents/__init__.py", line 1, in <module>
+2026-06-21T03:09:34.371232976Z [err]      from agents.conversation import ConversationAgent
+2026-06-21T03:09:34.371236616Z [err]    File "/app/agents/conversation.py", line 13, in <module>
+2026-06-21T03:09:34.371240136Z [err]      from llm import get_provider
+2026-06-21T03:09:34.371243816Z [err]    File "/app/llm.py", line 17, in <module>
