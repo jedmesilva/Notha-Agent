@@ -11,7 +11,7 @@ from db.connection import DB, get_db
 from db.repositories import (
     UserRepository, ListingRepository, ListingFlowRepository,
     NegotiationRepository, TransactionRepository, DeliveryRepository,
-    ConversationRepository,
+    ConversationRepository, BuscaSalvaRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
@@ -337,6 +337,39 @@ class Orchestrator:
                 result = "Nenhuma localização informada — nenhuma alteração feita."
             return result, None
 
+        if name == "salvar_interesse":
+            descricao = args.get("descricao_busca", "").strip()
+            if not descricao:
+                return "Descrição de busca vazia — interesse não salvo.", None
+            db = self._db or get_db()
+            if db:
+                busca_repo = BuscaSalvaRepository(db)
+                busca = await busca_repo.criar(
+                    user_id=user["id"],
+                    phone=phone,
+                    descricao_busca=descricao,
+                    categoria=args.get("categoria", "").strip() or None,
+                    cidade_busca=args.get("cidade_busca", "").strip() or None,
+                    bairro_busca=args.get("bairro_busca", "").strip() or None,
+                )
+                logger.info("Interesse salvo (user_id=%s): '%s' id=%s", user["id"], descricao, busca["id"])
+                result = f"Alerta de interesse salvo (id={busca['id']}): '{descricao}'. Usuário será notificado via WhatsApp assim que aparecer um produto compatível."
+            else:
+                result = "Banco indisponível — interesse não salvo."
+            return result, None
+
+        if name == "cancelar_alertas":
+            db = self._db or get_db()
+            if db:
+                busca_repo = BuscaSalvaRepository(db)
+                alertas = await busca_repo.listar_por_user(user["id"])
+                await busca_repo.cancelar_todas_do_user(user["id"])
+                logger.info("Alertas cancelados (user_id=%s): %d alertas", user["id"], len(alertas))
+                result = f"{len(alertas)} alerta(s) de busca cancelado(s) para user_id={user['id']}."
+            else:
+                result = "Banco indisponível — alertas não cancelados."
+            return result, None
+
         if name == "listar_produto":
             db = self._db or get_db()
             complex_reply = await self._start_listing_flow(
@@ -567,6 +600,37 @@ class Orchestrator:
             {"produto_buscado": descricao_busca, "regiao": regiao_original},
         )
 
+    async def _notify_interested_users(self, listing: dict, db: DB) -> None:
+        """Verifica buscas salvas ativas e notifica via WhatsApp quem tem interesse no listing."""
+        try:
+            from whatsapp import send_message as _wpp_send
+            busca_repo = BuscaSalvaRepository(db)
+            buscas = await busca_repo.listar_ativas()
+            for busca in buscas:
+                if not busca_repo.matches(busca, listing):
+                    continue
+                nome_produto = listing.get("descricao") or "Produto"
+                cidade = listing.get("cidade_vendedor") or ""
+                preco = listing.get("preco_anunciado") or 0
+                loc_txt = f" em {cidade}" if cidade else ""
+                msg = (
+                    f"Achei um produto que pode te interessar{loc_txt}!\n\n"
+                    f"📦 {nome_produto}\n"
+                    f"💰 R${preco:.2f}\n\n"
+                    f"Quer ver mais detalhes ou negociar? É só responder aqui!"
+                )
+                try:
+                    await _wpp_send(busca["phone"], msg)
+                    await busca_repo.registrar_notificacao(busca["id"])
+                    logger.info(
+                        "Notificação enviada: busca_id=%s phone=%s listing_id=%s",
+                        busca["id"], busca["phone"], listing.get("id"),
+                    )
+                except Exception as e:
+                    logger.warning("Falha ao notificar busca_id=%s: %s", busca["id"], e)
+        except Exception as e:
+            logger.error("Erro em _notify_interested_users: %s", e)
+
     async def _format_search_results(
         self, listings: list, regiao_label: str, prefixo: str = ""
     ) -> str:
@@ -649,6 +713,10 @@ class Orchestrator:
                 preco_minimo=appraisal["preco_minimo_sugerido"],
                 appraisal_data=appraisal,
             )
+            db = self._db or get_db()
+            if db:
+                import asyncio as _asyncio
+                _asyncio.create_task(self._notify_interested_users(dict(listing), db))
             return await self._conv.build_reply(
                 f"Produto anunciado! ID #{listing['id']}. "
                 f"Preço: R${appraisal['preco_sugerido']:.2f}. "
@@ -791,6 +859,11 @@ class Orchestrator:
         )
 
         await flow_repo.mark_done(flow_id)
+
+        db = self._db or get_db()
+        if db:
+            import asyncio as _asyncio
+            _asyncio.create_task(self._notify_interested_users(dict(listing), db))
 
         preco = dados.get("preco_anunciado") or appraisal.get("preco_sugerido", 0) or 0
         return (

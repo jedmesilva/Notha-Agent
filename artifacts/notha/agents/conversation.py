@@ -99,6 +99,8 @@ Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Quiser comprar/buscar um produto → pergunte a região de busca, depois chame buscar_produto com cidade_busca e/ou bairro_busca
 - Fornecer chave Pix → chame atualizar_chave_pix
 - Fornecer endereço de retirada geral (perfil vendedor) → chame atualizar_endereco
+- Quiser ser avisado quando aparecer um produto ("me avisa", "quero ser notificado", "sim, pode me avisar") → chame salvar_interesse
+- Quiser cancelar alertas de busca ("cancela alertas", "não precisa mais me avisar") → chame cancelar_alertas
 
 REGRA CRÍTICA: Quando o usuário quiser vender, NÃO faça perguntas sobre o produto antes de chamar listar_produto. O fluxo de cadastro faz todas as perguntas necessárias. Chame a ferramenta imediatamente.
 
@@ -234,6 +236,56 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
                         "description": "Bairro específico onde o usuário quer buscar (ex: 'Pinheiros', 'Savassi'). Use junto com cidade_busca quando possível."
                     }
                 },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "salvar_interesse",
+            "description": (
+                "Salva um alerta de interesse: o usuário será notificado via WhatsApp "
+                "assim que aparecer um produto compatível. "
+                "Use quando o usuário confirmar que quer ser avisado após uma busca sem resultado, "
+                "ou quando mencionar explicitamente 'me avisa', 'quero ser notificado', etc. "
+                "Passe a descrição do que ele busca e, se informado, a região de interesse."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "descricao_busca": {
+                        "type": "string",
+                        "description": "O que o usuário está procurando (ex: 'mesa redonda de madeira', 'iPhone 14')"
+                    },
+                    "categoria": {
+                        "type": "string",
+                        "description": "Categoria do produto, se identificada"
+                    },
+                    "cidade_busca": {
+                        "type": "string",
+                        "description": "Cidade de interesse (opcional — se quiser receber alertas só de uma cidade)"
+                    },
+                    "bairro_busca": {
+                        "type": "string",
+                        "description": "Bairro de interesse (opcional)"
+                    }
+                },
+                "required": ["descricao_busca"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancelar_alertas",
+            "description": (
+                "Cancela todos os alertas de busca ativos do usuário. "
+                "Use quando o usuário pedir para parar de receber notificações de produtos."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": []
             }
         }
