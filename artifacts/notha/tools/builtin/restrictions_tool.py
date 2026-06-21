@@ -7,11 +7,10 @@ logger = logging.getLogger("notha.tools.restrictions")
 class RestrictionCheckTool(Tool):
     name = "verificar_restricao"
     description = (
-        "Verifica se um produto ou item pode ser negociado no NOTHA. "
+        "Verifica se um produto pode ser negociado no NOTHA consultando a lista de itens restritos no banco de dados. "
         "OBRIGATÓRIO chamar antes de aceitar qualquer anúncio de venda ou busca de compra. "
-        "Retorna se o item é permitido ou restrito, com o motivo legal quando restrito. "
-        "Exemplos de uso: antes de listar_produto, antes de buscar_produto, "
-        "quando o usuário mencionar qualquer produto que possa ser ilegal ou regulado."
+        "Retorna PERMITIDO (produto liberado) ou RESTRITO (com categoria e motivo legal). "
+        "Use sempre que o usuário mencionar qualquer produto que possa ser ilegal ou regulado."
     )
     parameters = {
         "type": "object",
@@ -20,8 +19,8 @@ class RestrictionCheckTool(Tool):
                 "type": "string",
                 "description": (
                     "Descrição do produto a verificar. "
-                    "Inclua nome, tipo, características relevantes. "
-                    "Exemplo: 'pistola 9mm', 'papagaio silvestre', 'camiseta nike réplica'."
+                    "Inclua nome, tipo e características relevantes. "
+                    "Exemplos: 'pistola 9mm', 'papagaio silvestre', 'camiseta nike réplica'."
                 ),
             }
         },
@@ -33,34 +32,34 @@ class RestrictionCheckTool(Tool):
             from db.connection import get_db
             db = get_db()
             if db is None:
-                logger.warning("Banco indisponível — verificação de restrição ignorada.")
+                logger.warning("Database unavailable — restriction check skipped.")
                 return "BANCO_INDISPONIVEL: verificação não realizada, prossiga com cautela."
 
             from db.repositories.restrictions import RestrictionRepository
             repo = RestrictionRepository(db)
-            restricoes = await repo.verificar(descricao_produto)
+            matches = await repo.check(descricao_produto)
 
-            if not restricoes:
+            if not matches:
                 return "PERMITIDO: nenhuma restrição encontrada para este produto."
 
-            linhas = ["RESTRITO: este produto não pode ser negociado no NOTHA.\n"]
-            for r in restricoes:
-                cat = r.get("categoria", "").replace("_", " ").title()
-                motivo = r.get("motivo", "")
-                abrangencia = r.get("abrangencia", "nacional")
-                estado = r.get("estado") or ""
-                municipio = r.get("municipio") or ""
+            lines = ["RESTRITO: este produto não pode ser negociado no NOTHA.\n"]
+            for r in matches:
+                category = r.get("category", "").replace("_", " ").title()
+                reason = r.get("reason", "")
+                scope = r.get("scope", "national")
+                state_code = r.get("state_code") or ""
+                municipality = r.get("municipality") or ""
 
-                local = ""
-                if abrangencia == "estadual" and estado:
-                    local = f" (estado: {estado})"
-                elif abrangencia == "municipal" and municipio:
-                    local = f" (município: {municipio})"
+                location = ""
+                if scope == "state" and state_code:
+                    location = f" (state: {state_code})"
+                elif scope == "municipal" and municipality:
+                    location = f" (municipality: {municipality})"
 
-                linhas.append(f"- Categoria: {cat}{local}\n  Motivo: {motivo}")
+                lines.append(f"- Category: {category}{location}\n  Reason: {reason}")
 
-            return "\n".join(linhas)
+            return "\n".join(lines)
 
         except Exception as e:
-            logger.error("Erro ao verificar restrição: %s", e)
+            logger.error("Error checking restriction: %s", e)
             return f"ERRO_VERIFICACAO: não foi possível verificar ({e}). Prossiga com cautela."

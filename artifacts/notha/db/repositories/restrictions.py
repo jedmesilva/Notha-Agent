@@ -5,76 +5,93 @@ class RestrictionRepository:
     def __init__(self, db: DB):
         self._db = db
 
-    async def verificar(self, descricao: str) -> list[dict]:
-        """Verifica se a descrição do produto bate com algum item restrito ativo.
+    async def check(self, product_description: str) -> list[dict]:
+        """Check whether a product description matches any active restricted item.
 
-        Usa duas estratégias:
-        1. Qualquer palavra-chave da tabela aparece na descrição (ILIKE)
-        2. Qualquer palavra da descrição aparece no array palavras_chave do banco
-
-        Retorna lista de restrições encontradas (vazia = produto permitido).
+        Uses ILIKE matching: any keyword in the table is searched within the
+        product description string. Returns a list of matched restrictions
+        (empty list means the product is allowed).
         """
         rows = await self._db.fetch_all(
             """
-            SELECT id, categoria, descricao AS descricao_restricao, motivo,
-                   abrangencia, estado, municipio, palavras_chave
+            SELECT id, category, description, reason, scope, state_code, municipality, keywords
             FROM restricted_items
-            WHERE ativo = TRUE
+            WHERE is_active = TRUE
               AND EXISTS (
-                SELECT 1 FROM unnest(palavras_chave) AS kw
+                SELECT 1 FROM unnest(keywords) AS kw
                 WHERE $1 ILIKE '%' || kw || '%'
               )
-            ORDER BY categoria
+            ORDER BY category
             """,
-            descricao,
+            product_description,
         )
         return [dict(r) for r in rows]
 
-    async def listar_categorias(self) -> list[dict]:
-        """Lista todas as categorias restritas ativas (para uso administrativo)."""
+    async def list_all(self) -> list[dict]:
+        """List all restriction records (admin use)."""
         rows = await self._db.fetch_all(
             """
-            SELECT id, categoria, descricao, motivo, abrangencia,
-                   estado, municipio, ativo, criado_em, atualizado_em, criado_por
+            SELECT id, category, description, reason, scope,
+                   state_code, municipality, is_active,
+                   created_at, updated_at, created_by
             FROM restricted_items
-            ORDER BY categoria, id
+            ORDER BY category, id
             """
         )
         return [dict(r) for r in rows]
 
-    async def adicionar(
+    async def add(
         self,
-        categoria: str,
-        palavras_chave: list[str],
-        motivo: str,
-        descricao: str | None = None,
-        abrangencia: str = "nacional",
-        estado: str | None = None,
-        municipio: str | None = None,
-        criado_por: str = "admin",
+        category: str,
+        keywords: list[str],
+        reason: str,
+        description: str | None = None,
+        scope: str = "national",
+        state_code: str | None = None,
+        municipality: str | None = None,
+        created_by: str = "admin",
     ) -> dict:
+        """Insert a new restriction record."""
         row = await self._db.fetch_one(
             """
             INSERT INTO restricted_items
-                (categoria, palavras_chave, descricao, motivo,
-                 abrangencia, estado, municipio, criado_por)
+                (category, keywords, description, reason,
+                 scope, state_code, municipality, created_by)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
-            categoria,
-            palavras_chave,
-            descricao,
-            motivo,
-            abrangencia,
-            estado,
-            municipio,
-            criado_por,
+            category,
+            keywords,
+            description,
+            reason,
+            scope,
+            state_code,
+            municipality,
+            created_by,
         )
         return dict(row)
 
-    async def desativar(self, restriction_id: int) -> bool:
+    async def deactivate(self, restriction_id: int) -> bool:
+        """Soft-delete a restriction by setting is_active = FALSE."""
         result = await self._db.execute(
-            "UPDATE restricted_items SET ativo = FALSE, atualizado_em = NOW() WHERE id = $1",
+            """
+            UPDATE restricted_items
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE id = $1
+            """,
             restriction_id,
+        )
+        return result == "UPDATE 1"
+
+    async def update_keywords(self, restriction_id: int, keywords: list[str]) -> bool:
+        """Replace the keyword list for an existing restriction."""
+        result = await self._db.execute(
+            """
+            UPDATE restricted_items
+            SET keywords = $2, updated_at = NOW()
+            WHERE id = $1
+            """,
+            restriction_id,
+            keywords,
         )
         return result == "UPDATE 1"

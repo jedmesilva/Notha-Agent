@@ -330,59 +330,76 @@ CREATE TABLE IF NOT EXISTS agent_store (
 
 CREATE TABLE IF NOT EXISTS restricted_items (
     id              SERIAL PRIMARY KEY,
-    categoria       VARCHAR(100) NOT NULL,
-        -- Ex: 'armas', 'drogas', 'falsificados', 'animais_ilegais'
-    palavras_chave  TEXT[] NOT NULL DEFAULT '{}',
-        -- Termos que disparam a restrição (ex: {'pistola','revólver','arma de fogo'})
-    descricao       TEXT,
-        -- Descrição legível do que está sendo restrito
-    motivo          TEXT NOT NULL,
-        -- Motivo legal/regulatório da restrição
-    abrangencia     VARCHAR(20) NOT NULL DEFAULT 'nacional',
-        -- nacional | estadual | municipal
-    estado          CHAR(2),
-        -- Preenchido quando abrangencia = 'estadual' (ex: 'SP', 'RJ')
-    municipio       VARCHAR(100),
-        -- Preenchido quando abrangencia = 'municipal'
-    ativo           BOOLEAN NOT NULL DEFAULT TRUE,
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    atualizado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    criado_por      TEXT
-        -- E-mail ou identificador do admin que criou/editou
+    category        VARCHAR(100) NOT NULL,
+        -- e.g. 'weapons', 'drugs', 'counterfeit_goods', 'illegal_animals'
+    keywords        TEXT[]       NOT NULL DEFAULT '{}',
+        -- Terms that trigger the restriction (e.g. {'pistol','firearm','gun'})
+    description     TEXT,
+        -- Human-readable description of what is restricted
+    reason          TEXT         NOT NULL,
+        -- Legal / regulatory basis for the restriction
+    scope           VARCHAR(20)  NOT NULL DEFAULT 'national'
+        CHECK (scope IN ('national', 'state', 'municipal')),
+        -- national | state | municipal
+    state_code      CHAR(2),
+        -- Filled when scope = 'state' (e.g. 'SP', 'RJ')
+    municipality    VARCHAR(100),
+        -- Filled when scope = 'municipal'
+    is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    created_by      TEXT
+        -- Email or identifier of the admin who created/last edited this record
 );
 
-CREATE INDEX IF NOT EXISTS idx_restricted_items_categoria ON restricted_items(categoria);
-CREATE INDEX IF NOT EXISTS idx_restricted_items_ativo     ON restricted_items(ativo);
-CREATE INDEX IF NOT EXISTS idx_restricted_items_palavras  ON restricted_items USING GIN(palavras_chave);
+CREATE INDEX IF NOT EXISTS idx_restricted_items_category  ON restricted_items(category);
+CREATE INDEX IF NOT EXISTS idx_restricted_items_is_active ON restricted_items(is_active);
+CREATE INDEX IF NOT EXISTS idx_restricted_items_keywords  ON restricted_items USING GIN(keywords);
 
--- Seed: categorias base — ajuste e expanda conforme necessário
-INSERT INTO restricted_items (categoria, palavras_chave, descricao, motivo, criado_por) VALUES
-('armas',          ARRAY['arma','arma de fogo','pistola','revólver','espingarda','fuzil','munição','bala calibre','explosivo','granada','bomba'],
-                   'Armas de fogo, munições e explosivos',
-                   'Proibido por lei federal — Lei 10.826/2003 (Estatuto do Desarmamento)', 'sistema'),
-('drogas',         ARRAY['droga','cocaína','maconha','crack','heroína','lsd','mdma','ecstasy','anfetamina','metanfetamina','entorpecente','narcótico','psicotrópico'],
-                   'Drogas ilícitas e entorpecentes',
-                   'Tráfico de drogas — Lei 11.343/2006', 'sistema'),
-('medicamentos_controlados', ARRAY['remédio controlado','receituário azul','receituário amarelo','benzodiazepínico','opioide','morfina','codeína','ritalina','adderall'],
-                   'Medicamentos de venda controlada sem receita',
-                   'Venda ilegal sem prescrição médica — RDC Anvisa', 'sistema'),
-('animais_ilegais',ARRAY['animal silvestre','ave silvestre','papagaio silvestre','onça','tatu','capivara','cobra peçonhenta','tráfico de animais','espécie ameaçada'],
-                   'Animais silvestres e espécies protegidas',
-                   'Lei 9.605/1998 — Crimes ambientais', 'sistema'),
-('falsificados',   ARRAY['falsificado','pirata','réplica','imitação','fake','contrabandeado','sem nota fiscal origem','produto adulterado'],
-                   'Produtos falsificados ou contrabandeados',
-                   'Lei 9.279/1996 — Propriedade industrial', 'sistema'),
-('documentos_falsos', ARRAY['documento falso','identidade falsa','rg falso','cnh falsa','passaporte falso','cartão clonado','dado pessoal roubado','cpf de terceiro'],
-                   'Documentos falsos e dados pessoais de terceiros',
-                   'Código Penal — falsidade ideológica e estelionato', 'sistema'),
-('conteudo_ilegal',ARRAY['conteúdo adulto infantil','csam','exploração sexual','pornografia infantil','tráfico humano'],
-                   'Conteúdo ilegal e exploração',
-                   'Lei 8.069/1990 (ECA) e Código Penal', 'sistema'),
-('orgaos_humanos', ARRAY['órgão humano','rim à venda','fígado à venda','sangue ilegal','plasma ilegal'],
-                   'Órgãos e partes do corpo humano',
-                   'Lei 9.434/1997 — Transplante de órgãos', 'sistema')
+-- Seed: base categories — adjust and expand as needed
+INSERT INTO restricted_items (category, keywords, description, reason, created_by) VALUES
+('weapons',
+ ARRAY['arma','arma de fogo','pistola','revólver','espingarda','fuzil','munição','bala calibre','explosivo','granada','bomba'],
+ 'Firearms, ammunition and explosives',
+ 'Prohibited by federal law — Lei 10.826/2003 (Estatuto do Desarmamento)', 'system'),
+
+('drugs',
+ ARRAY['droga','cocaína','maconha','crack','heroína','lsd','mdma','ecstasy','anfetamina','metanfetamina','entorpecente','narcótico','psicotrópico'],
+ 'Illicit drugs and narcotics',
+ 'Drug trafficking — Lei 11.343/2006', 'system'),
+
+('controlled_medications',
+ ARRAY['remédio controlado','receituário azul','receituário amarelo','benzodiazepínico','opioide','morfina','codeína','ritalina','adderall'],
+ 'Prescription-only controlled medications',
+ 'Illegal sale without prescription — RDC Anvisa', 'system'),
+
+('illegal_animals',
+ ARRAY['animal silvestre','ave silvestre','papagaio silvestre','onça','tatu','capivara','cobra peçonhenta','tráfico de animais','espécie ameaçada'],
+ 'Wildlife and protected species',
+ 'Environmental crimes — Lei 9.605/1998', 'system'),
+
+('counterfeit_goods',
+ ARRAY['falsificado','pirata','réplica','imitação','fake','contrabandeado','produto adulterado'],
+ 'Counterfeit, pirated or smuggled goods',
+ 'Intellectual property law — Lei 9.279/1996', 'system'),
+
+('false_documents',
+ ARRAY['documento falso','identidade falsa','rg falso','cnh falsa','passaporte falso','cartão clonado','dado pessoal roubado','cpf de terceiro'],
+ 'Forged documents and stolen personal data',
+ 'Penal Code — falsidade ideológica e estelionato', 'system'),
+
+('illegal_content',
+ ARRAY['conteúdo adulto infantil','csam','exploração sexual','pornografia infantil','tráfico humano'],
+ 'Illegal content and exploitation',
+ 'Lei 8.069/1990 (ECA) and Penal Code', 'system'),
+
+('human_organs',
+ ARRAY['órgão humano','rim à venda','fígado à venda','sangue ilegal','plasma ilegal'],
+ 'Human organs and body parts',
+ 'Organ trafficking — Lei 9.434/1997', 'system')
+
 ON CONFLICT DO NOTHING;
 
 -- ============================================================
--- Fim do schema
+-- End of schema
 -- ============================================================
