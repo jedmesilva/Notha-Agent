@@ -139,7 +139,11 @@ Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Fornecer ou corrigir o CPF → chame atualizar_cpf
 - Fornecer cidade e/ou bairro onde MORA → chame atualizar_localizacao
 - Quiser VENDER um produto: palavras como "vender", "anunciar", "quero vender", "tenho pra vender", "colocar à venda" → chame listar_produto IMEDIATAMENTE, sem perguntar nada antes
-- Quiser COMPRAR/BUSCAR um produto: palavras como "preciso de", "quero comprar", "estou procurando", "tem à venda", "onde acho", "procuro" → NÃO chame listar_produto; pergunte a região de busca e chame buscar_produto
+- Quiser COMPRAR/BUSCAR um produto: palavras como "preciso de", "quero comprar", "estou procurando", "tem à venda", "onde acho", "procuro" → NÃO chame listar_produto; siga EXATAMENTE esta ordem:
+  1. Se a descrição do produto for vaga (ex: só "bolsa", só "celular"), pergunte detalhes relevantes em UMA mensagem curta (ex: "Que tipo de bolsa? Tem preferência de cor ou estilo?")
+  2. Pergunte a região de busca: "Em qual cidade ou bairro você quer buscar?"
+  3. Só então chame buscar_produto com a descrição completa e a região
+  ATENÇÃO: passos 1 e 2 podem ser combinados em uma só mensagem se fizer sentido. Nunca pule a coleta de detalhes — a busca e qualquer alerta futuro dependem de uma boa descrição.
 - ATENÇÃO: "preciso de X", "quero um X", "estou precisando de X" = COMPRA → buscar_produto. NUNCA confunda com venda.
 - Fornecer chave Pix → chame atualizar_chave_pix
 - Fornecer endereço de retirada geral (perfil vendedor) → chame atualizar_endereco
@@ -256,8 +260,9 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "name": "buscar_produto",
             "description": (
                 "Busca produtos disponíveis para compra. "
-                "Antes de chamar, pergunte ao usuário em qual cidade ou bairro ele quer buscar — "
-                "pode ser qualquer região, não precisa ser onde ele mora. "
+                "Antes de chamar: (1) colete detalhes do produto se a descrição for vaga, "
+                "(2) pergunte em qual cidade ou bairro o usuário quer buscar. "
+                "Passe sempre uma descricao_busca completa — ela será reutilizada se precisar salvar alerta. "
                 "Se o usuário não quiser filtrar por região, omita cidade_busca e bairro_busca."
             ),
             "parameters": {
@@ -293,7 +298,8 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
                 "assim que aparecer um produto compatível. "
                 "Use quando o usuário confirmar que quer ser avisado após uma busca sem resultado, "
                 "ou quando mencionar explicitamente 'me avisa', 'quero ser notificado', etc. "
-                "Passe a descrição do que ele busca e, se informado, a região de interesse."
+                "IMPORTANTE: use a descrição já coletada na busca anterior — NÃO peça de novo ao usuário. "
+                "Passe a descrição completa e a região informada na busca."
             ),
             "parameters": {
                 "type": "object",
