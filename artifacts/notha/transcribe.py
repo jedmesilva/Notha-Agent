@@ -62,7 +62,6 @@ async def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> 
         response = await client.audio.transcriptions.create(
             model="whisper-1",
             file=(filename, audio_bytes, mime_type.split(";")[0].strip()),
-            language="pt",
         )
 
         text = (response.text or "").strip()
