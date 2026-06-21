@@ -324,6 +324,65 @@ CREATE TABLE IF NOT EXISTS agent_store (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- -----------------------------------------------------------
+-- 11. Itens restritos (lista dinâmica gerenciada por admins)
+-- -----------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS restricted_items (
+    id              SERIAL PRIMARY KEY,
+    categoria       VARCHAR(100) NOT NULL,
+        -- Ex: 'armas', 'drogas', 'falsificados', 'animais_ilegais'
+    palavras_chave  TEXT[] NOT NULL DEFAULT '{}',
+        -- Termos que disparam a restrição (ex: {'pistola','revólver','arma de fogo'})
+    descricao       TEXT,
+        -- Descrição legível do que está sendo restrito
+    motivo          TEXT NOT NULL,
+        -- Motivo legal/regulatório da restrição
+    abrangencia     VARCHAR(20) NOT NULL DEFAULT 'nacional',
+        -- nacional | estadual | municipal
+    estado          CHAR(2),
+        -- Preenchido quando abrangencia = 'estadual' (ex: 'SP', 'RJ')
+    municipio       VARCHAR(100),
+        -- Preenchido quando abrangencia = 'municipal'
+    ativo           BOOLEAN NOT NULL DEFAULT TRUE,
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    atualizado_em   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    criado_por      TEXT
+        -- E-mail ou identificador do admin que criou/editou
+);
+
+CREATE INDEX IF NOT EXISTS idx_restricted_items_categoria ON restricted_items(categoria);
+CREATE INDEX IF NOT EXISTS idx_restricted_items_ativo     ON restricted_items(ativo);
+CREATE INDEX IF NOT EXISTS idx_restricted_items_palavras  ON restricted_items USING GIN(palavras_chave);
+
+-- Seed: categorias base — ajuste e expanda conforme necessário
+INSERT INTO restricted_items (categoria, palavras_chave, descricao, motivo, criado_por) VALUES
+('armas',          ARRAY['arma','arma de fogo','pistola','revólver','espingarda','fuzil','munição','bala calibre','explosivo','granada','bomba'],
+                   'Armas de fogo, munições e explosivos',
+                   'Proibido por lei federal — Lei 10.826/2003 (Estatuto do Desarmamento)', 'sistema'),
+('drogas',         ARRAY['droga','cocaína','maconha','crack','heroína','lsd','mdma','ecstasy','anfetamina','metanfetamina','entorpecente','narcótico','psicotrópico'],
+                   'Drogas ilícitas e entorpecentes',
+                   'Tráfico de drogas — Lei 11.343/2006', 'sistema'),
+('medicamentos_controlados', ARRAY['remédio controlado','receituário azul','receituário amarelo','benzodiazepínico','opioide','morfina','codeína','ritalina','adderall'],
+                   'Medicamentos de venda controlada sem receita',
+                   'Venda ilegal sem prescrição médica — RDC Anvisa', 'sistema'),
+('animais_ilegais',ARRAY['animal silvestre','ave silvestre','papagaio silvestre','onça','tatu','capivara','cobra peçonhenta','tráfico de animais','espécie ameaçada'],
+                   'Animais silvestres e espécies protegidas',
+                   'Lei 9.605/1998 — Crimes ambientais', 'sistema'),
+('falsificados',   ARRAY['falsificado','pirata','réplica','imitação','fake','contrabandeado','sem nota fiscal origem','produto adulterado'],
+                   'Produtos falsificados ou contrabandeados',
+                   'Lei 9.279/1996 — Propriedade industrial', 'sistema'),
+('documentos_falsos', ARRAY['documento falso','identidade falsa','rg falso','cnh falsa','passaporte falso','cartão clonado','dado pessoal roubado','cpf de terceiro'],
+                   'Documentos falsos e dados pessoais de terceiros',
+                   'Código Penal — falsidade ideológica e estelionato', 'sistema'),
+('conteudo_ilegal',ARRAY['conteúdo adulto infantil','csam','exploração sexual','pornografia infantil','tráfico humano'],
+                   'Conteúdo ilegal e exploração',
+                   'Lei 8.069/1990 (ECA) e Código Penal', 'sistema'),
+('orgaos_humanos', ARRAY['órgão humano','rim à venda','fígado à venda','sangue ilegal','plasma ilegal'],
+                   'Órgãos e partes do corpo humano',
+                   'Lei 9.434/1997 — Transplante de órgãos', 'sistema')
+ON CONFLICT DO NOTHING;
+
 -- ============================================================
 -- Fim do schema
 -- ============================================================
