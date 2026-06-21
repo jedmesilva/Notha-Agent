@@ -352,7 +352,8 @@ class Orchestrator:
             intent = {
                 "categoria": args.get("categoria"),
                 "descricao_busca": args.get("descricao_busca"),
-                "raio_busca": args.get("raio_busca", "qualquer"),
+                "cidade_busca": args.get("cidade_busca", "").strip() or None,
+                "bairro_busca": args.get("bairro_busca", "").strip() or None,
             }
             complex_reply = await self._handle_search(phone, text, user, listing_repo, intent)
             return "busca executada", complex_reply
@@ -438,18 +439,18 @@ class Orchestrator:
         parts.append(f"identidade: {_IDENTIDADE_LABEL.get(status_identidade, status_identidade)}")
         parts.append(f"user_id: {user_id}")
 
-        # Localização do usuário (para busca por região)
-        cidade = user.get("cidade") or ""
-        bairro = user.get("bairro") or ""
-        if cidade or bairro:
+        # Endereço de moradia do usuário (cidade/bairro onde ele vive — para entregas)
+        cidade_mora = user.get("cidade") or ""
+        bairro_mora = user.get("bairro") or ""
+        if cidade_mora or bairro_mora:
             loc_parts = []
-            if bairro:
-                loc_parts.append(f"bairro={bairro}")
-            if cidade:
-                loc_parts.append(f"cidade={cidade}")
-            parts.append(f"localização: {', '.join(loc_parts)} (usar para filtrar buscas)")
+            if bairro_mora:
+                loc_parts.append(f"bairro={bairro_mora}")
+            if cidade_mora:
+                loc_parts.append(f"cidade={cidade_mora}")
+            parts.append(f"mora em: {', '.join(loc_parts)} (endereço de moradia — para entregas; região de BUSCA é perguntada na hora)")
         else:
-            parts.append("localização: não informada (pergunte cidade e bairro antes de buscar produtos)")
+            parts.append("mora em: não informado (se quiser usar como referência de busca, pergunte cidade/bairro de moradia)")
 
         # Perfil de vendedor
         if seller_profile:
@@ -521,38 +522,26 @@ class Orchestrator:
 
     async def _handle_search(self, phone, text, user, listing_repo, intent) -> str:
         categoria = intent.get("categoria")
-        raio = intent.get("raio_busca", "qualquer")
-
-        cidade_usuario = user.get("cidade") or None
-        bairro_usuario = user.get("bairro") or None
-
-        cidade_filtro: str | None = None
-        bairro_filtro: str | None = None
-
-        if raio == "bairro" and bairro_usuario:
-            bairro_filtro = bairro_usuario
-            cidade_filtro = cidade_usuario
-        elif raio == "cidade" and cidade_usuario:
-            cidade_filtro = cidade_usuario
-        # raio == "qualquer" → sem filtro geográfico
+        cidade_busca: str | None = intent.get("cidade_busca")
+        bairro_busca: str | None = intent.get("bairro_busca")
 
         listings = await listing_repo.find_available(
             categoria=categoria,
             limit=5,
-            cidade=cidade_filtro,
-            bairro=bairro_filtro,
+            cidade=cidade_busca,
+            bairro=bairro_busca,
         )
 
-        # Se buscou com filtro e não achou, tenta sem filtro e avisa
-        filtrado = bool(cidade_filtro or bairro_filtro)
+        # Se buscou com filtro geográfico e não achou nada, tenta sem filtro e avisa
+        filtrado = bool(cidade_busca or bairro_busca)
         if not listings and filtrado:
-            listings = await listing_repo.find_available(categoria=categoria, limit=5)
-            if listings:
-                regiao_label = bairro_filtro or cidade_filtro or "sua região"
+            listings_sem_filtro = await listing_repo.find_available(categoria=categoria, limit=5)
+            if listings_sem_filtro:
+                regiao_label = bairro_busca or cidade_busca or "essa região"
                 items = [
                     f"• {l['descricao']} — R${l['preco_anunciado']:.2f}"
                     f" ({l.get('cidade_vendedor') or 'localização não informada'})"
-                    for l in listings
+                    for l in listings_sem_filtro
                 ]
                 return await self._conv.build_reply(
                     f"Não achei nada em {regiao_label}, mas encontrei em outras regiões:\n" +
@@ -567,8 +556,8 @@ class Orchestrator:
             )
 
         regiao_label = (
-            f"no bairro {bairro_filtro}" if bairro_filtro else
-            f"em {cidade_filtro}" if cidade_filtro else
+            f"no bairro {bairro_busca}" if bairro_busca else
+            f"em {cidade_busca}" if cidade_busca else
             "em qualquer região"
         )
         items = [

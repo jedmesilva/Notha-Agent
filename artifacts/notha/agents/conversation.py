@@ -72,27 +72,33 @@ SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos fí
 - Ao pedir chave Pix: "Qual sua chave Pix para receber? Pode ser CPF, e-mail, celular ou chave aleatória."
 - Ao pedir endereço de retirada (vendedor): "Me passa o endereço de retirada (rua, número, bairro e cidade)."
 
-━━━ LOCALIZAÇÃO DO USUÁRIO ━━━
-- O contexto informa se o usuário tem cidade e bairro salvos.
-- Se o usuário quiser COMPRAR e não tem localização salva: pergunte cidade e bairro antes de buscar.
-  Exemplo: "Pra filtrar os produtos perto de você, me diz: qual sua cidade e bairro?"
-- Se o usuário fornecer cidade e/ou bairro → chame atualizar_localizacao imediatamente.
-- Quando o usuário for buscar um produto E já tem localização salva: pergunte o raio de busca:
-  "Quer buscar só no seu bairro, na sua cidade toda, ou em qualquer lugar do Brasil?"
-- Passe o raio_busca para buscar_produto: "bairro" | "cidade" | "qualquer"
-- Se o usuário disser "perto de mim", "aqui", "na minha região" → use raio "bairro" ou "cidade"
-- Se disser "em qualquer lugar", "tanto faz", "Brasil inteiro" → use raio "qualquer"
+━━━ TRÊS CONCEITOS DE ENDEREÇO — NUNCA CONFUNDA ━━━
+1. ENDEREÇO DO USUÁRIO (onde ele mora) — salvo em atualizar_localizacao
+   - Colete naturalmente: "Em qual cidade e bairro você mora?"
+   - Serve para entrega de produtos comprados pelo usuário
+   - Fica salvo no perfil; não precisa perguntar de novo se já tiver
+
+2. REGIÃO DE BUSCA (onde buscar produtos) — passado em buscar_produto
+   - Pode ser QUALQUER cidade/bairro, não precisa ser onde o usuário mora
+   - Pergunte SEMPRE antes de buscar: "Em qual cidade ou bairro você quer buscar?"
+   - Se o usuário disser "aqui", "perto de mim" → use o endereço dele como referência
+   - Não armazene a região de busca — ela muda a cada busca
+   - Passe cidade_busca e/ou bairro_busca para buscar_produto; se o usuário não quiser filtrar, deixe vazio
+
+3. ENDEREÇO DE RETIRADA DO PRODUTO — por produto, não por usuário
+   - Cada produto tem seu próprio endereço onde pode ser retirado
+   - O fluxo de cadastro de produto coleta isso durante o anúncio
 
 ━━━ USO DAS FERRAMENTAS ━━━
 Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Fornecer ou corrigir o nome completo → chame atualizar_nome
 - Quiser mudar como é chamado / fornecer apelido → chame atualizar_apelido
 - Fornecer ou corrigir o CPF → chame atualizar_cpf
-- Fornecer cidade e/ou bairro (localização) → chame atualizar_localizacao
+- Fornecer cidade e/ou bairro onde MORA → chame atualizar_localizacao
 - Quiser vender UM produto (qualquer menção a "vender", "anunciar", "tenho pra vender") → chame listar_produto IMEDIATAMENTE, sem perguntar nada antes
-- Quiser comprar/buscar um produto → chame buscar_produto (com raio_busca definido)
+- Quiser comprar/buscar um produto → pergunte a região de busca, depois chame buscar_produto com cidade_busca e/ou bairro_busca
 - Fornecer chave Pix → chame atualizar_chave_pix
-- Fornecer endereço de retirada → chame atualizar_endereco
+- Fornecer endereço de retirada geral (perfil vendedor) → chame atualizar_endereco
 
 REGRA CRÍTICA: Quando o usuário quiser vender, NÃO faça perguntas sobre o produto antes de chamar listar_produto. O fluxo de cadastro faz todas as perguntas necessárias. Chame a ferramenta imediatamente.
 
@@ -203,29 +209,32 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "buscar_produto",
             "description": (
-                "Busca produtos disponíveis para compra, com filtro opcional de localização. "
-                "Sempre passe raio_busca: 'bairro' (só no bairro do usuário), "
-                "'cidade' (cidade inteira), ou 'qualquer' (sem filtro geográfico). "
-                "Se o usuário não informou preferência, use 'cidade' como padrão quando há localização salva."
+                "Busca produtos disponíveis para compra. "
+                "Antes de chamar, pergunte ao usuário em qual cidade ou bairro ele quer buscar — "
+                "pode ser qualquer região, não precisa ser onde ele mora. "
+                "Se o usuário não quiser filtrar por região, omita cidade_busca e bairro_busca."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "categoria": {
                         "type": "string",
-                        "description": "Categoria do produto buscado"
+                        "description": "Categoria ou tipo do produto buscado"
                     },
                     "descricao_busca": {
                         "type": "string",
                         "description": "Descrição do que o usuário quer comprar"
                     },
-                    "raio_busca": {
+                    "cidade_busca": {
                         "type": "string",
-                        "enum": ["bairro", "cidade", "qualquer"],
-                        "description": "Raio geográfico da busca: 'bairro' (só no bairro), 'cidade' (cidade toda), 'qualquer' (Brasil inteiro)"
+                        "description": "Cidade onde o usuário quer buscar produtos (ex: 'São Paulo', 'Belo Horizonte'). Deixe vazio para buscar em todo o Brasil."
+                    },
+                    "bairro_busca": {
+                        "type": "string",
+                        "description": "Bairro específico onde o usuário quer buscar (ex: 'Pinheiros', 'Savassi'). Use junto com cidade_busca quando possível."
                     }
                 },
-                "required": ["raio_busca"]
+                "required": []
             }
         }
     },
