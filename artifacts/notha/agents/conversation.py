@@ -11,11 +11,42 @@ NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
 import json
 import logging
 import os
+import re
 from openai import AsyncOpenAI
 from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
 from tools.builtin import ALL_BUILTIN_TOOLS
 
 logger = logging.getLogger("notha.agent.conversation")
+
+_GREETING_PATTERN = re.compile(
+    r"^(oi|olá|ola|ei|hey|opa|eai|e aí|bom dia|boa tarde|boa noite)"
+    r"[\s,!.]*"
+    r"(?:[A-ZÀ-Ú][a-zà-ú]+[\s,!.]*)?",
+    re.IGNORECASE,
+)
+
+
+def _strip_greeting(text: str, has_history: bool) -> str:
+    """Remove saudação do início da resposta quando já há histórico de conversa.
+
+    O LLM eventualmente ignora as instruções do system prompt e abre respostas
+    com "Oi!", "Olá!" etc. no meio de conversas em andamento. Esta função
+    garante deterministicamente que isso nunca chegue ao usuário.
+    """
+    if not has_history or not text:
+        return text
+
+    match = _GREETING_PATTERN.match(text)
+    if not match:
+        return text
+
+    cleaned = text[match.end():].lstrip(" ,!.\n")
+    if cleaned:
+        cleaned = cleaned[0].upper() + cleaned[1:]
+        logger.warning("Saudação removida da resposta: %r → %r", text[:40], cleaned[:40])
+        return cleaned
+
+    return text
 
 SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos físicos 100% pelo WhatsApp.
 
@@ -512,6 +543,7 @@ class ConversationAgent:
                 "content": result,
             })
 
+        has_history = any(m["role"] == "user" for m in messages[1:])
         try:
             resp = await self._get_client().chat.completions.create(
                 model=OPENAI_MODEL,
@@ -519,7 +551,8 @@ class ConversationAgent:
                 temperature=0.6,
                 max_tokens=500,
             )
-            return resp.choices[0].message.content or "Feito!"
+            reply = resp.choices[0].message.content or "Feito!"
+            return _strip_greeting(reply, has_history)
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
@@ -548,13 +581,15 @@ class ConversationAgent:
             call_kwargs["tools"] = tools
             call_kwargs["tool_choice"] = "auto"
 
+        has_history = len(history) > 0
         try:
             resp = await self._get_client().chat.completions.create(**call_kwargs)
         except Exception as e:
             logger.error("Erro no chat_with_tools: %s", e)
             return "Tive um problema técnico agora. Me manda de novo em instantes!", []
 
-        return resp.choices[0].message.content or "Tive um problema técnico.", []
+        reply = resp.choices[0].message.content or "Tive um problema técnico."
+        return _strip_greeting(reply, has_history), []
 
     async def respond(
         self,
