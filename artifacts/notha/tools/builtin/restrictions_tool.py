@@ -22,24 +22,31 @@ from tools.base import Tool
 logger = logging.getLogger("notha.tools.restrictions")
 
 # ── Passo 1: gerar termos de busca ──────────────────────────────────────────
-_PROMPT_GERAR_TERMOS = """Você é um especialista em classificação de produtos para marketplace.
+_PROMPT_GERAR_TERMOS = """You are a product classification expert for a global marketplace platform.
 
-O usuário quer negociar o seguinte produto:
+The user wants to trade the following product:
 "{descricao}"
+User location: {localizacao}
 
-Sua tarefa: gerar os melhores termos de busca para encontrar esse produto em uma base de dados de itens proibidos.
+Your task: generate the best search terms to find this product in a database of restricted items.
 
-Gere termos em português brasileiro que incluam:
-- Nome técnico/oficial do produto
-- Nomes populares e variações
-- Gírias e termos informais conhecidos
-- Tradução do nome se estava em outro idioma
-- Termos relacionados à categoria (mas seja específico — "faca de cozinha" não é "arma de combate")
+Generate terms across ALL relevant languages (the user's language, Portuguese, English, Spanish, and any language relevant to the product's origin or the user's region). Include:
+- Official/technical name of the product (in multiple languages if applicable)
+- Common names and regional variations
+- Slang, informal terms and euphemisms in any language
+- Brand names if relevant (e.g. "Glock" for a pistol)
+- Category-related terms — but be SPECIFIC: "kitchen knife" is NOT "combat knife", "toy gun" is NOT "firearm"
 
-Retorne SOMENTE JSON válido:
-{{"produto_identificado": "<nome normalizado do produto>", "termos_busca": ["termo1", "termo2", ...]}}
+Examples:
+- "roscoe" → terms: ["roscoe", "revólver", "pistola", "arma de fogo", "handgun", "revolver", "firearm"]
+- "faca de cozinha" → terms: ["faca de cozinha", "kitchen knife", "cuchillo de cocina"] — NOT "arma branca"
+- "arm" (body part) → terms: ["braço", "arm", "membro superior"] — NOT "arma", "weapon"
+- "marijuana" → terms: ["marijuana", "cannabis", "maconha", "weed", "erva", "baseado"]
 
-Máximo 10 termos. Seja específico — não inclua termos genéricos demais que causem falsos positivos."""
+Return ONLY valid JSON:
+{{"produto_identificado": "<normalized product name in English>", "termos_busca": ["term1", "term2", ...]}}
+
+Maximum 12 terms. Be specific — avoid overly broad terms that cause false positives."""
 
 # ── Passo 3: julgamento final ────────────────────────────────────────────────
 _PROMPT_JULGAMENTO = """Você é um especialista em regulamentação de marketplace.
@@ -138,8 +145,18 @@ class RestrictionCheckTool(Tool):
             repo = RestrictionRepository(db)
 
             # ── Passo 1: LLM gera termos de busca específicos ───────────────
+            loc_parts = []
+            if municipio:
+                loc_parts.append(municipio)
+            if estado:
+                loc_parts.append(f"state {estado}")
+            localizacao_str = ", ".join(loc_parts) if loc_parts else "unknown"
+
             resultado_termos = await _chamar_llm_json(
-                _PROMPT_GERAR_TERMOS.format(descricao=descricao_produto),
+                _PROMPT_GERAR_TERMOS.format(
+                    descricao=descricao_produto,
+                    localizacao=localizacao_str,
+                ),
                 max_tokens=300,
             )
 
