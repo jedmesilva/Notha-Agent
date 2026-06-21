@@ -19,6 +19,7 @@ from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
 from tools.builtin import web_search, currency, math, units, datetime_tool
+from phone_timezone import infer_timezone
 
 _BUILTIN_TOOL_MAP = {
     web_search.name: web_search,
@@ -162,7 +163,7 @@ class Orchestrator:
         )
 
         # Contexto rico com dados reais do banco — o LLM sempre trabalha com info atual
-        contexto = self._build_context(user, active_negs, seller_profile)
+        contexto = self._build_context(user, active_negs, seller_profile, phone=phone)
 
         # Confirmações pendentes de negócio (ex: confirmar preço de anúncio)
         pending = PENDING_CONFIRMATIONS.get(phone)
@@ -438,7 +439,7 @@ class Orchestrator:
         _memory_add(phone, "assistant", last_assistant)
         return last_assistant
 
-    def _build_context(self, user, active_negs: list, seller_profile=None) -> str:
+    def _build_context(self, user, active_negs: list, seller_profile=None, phone: str = "") -> str:
         """Monta o contexto com dados reais do banco para o LLM.
 
         Inclui nome, apelido, CPF, verificação de identidade, perfil de vendedor
@@ -513,6 +514,11 @@ class Orchestrator:
             )
         else:
             parts.append("sem negociações ativas")
+
+        # Fuso horário inferido: cidade cadastrada > DDI+código de área > DDI
+        cidade_para_tz = cidade_mora or ""
+        tz = infer_timezone(phone, cidade=cidade_para_tz)
+        parts.append(f"fuso_horario: {tz}")
 
         return " | ".join(parts)
 
