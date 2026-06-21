@@ -10,10 +10,24 @@ NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
 """
 import json
 import logging
+import re
 from llm import get_provider
 from tools.builtin import ALL_BUILTIN_TOOLS
 
 logger = logging.getLogger("notha.agent.conversation")
+
+_GREETING_RE = re.compile(
+    r"^\s*(oi|olá|ola|hey|hi|hello|bom\s+dia|boa\s+tarde|boa\s+noite|e\s+a[ií]|tudo\s+bem"
+    r"|tudo\s+bom|opa|salve|eae|eaí|como\s+vai|como\s+você\s+está|o[i]+)"
+    r"[\s!?,]*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _is_pure_greeting(text: str) -> bool:
+    """Retorna True se a mensagem é apenas uma saudação sem intenção real."""
+    return bool(_GREETING_RE.match(text.strip()))
+
 
 _SANITIZE_PROMPT = (
     "Você é um revisor de mensagens de WhatsApp. "
@@ -27,14 +41,14 @@ _SANITIZE_PROMPT = (
 )
 
 
-async def _sanitize_response(text: str, has_history: bool) -> str:
+async def _sanitize_response(text: str, has_history: bool, user_greeted: bool = False) -> str:
     """Usa o LLM para detectar e remover saudações do início da resposta.
 
-    Chamada leve (temperatura 0, poucos tokens) — só executa quando há histórico,
-    garantindo que nenhuma saudação chegue ao usuário no meio de uma conversa,
-    independente de idioma, gíria ou variação cultural.
+    Quando user_greeted=True (usuário mandou apenas uma saudação), a saudação
+    da resposta é preservada — espelhar o cumprimento do usuário é o comportamento correto.
+    Só remove saudações espúrias quando o usuário enviou uma mensagem com intenção real.
     """
-    if not has_history or not text:
+    if not has_history or not text or user_greeted:
         return text
 
     try:
@@ -525,6 +539,10 @@ class ConversationAgent:
                 rebuilt.append(msg)
 
         has_history = sum(1 for m in rebuilt if m["role"] == "user") > 1
+        last_user_msg = next(
+            (m["content"] for m in reversed(rebuilt) if m["role"] == "user"), ""
+        )
+        user_greeted = _is_pure_greeting(last_user_msg)
 
         try:
             resp = await get_provider().complete(
@@ -533,7 +551,7 @@ class ConversationAgent:
                 max_tokens=500,
             )
             reply = resp.text or "Feito!"
-            return await _sanitize_response(reply, has_history)
+            return await _sanitize_response(reply, has_history, user_greeted)
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
@@ -553,6 +571,7 @@ class ConversationAgent:
         messages.append({"role": "user", "content": user_message})
 
         has_history = len(history) > 0
+        user_greeted = _is_pure_greeting(user_message)
         try:
             resp = await get_provider().complete(
                 messages=messages,
@@ -565,7 +584,7 @@ class ConversationAgent:
             return "Tive um problema técnico agora. Me manda de novo em instantes!", []
 
         reply = resp.text or "Tive um problema técnico."
-        return await _sanitize_response(reply, has_history), []
+        return await _sanitize_response(reply, has_history, user_greeted), []
 
     async def respond(
         self,
@@ -627,6 +646,10 @@ class ConversationAgent:
             messages.append(h)
 
         has_history = len(history) > 0
+        last_user_msg = next(
+            (m["content"] for m in reversed(history) if m["role"] == "user"), ""
+        )
+        user_greeted = _is_pure_greeting(last_user_msg)
         try:
             resp = await get_provider().complete(
                 messages=messages,
@@ -634,7 +657,7 @@ class ConversationAgent:
                 max_tokens=500,
             )
             reply = resp.text or instrucao
-            return await _sanitize_response(reply, has_history)
+            return await _sanitize_response(reply, has_history, user_greeted)
         except Exception as e:
             logger.error("Erro no speak: %s", e)
             return instrucao
