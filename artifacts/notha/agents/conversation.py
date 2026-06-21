@@ -11,42 +11,51 @@ NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
 import json
 import logging
 import os
-import re
 from openai import AsyncOpenAI
 from config import OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
 from tools.builtin import ALL_BUILTIN_TOOLS
 
 logger = logging.getLogger("notha.agent.conversation")
 
-_GREETING_PATTERN = re.compile(
-    r"^(oi|olá|ola|ei|hey|opa|eai|e aí|bom dia|boa tarde|boa noite)"
-    r"[\s,!.]*"
-    r"(?:[A-ZÀ-Ú][a-zà-ú]+[\s,!.]*)?",
-    re.IGNORECASE,
+_SANITIZE_PROMPT = (
+    "Você é um revisor de mensagens de WhatsApp. "
+    "Analise a mensagem abaixo e verifique se ela começa com uma saudação "
+    "(exemplos: 'Oi!', 'Olá!', 'Ei!', 'Opa!', 'Salve!', 'E aí!', 'Hey!', 'Bom dia!', "
+    "'Boa tarde!', 'Boa noite!', 'Oi Jed!', 'Olá Maria!', ou qualquer variação em qualquer idioma ou gíria). "
+    "Se começar com saudação: remova apenas a saudação e retorne o restante da mensagem, "
+    "com a primeira letra maiúscula. "
+    "Se NÃO começar com saudação: retorne a mensagem exatamente como está, sem nenhuma alteração. "
+    "Retorne SOMENTE a mensagem final, sem explicações."
 )
 
 
-def _strip_greeting(text: str, has_history: bool) -> str:
-    """Remove saudação do início da resposta quando já há histórico de conversa.
+async def _sanitize_response(client: AsyncOpenAI, text: str, has_history: bool) -> str:
+    """Usa o LLM para detectar e remover saudações do início da resposta.
 
-    O LLM eventualmente ignora as instruções do system prompt e abre respostas
-    com "Oi!", "Olá!" etc. no meio de conversas em andamento. Esta função
-    garante deterministicamente que isso nunca chegue ao usuário.
+    Chamada leve (temperatura 0, poucos tokens) — só executa quando há histórico,
+    garantindo que nenhuma saudação chegue ao usuário no meio de uma conversa,
+    independente de idioma, gíria ou variação cultural.
     """
     if not has_history or not text:
         return text
 
-    match = _GREETING_PATTERN.match(text)
-    if not match:
+    try:
+        resp = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": _SANITIZE_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.0,
+            max_tokens=600,
+        )
+        sanitized = resp.choices[0].message.content or text
+        if sanitized != text:
+            logger.warning("Saudação removida pelo revisor: %r → %r", text[:50], sanitized[:50])
+        return sanitized
+    except Exception as e:
+        logger.error("Erro no revisor de saudação: %s", e)
         return text
-
-    cleaned = text[match.end():].lstrip(" ,!.\n")
-    if cleaned:
-        cleaned = cleaned[0].upper() + cleaned[1:]
-        logger.warning("Saudação removida da resposta: %r → %r", text[:40], cleaned[:40])
-        return cleaned
-
-    return text
 
 SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos físicos 100% pelo WhatsApp.
 
@@ -552,7 +561,7 @@ class ConversationAgent:
                 max_tokens=500,
             )
             reply = resp.choices[0].message.content or "Feito!"
-            return _strip_greeting(reply, has_history)
+            return await _sanitize_response(self._get_client(), reply, has_history)
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
@@ -589,7 +598,7 @@ class ConversationAgent:
             return "Tive um problema técnico agora. Me manda de novo em instantes!", []
 
         reply = resp.choices[0].message.content or "Tive um problema técnico."
-        return _strip_greeting(reply, has_history), []
+        return await _sanitize_response(self._get_client(), reply, has_history), []
 
     async def respond(
         self,
