@@ -27,6 +27,33 @@ class RestrictionRepository:
         )
         return [dict(r) for r in rows]
 
+    async def list_active_for_llm(self) -> list[dict]:
+        """Retorna todas as restrições ativas em formato compacto para avaliação semântica pelo LLM."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, category, description, reason, scope, state_code, municipality
+            FROM restricted_items
+            WHERE is_active = TRUE
+            ORDER BY category
+            """
+        )
+        return [dict(r) for r in rows]
+
+    async def fetch_by_ids(self, ids: list[int]) -> list[dict]:
+        """Busca restrições específicas por ID — usado após o LLM identificar os matches."""
+        if not ids:
+            return []
+        rows = await self._db.fetch_all(
+            """
+            SELECT id, category, description, reason, scope, state_code, municipality
+            FROM restricted_items
+            WHERE id = ANY($1::int[]) AND is_active = TRUE
+            ORDER BY category
+            """,
+            ids,
+        )
+        return [dict(r) for r in rows]
+
     async def list_all(self) -> list[dict]:
         """List all restriction records (admin use)."""
         rows = await self._db.fetch_all(
