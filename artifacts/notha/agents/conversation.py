@@ -13,7 +13,7 @@ import logging
 import re
 from llm import get_provider
 from tools.builtin import ALL_BUILTIN_TOOLS
-from guardrail import validar_resposta
+from guardrail import validate_reply
 
 logger = logging.getLogger("notha.agent.conversation")
 
@@ -63,10 +63,10 @@ async def _sanitize_response(text: str, has_history: bool, user_greeted: bool = 
         )
         sanitized = resp.text or text
         if sanitized != text:
-            logger.warning("Saudação removida pelo revisor: %r → %r", text[:50], sanitized[:50])
+            logger.warning("Greeting removed by sanitizer: %r → %r", text[:50], sanitized[:50])
         return sanitized
     except Exception as e:
-        logger.error("Erro no revisor de saudação: %s", e)
+        logger.error("Error in greeting sanitizer: %s", e)
         return text
 
 SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos físicos 100% pelo WhatsApp.
@@ -645,7 +645,7 @@ class ConversationAgent:
             )
             reply = resp.text or "Feito!"
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
-            return await validar_resposta(
+            return await validate_reply(
                 sanitized, history_for_guardrail, contexto, last_user_msg
             )
         except Exception as e:
@@ -682,7 +682,7 @@ class ConversationAgent:
         reply = resp.text or "Tive um problema técnico."
         sanitized = await _sanitize_response(reply, has_history, user_greeted)
         history_for_guardrail = list(history) + [{"role": "user", "content": user_message}]
-        validated = await validar_resposta(sanitized, history_for_guardrail, contexto, user_message)
+        validated = await validate_reply(sanitized, history_for_guardrail, contexto, user_message)
         return validated, []
 
     async def respond(
@@ -757,7 +757,7 @@ class ConversationAgent:
             )
             reply = resp.text or instrucao
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
-            return await validar_resposta(sanitized, history, contexto, last_user_msg)
+            return await validate_reply(sanitized, history, contexto, last_user_msg)
         except Exception as e:
             logger.error("Erro no speak: %s", e)
             return instrucao

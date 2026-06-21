@@ -2,7 +2,7 @@ import json
 import asyncpg
 from datetime import datetime, timedelta
 from db.connection import DB
-from config import TIMEOUT_RODADA_MINUTOS, EXPIRACAO_TOTAL_HORAS
+from config import ROUND_TIMEOUT_MINUTES, TOTAL_EXPIRATION_HOURS
 
 
 class NegotiationRepository:
@@ -31,8 +31,8 @@ class NegotiationRepository:
             modo,
             json.dumps(limite_comprador) if limite_comprador else None,
             json.dumps(limite_vendedor) if limite_vendedor else None,
-            now + timedelta(minutes=TIMEOUT_RODADA_MINUTOS),
-            now + timedelta(hours=EXPIRACAO_TOTAL_HORAS),
+            now + timedelta(minutes=ROUND_TIMEOUT_MINUTES),
+            now + timedelta(hours=TOTAL_EXPIRATION_HOURS),
         )
 
     async def find_by_id(self, negotiation_id: int) -> asyncpg.Record | None:
@@ -59,7 +59,7 @@ class NegotiationRepository:
             negotiation_id,
         )
 
-    async def update_offer(self, negotiation_id: int, preco: float, status: str | None = None) -> None:
+    async def update_offer(self, negotiation_id: int, price: float, status: str | None = None) -> None:
         if status:
             await self._db.execute(
                 """
@@ -70,15 +70,15 @@ class NegotiationRepository:
                     responder_until = $3
                 WHERE id = $4
                 """,
-                preco,
+                price,
                 status,
-                datetime.utcnow() + timedelta(minutes=TIMEOUT_RODADA_MINUTOS),
+                datetime.utcnow() + timedelta(minutes=ROUND_TIMEOUT_MINUTES),
                 negotiation_id,
             )
         else:
             await self._db.execute(
                 "UPDATE negotiations SET preco_atual_proposto = $1 WHERE id = $2",
-                preco,
+                price,
                 negotiation_id,
             )
 
@@ -102,9 +102,9 @@ class NegotiationRepository:
     async def add_offer(
         self,
         negotiation_id: int,
-        autor: str,
-        valor_proposto: float,
-        contexto_extra: str | None = None,
+        author: str,
+        proposed_value: float,
+        extra_context: str | None = None,
     ) -> asyncpg.Record:
         return await self._db.fetch_one(
             """
@@ -113,9 +113,9 @@ class NegotiationRepository:
             RETURNING *
             """,
             negotiation_id,
-            autor,
-            valor_proposto,
-            contexto_extra,
+            author,
+            proposed_value,
+            extra_context,
         )
 
     async def get_offers(self, negotiation_id: int) -> list[asyncpg.Record]:
@@ -127,10 +127,10 @@ class NegotiationRepository:
     async def add_proxy_round(
         self,
         negotiation_id: int,
-        rodada: int,
-        valor_proposto: float,
-        argumento_vendedor: str | None = None,
-        argumento_comprador: str | None = None,
+        round_num: int,
+        proposed_value: float,
+        seller_argument: str | None = None,
+        buyer_argument: str | None = None,
     ) -> asyncpg.Record:
         return await self._db.fetch_one(
             """
@@ -140,10 +140,10 @@ class NegotiationRepository:
             RETURNING *
             """,
             negotiation_id,
-            rodada,
-            valor_proposto,
-            argumento_vendedor,
-            argumento_comprador,
+            round_num,
+            proposed_value,
+            seller_argument,
+            buyer_argument,
         )
 
     async def confirm_proxy_round(

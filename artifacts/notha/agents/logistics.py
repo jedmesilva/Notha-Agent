@@ -1,11 +1,11 @@
 """
-Logistics/Delivery Agent — decide e coordena a modalidade de entrega após o acordo
-ser confirmado por ambas as partes e antes da liberação do valor retido.
+Logistics/Delivery Agent — decides and coordinates the delivery mode after the deal
+is confirmed by both parties and before releasing the held funds.
 
-Fluxo:
-  1. Pergunta ao comprador: retirar ou entrega NOTHA?
-  2. Se retirada: solicita data/horário, cria agendamento, notifica vendedor.
-  3. Se entrega: aciona Delivery Proxy para encontrar e negociar com entregador.
+Flow:
+  1. Asks the buyer: self-pickup or NOTHA delivery?
+  2. If pickup: requests date/time, creates schedule, notifies seller.
+  3. If delivery: activates Delivery Proxy to find and negotiate with a courier.
 """
 import logging
 from db.connection import DB
@@ -31,7 +31,7 @@ class LogisticsAgent:
         prazo_confirmacao,
         entregador_id: int | None = None,
     ):
-        """Registra agendamento de retirada."""
+        """Registers a pickup schedule."""
         delivery = await self._delivery_repo.create(
             negotiation_id=negotiation_id,
             modalidade="retirada",
@@ -40,54 +40,54 @@ class LogisticsAgent:
             prazo_confirmacao=prazo_confirmacao,
             entregador_id=entregador_id,
         )
-        logger.info(f"Agendamento de retirada criado: delivery_id={delivery['id']}")
+        logger.info(f"Pickup schedule created: delivery_id={delivery['id']}")
         return delivery
 
     async def find_and_negotiate_courier(
         self,
         negotiation_id: int,
-        origem: str,
-        destino: str,
-        maximo_entrega: float,
-        couriers_disponiveis: list[dict],
+        origin: str,
+        destination: str,
+        max_delivery: float,
+        available_couriers: list[dict],
     ) -> dict | None:
         """
-        Tenta negociar com entregadores disponíveis na região.
-        Retorna o entregador e valor acordado, ou None se não houver acordo.
+        Attempts to negotiate with available couriers in the area.
+        Returns the courier and agreed value, or None if no deal is reached.
         """
-        for courier in couriers_disponiveis:
-            historico = []
-            oferta = courier.get("valor_minimo", maximo_entrega * 1.2)
+        for courier in available_couriers:
+            history = []
+            offer = courier.get("valor_minimo", max_delivery * 1.2)
 
-            for rodada in range(MAX_DELIVERY_ROUNDS):
-                resultado = await self._delivery_proxy.negociar(
-                    origem=origem,
-                    destino=destino,
-                    maximo_entrega=maximo_entrega,
-                    oferta_entregador=oferta,
-                    historico=historico,
+            for round_num in range(MAX_DELIVERY_ROUNDS):
+                result = await self._delivery_proxy.negotiate(
+                    origin=origin,
+                    destination=destination,
+                    max_delivery=max_delivery,
+                    courier_offer=offer,
+                    history=history,
                 )
-                historico.append({"rodada": rodada + 1, "oferta": oferta, "resposta": resultado.decisao})
+                history.append({"rodada": round_num + 1, "oferta": offer, "resposta": result.decision})
 
-                if resultado.decisao == "aceitar" and resultado.valor <= maximo_entrega:
-                    logger.info(f"Entregador {courier['user_id']} aceito por R${resultado.valor:.2f}")
+                if result.decision == "aceitar" and result.value <= max_delivery:
+                    logger.info(f"Courier {courier['user_id']} accepted for R${result.value:.2f}")
                     return {
                         "user_id": courier["user_id"],
                         "chave_pix": courier["chave_pix"],
-                        "valor_negociado": resultado.valor,
-                        "argumento_final": resultado.argumento,
+                        "valor_negociado": result.value,
+                        "argumento_final": result.argument,
                     }
 
-                if resultado.decisao == "recusar":
+                if result.decision == "recusar":
                     break
 
-                oferta = resultado.valor
+                offer = result.value
 
-        logger.warning(f"Nenhum entregador encontrado para negotiation_id={negotiation_id}")
+        logger.warning(f"No courier found for negotiation_id={negotiation_id}")
         return None
 
     async def confirm_seller_delivery(self, negotiation_id: int) -> bool:
-        """Registra confirmação do vendedor. Retorna True se confirmação mútua ocorreu."""
+        """Records the seller's confirmation. Returns True if mutual confirmation occurred."""
         delivery = await self._delivery_repo.find_by_negotiation(negotiation_id)
         if not delivery:
             return False
@@ -95,7 +95,7 @@ class LogisticsAgent:
         return confirmed is not None
 
     async def confirm_buyer_receipt(self, negotiation_id: int) -> bool:
-        """Registra confirmação do comprador. Retorna True se confirmação mútua ocorreu."""
+        """Records the buyer's confirmation. Returns True if mutual confirmation occurred."""
         delivery = await self._delivery_repo.find_by_negotiation(negotiation_id)
         if not delivery:
             return False

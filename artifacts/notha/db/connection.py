@@ -10,7 +10,7 @@ _pool: asyncpg.Pool | None = None
 async def init_pool() -> None:
     global _pool
     if not DATABASE_URL:
-        logger.warning("DATABASE_URL não configurada — operações de banco indisponíveis.")
+        logger.warning("DATABASE_URL not configured — database operations unavailable.")
         return
     _pool = await asyncpg.create_pool(
         DATABASE_URL,
@@ -18,14 +18,14 @@ async def init_pool() -> None:
         max_size=10,
         command_timeout=30,
     )
-    logger.info("Pool de conexões PostgreSQL inicializado.")
+    logger.info("PostgreSQL connection pool initialized.")
 
 
 async def close_pool() -> None:
     global _pool
     if _pool:
         await _pool.close()
-        logger.info("Pool de conexões PostgreSQL encerrado.")
+        logger.info("PostgreSQL connection pool closed.")
 
 
 def get_pool() -> asyncpg.Pool | None:
@@ -33,7 +33,7 @@ def get_pool() -> asyncpg.Pool | None:
 
 
 class DB:
-    """Wrapper fino sobre asyncpg para facilitar fetch/execute."""
+    """Thin wrapper over asyncpg to simplify fetch/execute calls."""
 
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool

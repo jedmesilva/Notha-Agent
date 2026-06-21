@@ -32,11 +32,11 @@ async def lifespan(app: FastAPI):
 
     await start_all_jobs()
 
-    logger.info("NOTHA iniciado e pronto para receber mensagens do WhatsApp.")
+    logger.info("NOTHA started and ready to receive WhatsApp messages.")
     yield
 
     await close_pool()
-    logger.info("NOTHA encerrado.")
+    logger.info("NOTHA shut down.")
 
 
 app = FastAPI(title="NOTHA", version="2.0.0", lifespan=lifespan)
@@ -48,15 +48,15 @@ async def process_message(phone: str, text: str) -> None:
         try:
             await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
         except Exception as e:
-            logger.error(f"Erro ao enviar reset para {phone}: {e}")
+            logger.error(f"Error sending reset to {phone}: {e}")
         return
 
     try:
         reply = await orchestrator.handle_message(phone, text, send_fn=send_message)
         await send_message(phone, reply)
-        logger.info(f"Resposta enviada para {phone}.")
+        logger.info(f"Reply sent to {phone}.")
     except Exception as e:
-        logger.error(f"Erro ao processar mensagem de {phone}: {e}")
+        logger.error(f"Error processing message from {phone}: {e}")
         try:
             await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
         except Exception:
@@ -64,7 +64,7 @@ async def process_message(phone: str, text: str) -> None:
 
 
 async def process_audio_message(phone: str, media_id: str, mime_type: str) -> None:
-    """Baixa o áudio do WhatsApp, transcreve via Whisper e processa como texto."""
+    """Downloads audio from WhatsApp, transcribes via Whisper and processes as text."""
     try:
         await send_message(phone, "🎙️ Recebi seu áudio, transcrevendo...")
     except Exception:
@@ -73,7 +73,7 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
     try:
         audio_bytes, detected_mime = await download_media_bytes(media_id)
         if not audio_bytes:
-            logger.error(f"Falha ao baixar áudio de {phone} (media_id={media_id})")
+            logger.error(f"Failed to download audio from {phone} (media_id={media_id})")
             await send_message(phone, "Não consegui processar seu áudio. Pode tentar enviar como texto?")
             return
 
@@ -81,18 +81,18 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
         transcribed = await transcribe_audio(audio_bytes, effective_mime)
 
         if not transcribed:
-            logger.warning(f"Transcrição vazia para áudio de {phone}")
+            logger.warning(f"Empty transcription for audio from {phone}")
             await send_message(phone, "Não consegui entender o áudio. Pode tentar enviar como texto?")
             return
 
-        logger.info(f"Áudio transcrito de {phone}: {transcribed[:80]}...")
+        logger.info(f"Audio transcribed from {phone}: {transcribed[:80]}...")
 
         reply = await orchestrator.handle_message(phone, transcribed, send_fn=send_message)
         await send_message(phone, reply)
-        logger.info(f"Resposta ao áudio enviada para {phone}.")
+        logger.info(f"Audio reply sent to {phone}.")
 
     except Exception as e:
-        logger.error(f"Erro ao processar áudio de {phone}: {e}")
+        logger.error(f"Error processing audio from {phone}: {e}")
         try:
             await send_message(phone, "Ocorreu um erro ao processar seu áudio. Tente enviar como texto.")
         except Exception:
@@ -101,11 +101,11 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
 
 async def process_media(phone: str, media_id: str, mime_type: str, caption: str) -> None:
     """
-    Processa imagem/documento recebido.
+    Routes received image/document.
 
-    Prioridade:
-    1. Se há fluxo de cadastro de produto ativo na etapa 'fotos' → rota para listing flow
-    2. Caso contrário → trata como documento de identidade
+    Priority:
+    1. If there is an active product listing flow at the 'fotos' step → routes to listing flow
+    2. Otherwise → treats as identity document
     """
     try:
         reply = await orchestrator.handle_media(
@@ -116,9 +116,9 @@ async def process_media(phone: str, media_id: str, mime_type: str, caption: str)
         )
         if reply:
             await send_message(phone, reply)
-        logger.info(f"Mídia processada para {phone}.")
+        logger.info(f"Media processed for {phone}.")
     except Exception as e:
-        logger.error(f"Erro ao processar mídia de {phone}: {e}")
+        logger.error(f"Error processing media from {phone}: {e}")
         try:
             await send_message(
                 phone,
@@ -136,10 +136,10 @@ async def verify_webhook(request: Request) -> PlainTextResponse:
     challenge = params.get("hub.challenge")
 
     if mode == "subscribe" and token == os.environ.get("WHATSAPP_VERIFY_TOKEN", ""):
-        logger.info("Webhook verificado com sucesso.")
+        logger.info("Webhook verified successfully.")
         return PlainTextResponse(content=challenge)
 
-    logger.warning("Falha na verificação do webhook.")
+    logger.warning("Webhook verification failed.")
     raise HTTPException(status_code=403, detail="Token de verificação inválido")
 
 
@@ -155,7 +155,7 @@ async def receive_message(request: Request) -> Response:
         msg_id = msg.get("id", "")
         from engine.orchestrator import PROCESSED_MESSAGE_IDS, MAX_PROCESSED_IDS
         if msg_id and msg_id in PROCESSED_MESSAGE_IDS:
-            logger.info(f"Mensagem duplicada ignorada: {msg_id}")
+            logger.info(f"Duplicate message ignored: {msg_id}")
             continue
         if msg_id:
             PROCESSED_MESSAGE_IDS.add(msg_id)
@@ -170,14 +170,14 @@ async def receive_message(request: Request) -> Response:
 
         if msg_type == "text":
             text = msg["text"].strip()
-            logger.info(f"Mensagem de {phone}: {text[:60]}...")
+            logger.info(f"Message from {phone}: {text[:60]}...")
             asyncio.create_task(process_message(phone, text))
 
         elif msg_type == "audio":
             media_id = msg.get("media_id")
             if media_id:
                 mime = msg.get("media_mime_type", "audio/ogg")
-                logger.info(f"Áudio recebido de {phone}: media_id={media_id} mime={mime}")
+                logger.info(f"Audio received from {phone}: media_id={media_id} mime={mime}")
                 asyncio.create_task(
                     process_audio_message(
                         phone=phone,
@@ -189,7 +189,7 @@ async def receive_message(request: Request) -> Response:
         elif msg_type in ("image", "document"):
             media_id = msg.get("media_id")
             if media_id:
-                logger.info(f"Mídia recebida de {phone}: type={msg_type} media_id={media_id}")
+                logger.info(f"Media received from {phone}: type={msg_type} media_id={media_id}")
                 asyncio.create_task(
                     process_media(
                         phone=phone,
@@ -204,7 +204,7 @@ async def receive_message(request: Request) -> Response:
 
 @app.post("/webhook/asaas")
 async def asaas_webhook(request: Request) -> Response:
-    """Webhook do Asaas para confirmação de pagamentos e transferências."""
+    """Asaas webhook for payment and transfer confirmations."""
     try:
         body = await request.json()
     except Exception:
@@ -212,7 +212,7 @@ async def asaas_webhook(request: Request) -> Response:
 
     event = body.get("event", "")
     payment = body.get("payment", {})
-    logger.info(f"Evento Asaas recebido: {event} — charge_id={payment.get('id')}")
+    logger.info(f"Asaas event received: {event} — charge_id={payment.get('id')}")
 
     if event in ("PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"):
         asyncio.create_task(_handle_payment_confirmed(payment))
@@ -221,7 +221,7 @@ async def asaas_webhook(request: Request) -> Response:
 
 
 async def _handle_payment_confirmed(payment: dict) -> None:
-    """Marca transação como paga e notifica partes."""
+    """Marks transaction as paid and notifies parties."""
     from db.connection import get_db
     from db.repositories import TransactionRepository, NegotiationRepository
     db = get_db()
@@ -239,12 +239,12 @@ async def _handle_payment_confirmed(payment: dict) -> None:
         "SELECT * FROM transactions WHERE asaas_charge_id = $1", charge_id
     )
     if not row:
-        logger.warning(f"Cobrança {charge_id} não encontrada no banco.")
+        logger.warning(f"Charge {charge_id} not found in database.")
         return
 
     await tx_repo.set_paid(row["id"])
     await neg_repo.set_status(row["negotiation_id"], "paga")
-    logger.info(f"Pagamento confirmado: transaction_id={row['id']}, negotiation_id={row['negotiation_id']}")
+    logger.info(f"Payment confirmed: transaction_id={row['id']}, negotiation_id={row['negotiation_id']}")
 
 
 class TestMessage(BaseModel):
@@ -254,7 +254,7 @@ class TestMessage(BaseModel):
 
 @app.post("/test")
 async def test_chat(body: TestMessage) -> dict:
-    """Testa o orquestrador diretamente sem enviar mensagem pelo WhatsApp."""
+    """Tests the orchestrator directly without sending a WhatsApp message."""
     if body.message.lower() in ("/reset", "/limpar", "/clear"):
         await orchestrator.reset(body.phone)
         return {"reply": "Conversa reiniciada!"}
@@ -290,7 +290,7 @@ async def health() -> dict:
 
 @app.get("/admin/listings")
 async def list_listings(status: str = "disponivel", limit: int = 20) -> dict:
-    """Endpoint admin: lista produtos por status."""
+    """Admin endpoint: lists products by status."""
     from db.connection import get_db
     from db.repositories import ListingRepository
     db = get_db()
@@ -303,7 +303,7 @@ async def list_listings(status: str = "disponivel", limit: int = 20) -> dict:
 
 @app.get("/admin/conciliacao")
 async def conciliacao() -> dict:
-    """Endpoint admin: saldo retido total para conciliação financeira."""
+    """Admin endpoint: total retained balance for financial reconciliation."""
     from db.connection import get_db
     from db.repositories import TransactionRepository
     db = get_db()
@@ -319,7 +319,7 @@ async def conciliacao() -> dict:
 
 @app.get("/admin/identidade/pendentes")
 async def identidade_pendentes(limit: int = 50) -> dict:
-    """Endpoint admin: lista documentos de identidade aguardando análise."""
+    """Admin endpoint: lists identity documents pending review."""
     from db.connection import get_db
     db = get_db()
     if not db:
@@ -343,7 +343,7 @@ async def identidade_pendentes(limit: int = 50) -> dict:
 
 @app.post("/admin/identidade/{doc_id}/aprovar")
 async def aprovar_documento(doc_id: int) -> dict:
-    """Endpoint admin: aprova um documento e marca o usuário como verificado."""
+    """Admin endpoint: approves a document and marks the user as verified."""
     from db.connection import get_db
     from db.repositories import UserRepository
     db = get_db()
@@ -367,7 +367,7 @@ async def aprovar_documento(doc_id: int) -> dict:
 
 @app.post("/admin/identidade/{doc_id}/rejeitar")
 async def rejeitar_documento(doc_id: int, motivo: str = "") -> dict:
-    """Endpoint admin: rejeita um documento e marca o usuário como rejeitado."""
+    """Admin endpoint: rejects a document and marks the user as rejected."""
     from db.connection import get_db
     from db.repositories import UserRepository
     db = get_db()

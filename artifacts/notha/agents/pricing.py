@@ -1,9 +1,9 @@
 """
-Pricing/Appraisal Agent — forma sugestão de preço e preço mínimo no cadastro do produto.
+Pricing/Appraisal Agent — suggests price and minimum price when listing a product.
 
-Roda UMA VEZ por listing, de forma assíncrona.
-Consulta: mercado externo (web search), histórico interno (SQL), avaliação visual (vision LLM).
-Saída estruturada: preco_sugerido, preco_minimo_sugerido, justificativa, confianca, fontes.
+Runs ONCE per listing, asynchronously.
+Consults: external market (web search), internal history (SQL), visual assessment (vision LLM).
+Structured output: preco_sugerido, preco_minimo_sugerido, justificativa, confianca, fontes.
 """
 import json
 import logging
@@ -83,57 +83,57 @@ class PricingAgent:
         preco_informado_vendedor: float | None = None,
         historico_similares: list[dict] | None = None,
     ) -> dict:
-        fontes_usadas = []
-        contexto_parts = [f"Descrição do produto: {descricao}"]
+        sources_used = []
+        context_parts = [f"Descrição do produto: {descricao}"]
 
         if categoria:
-            contexto_parts.append(f"Categoria: {categoria}")
+            context_parts.append(f"Categoria: {categoria}")
 
         if preco_informado_vendedor:
-            contexto_parts.append(f"Preço informado pelo vendedor: R${preco_informado_vendedor:.2f}")
+            context_parts.append(f"Preço informado pelo vendedor: R${preco_informado_vendedor:.2f}")
 
         if historico_similares:
-            fontes_usadas.append("historico_interno")
-            precos = [
+            sources_used.append("historico_interno")
+            prices = [
                 h.get("preco_final", h.get("preco_anunciado", 0))
                 for h in historico_similares
                 if h.get("preco_final") or h.get("preco_anunciado")
             ]
-            if precos:
-                media = sum(precos) / len(precos)
-                minimo = min(precos)
-                maximo = max(precos)
-                contexto_parts.append(
-                    f"Histórico de {len(precos)} vendas similares no NOTHA: "
-                    f"média R${media:.0f}, mínimo R${minimo:.0f}, máximo R${maximo:.0f}. "
-                    f"Valores: {[f'R${p:.0f}' for p in precos]}"
+            if prices:
+                avg = sum(prices) / len(prices)
+                minimum = min(prices)
+                maximum = max(prices)
+                context_parts.append(
+                    f"Histórico de {len(prices)} vendas similares no NOTHA: "
+                    f"média R${avg:.0f}, mínimo R${minimum:.0f}, máximo R${maximum:.0f}. "
+                    f"Valores: {[f'R${p:.0f}' for p in prices]}"
                 )
 
-        contexto_parts.append("Descrição textual analisada.")
-        fontes_usadas.append("descricao_textual")
+        context_parts.append("Descrição textual analisada.")
+        sources_used.append("descricao_textual")
 
         user_content = []
 
         if fotos:
-            # fotos deve ser lista de data URIs base64 (data:image/...;base64,...)
-            # URLs diretas do WhatsApp exigem Authorization header e não funcionam aqui
-            validas = [f for f in fotos[:3] if isinstance(f, str) and f.startswith("data:image/")]
-            if validas:
-                fontes_usadas.append("avaliacao_visual")
-                for data_uri in validas:
+            # fotos must be a list of base64 data URIs (data:image/...;base64,...)
+            # Direct WhatsApp URLs require Authorization header and won't work here
+            valid = [f for f in fotos[:3] if isinstance(f, str) and f.startswith("data:image/")]
+            if valid:
+                sources_used.append("avaliacao_visual")
+                for data_uri in valid:
                     user_content.append({
                         "type": "image_url",
                         "image_url": {"url": data_uri, "detail": "low"},
                     })
             elif fotos:
                 logger.warning(
-                    "pricing.appraise() recebeu fotos que não são data URIs base64 — ignoradas. "
-                    "Use download_media_as_base64() antes de chamar appraise()."
+                    "pricing.appraise() received photos that are not base64 data URIs — ignored. "
+                    "Use download_media_as_base64() before calling appraise()."
                 )
 
         user_content.append({
             "type": "text",
-            "text": "\n".join(contexto_parts) + "\n\nAvalie este produto e retorne o JSON de precificação.",
+            "text": "\n".join(context_parts) + "\n\nAvalie este produto e retorne o JSON de precificação.",
         })
 
         try:
@@ -148,7 +148,7 @@ class PricingAgent:
             )
             raw = resp.text or "{}"
             result = json.loads(raw)
-            result["fontes"] = list(set(result.get("fontes", []) + fontes_usadas))
+            result["fontes"] = list(set(result.get("fontes", []) + sources_used))
 
             if preco_informado_vendedor and result.get("preco_sugerido"):
                 diff_pct = abs(preco_informado_vendedor - result["preco_sugerido"]) / result["preco_sugerido"]
@@ -157,11 +157,11 @@ class PricingAgent:
             return result
 
         except Exception as e:
-            logger.error(f"Erro no PricingAgent.appraise: {e}")
-            fallback = preco_informado_vendedor or 0
+            logger.error(f"Error in PricingAgent.appraise: {e}")
+            fallback_price = preco_informado_vendedor or 0
             return {
-                "preco_sugerido": fallback,
-                "preco_minimo_sugerido": round(fallback * 0.80, 2),
+                "preco_sugerido": fallback_price,
+                "preco_minimo_sugerido": round(fallback_price * 0.80, 2),
                 "justificativa": "Avaliação automática indisponível. Usando referência informada pelo vendedor.",
                 "confianca": "baixa",
                 "fontes": ["descricao_textual"],
@@ -170,7 +170,7 @@ class PricingAgent:
             }
 
     async def web_search_price(self, query: str) -> str | None:
-        """Busca preço de mercado via web search (usa DDGS se disponível)."""
+        """Searches market price via web search (uses DDGS if available)."""
         try:
             from ddgs import DDGS
             with DDGS() as ddgs:
@@ -179,7 +179,7 @@ class PricingAgent:
                     snippets = [r.get("body", "") for r in results if r.get("body")]
                     return " | ".join(snippets[:4])
         except Exception as e:
-            logger.debug(f"Web search indisponível: {e}")
+            logger.debug(f"Web search unavailable: {e}")
         return None
 
     async def appraise_with_web_search(

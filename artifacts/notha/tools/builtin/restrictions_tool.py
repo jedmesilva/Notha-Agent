@@ -75,8 +75,8 @@ Se algum registro se aplica (liste apenas os IDs que realmente se aplicam):
 {{"restrito": true, "ids_aplicaveis": [1, 5], "justificativa": "<motivo conciso>"}}"""
 
 
-async def _chamar_llm_json(prompt: str, max_tokens: int = 300) -> dict:
-    """Chama o LLM em modo JSON e retorna dict. Falha silenciosa retorna {}."""
+async def _call_llm_json(prompt: str, max_tokens: int = 300) -> dict:
+    """Calls the LLM in JSON mode and returns a dict. Silent failure returns {}."""
     from llm import get_provider
     try:
         resp = await get_provider().complete(
@@ -87,7 +87,7 @@ async def _chamar_llm_json(prompt: str, max_tokens: int = 300) -> dict:
         )
         return json.loads(resp.text or "{}")
     except Exception as e:
-        logger.error("LLM erro em verificar_restricao: %s", e)
+        logger.error("LLM error in restriction check: %s", e)
         return {}
 
 
@@ -152,7 +152,7 @@ class RestrictionCheckTool(Tool):
                 loc_parts.append(f"state {estado}")
             localizacao_str = ", ".join(loc_parts) if loc_parts else "unknown"
 
-            resultado_termos = await _chamar_llm_json(
+            resultado_termos = await _call_llm_json(
                 _PROMPT_GERAR_TERMOS.format(
                     descricao=descricao_produto,
                     localizacao=localizacao_str,
@@ -192,7 +192,7 @@ class RestrictionCheckTool(Tool):
                 for r in encontrados
             )
 
-            resultado_julgamento = await _chamar_llm_json(
+            resultado_julgamento = await _call_llm_json(
                 _PROMPT_JULGAMENTO.format(
                     produto_usuario=descricao_produto,
                     produto_identificado=produto_identificado,

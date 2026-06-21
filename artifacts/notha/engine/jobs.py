@@ -1,12 +1,12 @@
 """
-Jobs periódicos do NOTHA.
+NOTHA periodic background jobs.
 
-- verificar_timeouts: rodadas de negociação expiradas (a cada 60s)
-- verificar_retiradas_vencidas: pickups não confirmados (a cada 5min)
-- verificar_estornos_automaticos: estorno automático pós-prazo (a cada 5min)
-- verificar_expiracoes_totais: negociações totalmente expiradas (a cada 5min)
+- check_round_timeouts: expired negotiation rounds (every 60s)
+- check_overdue_pickups: unconfirmed pickups (every 5min)
+- check_automatic_refunds: automatic refund after deadline (every 5min)
+- check_total_expirations: fully expired negotiations (every 5min)
 
-Todos rodam como asyncio tasks, sem Celery.
+All run as asyncio tasks, no Celery required.
 """
 import asyncio
 import logging
@@ -17,7 +17,7 @@ from db.repositories import (
     TransactionRepository, DeliveryRepository,
 )
 from asaas import AsaasClient
-from config import PRAZO_ESTORNO_POS_FALHA_DIAS
+from config import REFUND_DEADLINE_AFTER_FAILURE_DAYS
 
 logger = logging.getLogger("notha.jobs")
 
@@ -34,10 +34,10 @@ async def _notify(user_id: int, message: str) -> None:
         try:
             await _whatsapp_sender(str(user_id), message)
         except Exception as e:
-            logger.error(f"Falha ao notificar user_id={user_id}: {e}")
+            logger.error(f"Failed to notify user_id={user_id}: {e}")
 
 
-async def verificar_timeouts() -> None:
+async def check_round_timeouts() -> None:
     db = get_db()
     if not db:
         return
@@ -46,10 +46,10 @@ async def verificar_timeouts() -> None:
     listing_repo = ListingRepository(db)
 
     try:
-        vencidas = await neg_repo.find_timed_out()
-        for neg in vencidas:
+        timed_out = await neg_repo.find_timed_out()
+        for neg in timed_out:
             await neg_repo.set_status(neg["id"], "expirada_por_timeout")
-            logger.info(f"Negociação {neg['id']} expirada por timeout de rodada.")
+            logger.info(f"Negotiation {neg['id']} expired by round timeout.")
 
             await listing_repo.add_to_interest_queue(
                 listing_id=neg["listing_id"],
@@ -57,25 +57,25 @@ async def verificar_timeouts() -> None:
                 oferta_inicial=neg["preco_atual_proposto"],
             )
 
-            proximo = await listing_repo.next_in_queue(neg["listing_id"])
-            if proximo:
-                await listing_repo.remove_from_queue(proximo["id"])
+            next_in_queue = await listing_repo.next_in_queue(neg["listing_id"])
+            if next_in_queue:
+                await listing_repo.remove_from_queue(next_in_queue["id"])
                 from engine.negotiation import NegotiationEngine
                 engine = NegotiationEngine(db)
                 await neg_repo.create(
                     listing_id=neg["listing_id"],
-                    buyer_id=proximo["buyer_id"],
-                    limite_comprador={"maximo": proximo["oferta_inicial"], "ideal": proximo["oferta_inicial"]},
+                    buyer_id=next_in_queue["buyer_id"],
+                    limite_comprador={"maximo": next_in_queue["oferta_inicial"], "ideal": next_in_queue["oferta_inicial"]},
                 )
-                logger.info(f"Próximo da fila: buyer_id={proximo['buyer_id']} para listing={neg['listing_id']}")
+                logger.info(f"Next in queue: buyer_id={next_in_queue['buyer_id']} for listing={neg['listing_id']}")
             else:
                 await listing_repo.set_status(neg["listing_id"], "disponivel")
 
     except Exception as e:
-        logger.error(f"Erro no job verificar_timeouts: {e}")
+        logger.error(f"Error in check_round_timeouts: {e}")
 
 
-async def verificar_expiracoes_totais() -> None:
+async def check_total_expirations() -> None:
     db = get_db()
     if not db:
         return
@@ -84,18 +84,18 @@ async def verificar_expiracoes_totais() -> None:
     listing_repo = ListingRepository(db)
 
     try:
-        expiradas = await neg_repo.find_totally_expired()
-        for neg in expiradas:
-            fila = await listing_repo.get_queue_count(neg["listing_id"])
-            if fila == 0:
+        expired = await neg_repo.find_totally_expired()
+        for neg in expired:
+            queue_count = await listing_repo.get_queue_count(neg["listing_id"])
+            if queue_count == 0:
                 await neg_repo.set_status(neg["id"], "expirada")
                 await listing_repo.set_status(neg["listing_id"], "disponivel")
-                logger.info(f"Negociação {neg['id']} expirada totalmente. Listing devolvido ao catálogo.")
+                logger.info(f"Negotiation {neg['id']} fully expired. Listing returned to catalog.")
     except Exception as e:
-        logger.error(f"Erro no job verificar_expiracoes_totais: {e}")
+        logger.error(f"Error in check_total_expirations: {e}")
 
 
-async def verificar_retiradas_vencidas() -> None:
+async def check_overdue_pickups() -> None:
     db = get_db()
     if not db:
         return
@@ -106,12 +106,12 @@ async def verificar_retiradas_vencidas() -> None:
     tx_repo = TransactionRepository(db)
 
     try:
-        vencidas = await delivery_repo.find_overdue_pickups()
-        for retirada in vencidas:
-            await delivery_repo.relist(retirada["id"])
-            logger.info(f"Retirada {retirada['id']} não confirmada — iniciando tratamento pós-prazo.")
+        overdue = await delivery_repo.find_overdue_pickups()
+        for pickup in overdue:
+            await delivery_repo.relist(pickup["id"])
+            logger.info(f"Pickup {pickup['id']} unconfirmed — initiating post-deadline handling.")
 
-            neg = await neg_repo.find_by_id(retirada["negotiation_id"])
+            neg = await neg_repo.find_by_id(pickup["negotiation_id"])
             if not neg:
                 continue
 
@@ -119,19 +119,19 @@ async def verificar_retiradas_vencidas() -> None:
 
             tx = await tx_repo.find_by_negotiation(neg["id"])
             if tx:
-                prazo = datetime.utcnow() + timedelta(days=PRAZO_ESTORNO_POS_FALHA_DIAS)
+                deadline = datetime.utcnow() + timedelta(days=REFUND_DEADLINE_AFTER_FAILURE_DAYS)
                 await tx_repo.set_retention_status(
                     tx["id"],
                     "retido_aguardando_decisao_pos_falha",
-                    prazo_estorno_automatico=prazo,
+                    prazo_estorno_automatico=deadline,
                 )
-                logger.info(f"Transação {tx['id']} marcada para estorno automático em {PRAZO_ESTORNO_POS_FALHA_DIAS} dias.")
+                logger.info(f"Transaction {tx['id']} scheduled for automatic refund in {REFUND_DEADLINE_AFTER_FAILURE_DAYS} days.")
 
     except Exception as e:
-        logger.error(f"Erro no job verificar_retiradas_vencidas: {e}")
+        logger.error(f"Error in check_overdue_pickups: {e}")
 
 
-async def verificar_estornos_automaticos() -> None:
+async def check_automatic_refunds() -> None:
     db = get_db()
     if not db:
         return
@@ -140,20 +140,20 @@ async def verificar_estornos_automaticos() -> None:
     asaas = AsaasClient()
 
     try:
-        pendentes = await tx_repo.find_pending_refunds()
-        for tx in pendentes:
+        pending = await tx_repo.find_pending_refunds()
+        for tx in pending:
             try:
                 if tx["asaas_charge_id"]:
-                    await asaas.estornar(
-                        cobranca_id=tx["asaas_charge_id"],
+                    await asaas.refund(
+                        charge_id=tx["asaas_charge_id"],
                         idempotency_key=f"estorno-{tx['id']}",
                     )
                 await tx_repo.set_retention_status(tx["id"], "estornado_automaticamente")
-                logger.info(f"Estorno automático executado para transação {tx['id']}.")
+                logger.info(f"Automatic refund executed for transaction {tx['id']}.")
             except Exception as e:
-                logger.error(f"Falha no estorno automático tx={tx['id']}: {e}")
+                logger.error(f"Automatic refund failed tx={tx['id']}: {e}")
     except Exception as e:
-        logger.error(f"Erro no job verificar_estornos_automaticos: {e}")
+        logger.error(f"Error in check_automatic_refunds: {e}")
 
 
 async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
@@ -161,15 +161,15 @@ async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
         try:
             await coro_fn()
         except Exception as e:
-            logger.error(f"Job '{name}' falhou inesperadamente: {e}")
+            logger.error(f"Job '{name}' failed unexpectedly: {e}")
         await asyncio.sleep(interval_seconds)
 
 
 async def start_all_jobs() -> None:
-    """Inicia todos os jobs periódicos como asyncio tasks."""
-    logger.info("Iniciando jobs periódicos do NOTHA...")
-    asyncio.create_task(_run_job("verificar_timeouts", verificar_timeouts, 60))
-    asyncio.create_task(_run_job("verificar_expiracoes_totais", verificar_expiracoes_totais, 300))
-    asyncio.create_task(_run_job("verificar_retiradas_vencidas", verificar_retiradas_vencidas, 300))
-    asyncio.create_task(_run_job("verificar_estornos_automaticos", verificar_estornos_automaticos, 300))
-    logger.info("Jobs periódicos iniciados.")
+    """Starts all periodic jobs as asyncio tasks."""
+    logger.info("Starting NOTHA periodic jobs...")
+    asyncio.create_task(_run_job("check_round_timeouts", check_round_timeouts, 60))
+    asyncio.create_task(_run_job("check_total_expirations", check_total_expirations, 300))
+    asyncio.create_task(_run_job("check_overdue_pickups", check_overdue_pickups, 300))
+    asyncio.create_task(_run_job("check_automatic_refunds", check_automatic_refunds, 300))
+    logger.info("Periodic jobs started.")

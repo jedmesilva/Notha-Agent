@@ -8,7 +8,7 @@ GRAPH_API_URL = "https://graph.facebook.com/v21.0"
 
 
 async def get_media_url(media_id: str) -> str | None:
-    """Obtém a URL temporária de download de uma mídia do WhatsApp."""
+    """Fetches the temporary download URL for a WhatsApp media item."""
     token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
     if not token or not media_id:
         return None
@@ -21,19 +21,19 @@ async def get_media_url(media_id: str) -> str | None:
             if resp.status_code == 200:
                 return resp.json().get("url")
     except Exception as e:
-        logger.warning(f"Falha ao obter URL de mídia {media_id}: {e}")
+        logger.warning(f"Failed to get media URL for {media_id}: {e}")
     return None
 
 
 async def download_media_as_base64(media_id: str, mime_type: str = "image/jpeg") -> str | None:
     """
-    Baixa o binário de uma mídia do WhatsApp e retorna como data URI base64.
+    Downloads WhatsApp media binary and returns it as a base64 data URI.
 
-    As URLs de mídia do WhatsApp exigem Authorization header — não são acessíveis
-    diretamente pelo GPT-4o Vision. Por isso é necessário baixar aqui e repassar
-    como data:image/...;base64,<dados>.
+    WhatsApp media URLs require an Authorization header — they are not directly
+    accessible by GPT-4o Vision. The media must be downloaded here and forwarded
+    as data:image/...;base64,<data>.
 
-    Retorna: "data:<mime>;base64,<b64>" ou None em caso de falha.
+    Returns: "data:<mime>;base64,<b64>" or None on failure.
     """
     import base64
 
@@ -45,40 +45,40 @@ async def download_media_as_base64(media_id: str, mime_type: str = "image/jpeg")
 
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            # Passo 1: resolve a URL de download
+            # Step 1: resolve the download URL
             meta_resp = await client.get(
                 f"{GRAPH_API_URL}/{media_id}",
                 headers=headers,
             )
             if meta_resp.status_code != 200:
-                logger.warning(f"Falha ao obter metadata de mídia {media_id}: {meta_resp.status_code}")
+                logger.warning(f"Failed to get media metadata for {media_id}: {meta_resp.status_code}")
                 return None
 
             download_url = meta_resp.json().get("url")
             if not download_url:
                 return None
 
-            # Passo 2: baixa o binário com o mesmo token
+            # Step 2: download the binary with the same token
             dl_resp = await client.get(download_url, headers=headers)
             if dl_resp.status_code != 200:
-                logger.warning(f"Falha ao baixar mídia {media_id}: {dl_resp.status_code}")
+                logger.warning(f"Failed to download media {media_id}: {dl_resp.status_code}")
                 return None
 
-            # Usa o mime_type real se o servidor retornar
+            # Use the actual MIME type if the server returns one
             content_type = dl_resp.headers.get("content-type", mime_type).split(";")[0].strip()
             b64 = base64.b64encode(dl_resp.content).decode("utf-8")
             return f"data:{content_type};base64,{b64}"
 
     except Exception as e:
-        logger.warning(f"Falha ao baixar mídia {media_id} como base64: {e}")
+        logger.warning(f"Failed to download media {media_id} as base64: {e}")
         return None
 
 
 async def download_media_bytes(media_id: str) -> tuple[bytes, str] | tuple[None, None]:
-    """Baixa o binário de uma mídia do WhatsApp.
+    """Downloads WhatsApp media binary.
 
-    Retorna (bytes, mime_type) ou (None, None) em caso de falha.
-    Usado para áudios que serão enviados ao Whisper para transcrição.
+    Returns (bytes, mime_type) or (None, None) on failure.
+    Used for audio files sent to Whisper for transcription.
     """
     token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
     if not token or not media_id:
@@ -93,7 +93,7 @@ async def download_media_bytes(media_id: str) -> tuple[bytes, str] | tuple[None,
                 headers=headers,
             )
             if meta_resp.status_code != 200:
-                logger.warning(f"Falha ao obter metadata de mídia {media_id}: {meta_resp.status_code}")
+                logger.warning(f"Failed to get media metadata for {media_id}: {meta_resp.status_code}")
                 return None, None
 
             data = meta_resp.json()
@@ -104,14 +104,14 @@ async def download_media_bytes(media_id: str) -> tuple[bytes, str] | tuple[None,
 
             dl_resp = await client.get(download_url, headers=headers)
             if dl_resp.status_code != 200:
-                logger.warning(f"Falha ao baixar mídia {media_id}: {dl_resp.status_code}")
+                logger.warning(f"Failed to download media {media_id}: {dl_resp.status_code}")
                 return None, None
 
             content_type = dl_resp.headers.get("content-type", mime_type).split(";")[0].strip()
             return dl_resp.content, content_type
 
     except Exception as e:
-        logger.warning(f"Falha ao baixar bytes de mídia {media_id}: {e}")
+        logger.warning(f"Failed to download media bytes for {media_id}: {e}")
         return None, None
 
 
@@ -139,16 +139,16 @@ async def send_message(to: str, text: str) -> dict:
 
 
 def extract_messages(body: dict) -> list[dict]:
-    """Extrai mensagens de texto, áudio, imagem e documento do payload do webhook.
+    """Extracts text, audio, image and document messages from the webhook payload.
 
-    Campos de cada mensagem retornada:
-      from            — telefone do remetente
-      id              — message_id (para deduplicação)
+    Fields in each returned message:
+      from            — sender's phone number
+      id              — message_id (for deduplication)
       type            — "text" | "audio" | "image" | "document"
-      text            — corpo de texto ou legenda (str, pode ser vazio)
-      media_id        — ID da mídia no WhatsApp (None para texto)
-      media_mime_type — tipo MIME informado pelo WhatsApp (None para texto)
-      caption         — legenda enviada com a imagem/documento (None para texto/áudio)
+      text            — text body or caption (str, may be empty)
+      media_id        — WhatsApp media ID (None for text)
+      media_mime_type — MIME type reported by WhatsApp (None for text)
+      caption         — caption sent with image/document (None for text/audio)
     """
     messages = []
     try:

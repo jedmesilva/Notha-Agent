@@ -1,12 +1,12 @@
 """
-Asaas API Client — camada de integração financeira.
+Asaas API client — financial integration layer.
 
-Operações: criar cobrança Pix, transferir para chave Pix externa, estornar.
-Toda chamada é idempotente via idempotency_key.
-Retenção do valor é controlada pelo backend NOTHA — não usa subcontas ou escrow nativo.
+Operations: create Pix charge, transfer to external Pix key, refund.
+Every call is idempotent via idempotency_key.
+Value retention is controlled by the NOTHA backend — does not use sub-accounts or native escrow.
 
-Apenas a conta da MAISOR CAPITAL tem KYC no Asaas.
-Vendedor, comprador e entregador recebem via chave Pix de qualquer banco (zero onboarding).
+Only the MAISOR CAPITAL account has KYC in Asaas.
+Sellers, buyers and couriers receive via any bank's Pix key (zero onboarding required).
 """
 import logging
 import httpx
@@ -42,87 +42,87 @@ class AsaasClient:
     def _is_configured(self) -> bool:
         return bool(self._key)
 
-    async def criar_cobranca(
+    async def create_charge(
         self,
-        valor: float,
-        descricao: str,
-        cpf_pagador: str | None = None,
-        nome_pagador: str | None = None,
+        amount: float,
+        description: str,
+        payer_cpf: str | None = None,
+        payer_name: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict:
-        """Cria cobrança Pix para o comprador. Valor fica na conta da MAISOR CAPITAL."""
+        """Creates a Pix charge for the buyer. Amount is held in the MAISOR CAPITAL account."""
         if not self._is_configured():
-            logger.warning("Asaas não configurado — simulando criação de cobrança.")
+            logger.warning("Asaas not configured — simulating charge creation.")
             return {
                 "id": f"sim_{idempotency_key or 'charge'}",
                 "status": "PENDING",
                 "invoiceUrl": "https://asaas.com/simulado",
                 "pixQrCode": "simulado_qr_code",
-                "value": valor,
+                "value": amount,
             }
 
         payload = {
             "billingType": "PIX",
-            "value": valor,
-            "dueDate": _due_date_hoje(),
-            "description": descricao,
+            "value": amount,
+            "dueDate": _today_due_date(),
+            "description": description,
         }
-        if cpf_pagador:
-            payload["cpfCnpj"] = cpf_pagador
-        if nome_pagador:
-            payload["name"] = nome_pagador
+        if payer_cpf:
+            payload["cpfCnpj"] = payer_cpf
+        if payer_name:
+            payload["name"] = payer_name
 
         return await self._post("/payments", payload, idempotency_key)
 
-    async def consultar_cobranca(self, cobranca_id: str) -> dict:
-        """Retorna status atual de uma cobrança."""
+    async def get_charge(self, charge_id: str) -> dict:
+        """Returns the current status of a charge."""
         if not self._is_configured():
-            return {"id": cobranca_id, "status": "RECEIVED"}
-        return await self._get(f"/payments/{cobranca_id}")
+            return {"id": charge_id, "status": "RECEIVED"}
+        return await self._get(f"/payments/{charge_id}")
 
-    async def transferir_para_pix(
+    async def transfer_to_pix(
         self,
-        chave_pix: str,
-        valor: float,
-        descricao: str = "",
+        pix_key: str,
+        amount: float,
+        description: str = "",
         idempotency_key: str | None = None,
     ) -> dict:
         """
-        Transfere valor para chave Pix externa.
-        Liberação de pagamento ao vendedor/entregador — ocorre SOMENTE após confirmação mútua de entrega.
+        Transfers amount to an external Pix key.
+        Payment release to seller/courier — occurs ONLY after mutual delivery confirmation.
         """
         if not self._is_configured():
-            logger.warning(f"Asaas não configurado — simulando transferência de R${valor:.2f} para {chave_pix}.")
+            logger.warning(f"Asaas not configured — simulating transfer of R${amount:.2f} to {pix_key}.")
             return {
                 "id": f"sim_transfer_{idempotency_key or 'tx'}",
                 "status": "PENDING",
-                "value": valor,
-                "pixAddressKey": chave_pix,
+                "value": amount,
+                "pixAddressKey": pix_key,
             }
 
         payload = {
-            "value": valor,
+            "value": amount,
             "operationType": "PIX",
-            "pixAddressKey": chave_pix,
-            "description": descricao,
+            "pixAddressKey": pix_key,
+            "description": description,
         }
         return await self._post("/transfers", payload, idempotency_key)
 
-    async def estornar(self, cobranca_id: str, idempotency_key: str | None = None) -> dict:
-        """Estorna uma cobrança paga de volta para a origem do pagamento."""
+    async def refund(self, charge_id: str, idempotency_key: str | None = None) -> dict:
+        """Refunds a paid charge back to the original payment source."""
         if not self._is_configured():
-            logger.warning(f"Asaas não configurado — simulando estorno de {cobranca_id}.")
-            return {"id": cobranca_id, "status": "REFUNDED"}
-        return await self._post(f"/payments/{cobranca_id}/refund", {}, idempotency_key)
+            logger.warning(f"Asaas not configured — simulating refund of {charge_id}.")
+            return {"id": charge_id, "status": "REFUNDED"}
+        return await self._post(f"/payments/{charge_id}/refund", {}, idempotency_key)
 
-    async def consultar_chave_pix(self, chave_pix: str) -> dict | None:
-        """Consulta titular de uma chave Pix. Usado para validar chave antes de salvar."""
+    async def get_pix_key(self, pix_key: str) -> dict | None:
+        """Looks up the holder of a Pix key. Used to validate the key before saving."""
         if not self._is_configured():
-            logger.warning("Asaas não configurado — simulando consulta de chave Pix.")
-            return {"nome": "Titular Simulado", "chave": chave_pix}
+            logger.warning("Asaas not configured — simulating Pix key lookup.")
+            return {"nome": "Titular Simulado", "chave": pix_key}
 
         try:
-            result = await self._get(f"/pix/addressKeys/{chave_pix}")
+            result = await self._get(f"/pix/addressKeys/{pix_key}")
             return result
         except AsaasError as e:
             if e.status_code == 404:
@@ -156,6 +156,6 @@ class AsaasClient:
         return body
 
 
-def _due_date_hoje() -> str:
+def _today_due_date() -> str:
     from datetime import date
     return date.today().isoformat()

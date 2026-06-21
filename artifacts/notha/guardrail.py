@@ -1,26 +1,26 @@
 """
-Guardrail de saída — valida a resposta do agente antes de enviar ao usuário.
+Output guardrail — validates the agent's response before sending to the user.
 
-Fluxo:
-  1. Geração normal da resposta pelo agente
-  2. Guardrail analisa a resposta com contexto + histórico
-  3. Se aprovada → envia normalmente
-  4. Se reprovada → tenta corrigir (uma vez) com instrução específica
-  5. Se ainda reprovada → retorna fallback seguro genérico
+Flow:
+  1. Normal response generation by the agent
+  2. Guardrail analyses the response with context + history
+  3. If approved → sends normally
+  4. If rejected → attempts correction once with a specific instruction
+  5. If still rejected → returns a generic safe fallback
 
-Verifica:
-  - Coerência com a mensagem do usuário e o histórico recente
-  - Vazamento de dados sensíveis (preço mínimo do vendedor, limite do comprador)
-  - Termos proibidos (GPT, IA, algoritmo, OpenAI, Anthropic, Claude etc.)
-  - Valores monetários inventados sem chamada de ferramenta
-  - Quebra de outras regras inegociáveis do NOTHA
+Checks:
+  - Coherence with the user's message and recent history
+  - Sensitive data leakage (seller's minimum price, buyer's maximum limit)
+  - Forbidden terms (GPT, AI, algorithm, OpenAI, Anthropic, Claude, etc.)
+  - Monetary values invented without a tool call
+  - Other non-negotiable NOTHA rules
 """
 import json
 import logging
 
 logger = logging.getLogger("notha.guardrail")
 
-_FALLBACK_SEGURO = (
+_SAFE_FALLBACK = (
     "Desculpe, tive um problema ao formular minha resposta. "
     "Pode repetir o que você precisa?"
 )
@@ -30,16 +30,16 @@ _GUARDRAIL_PROMPT = """Você é um auditor de qualidade do NOTHA, sistema de com
 Analise a RESPOSTA GERADA e verifique se ela é adequada para enviar ao usuário.
 
 ━━━ CONTEXTO DO USUÁRIO ━━━
-{contexto}
+{context}
 
 ━━━ HISTÓRICO RECENTE (últimas mensagens) ━━━
-{historico}
+{history}
 
 ━━━ ÚLTIMA MENSAGEM DO USUÁRIO ━━━
-{ultima_mensagem}
+{last_message}
 
 ━━━ RESPOSTA GERADA PELO AGENTE ━━━
-{resposta}
+{reply}
 
 ━━━ CRITÉRIOS DE AVALIAÇÃO ━━━
 Reprove (aprovado: false) se qualquer condição abaixo for verdadeira:
@@ -69,26 +69,26 @@ Se reprovada:
 Categorias possíveis: incoerencia | vazamento_dados | termo_proibido | valor_inventado | promessa_nao_confirmada | sem_sentido | repeticao_desnecessaria
 """
 
-_CORRECAO_PROMPT = """A resposta que você gerou foi reprovada pelo sistema de qualidade.
+_CORRECTION_PROMPT = """A resposta que você gerou foi reprovada pelo sistema de qualidade.
 
-Motivo da reprovação: {motivo} (categoria: {categoria})
+Motivo da reprovação: {reason} (categoria: {category})
 
 ━━━ CONTEXTO DO USUÁRIO ━━━
-{contexto}
+{context}
 
 ━━━ ÚLTIMA MENSAGEM DO USUÁRIO ━━━
-{ultima_mensagem}
+{last_message}
 
 ━━━ RESPOSTA REPROVADA ━━━
-{resposta_reprovada}
+{rejected_reply}
 
 Gere uma nova resposta corrigindo especificamente o problema apontado.
 Mantenha o tom adequado para WhatsApp. Seja conciso. Não mencione que houve reprovação.
 Retorne SOMENTE a nova resposta, sem explicações."""
 
 
-async def _chamar_llm_guardrail(messages: list[dict]) -> dict:
-    """Chama o LLM no modo JSON para avaliar a resposta."""
+async def _call_guardrail_llm(messages: list[dict]) -> dict:
+    """Calls the LLM in JSON mode to evaluate the response."""
     from llm import get_provider
     try:
         resp = await get_provider().complete(
@@ -99,12 +99,12 @@ async def _chamar_llm_guardrail(messages: list[dict]) -> dict:
         )
         return json.loads(resp.text or '{"aprovado": true}')
     except Exception as e:
-        logger.error("Erro no guardrail (LLM): %s", e)
+        logger.error("Guardrail LLM error: %s", e)
         return {"aprovado": True}
 
 
-async def _chamar_llm_correcao(messages: list[dict]) -> str:
-    """Pede ao LLM que corrija a resposta reprovada."""
+async def _call_correction_llm(messages: list[dict]) -> str:
+    """Asks the LLM to correct the rejected response."""
     from llm import get_provider
     try:
         resp = await get_provider().complete(
@@ -112,106 +112,106 @@ async def _chamar_llm_correcao(messages: list[dict]) -> str:
             temperature=0.4,
             max_tokens=400,
         )
-        return resp.text or _FALLBACK_SEGURO
+        return resp.text or _SAFE_FALLBACK
     except Exception as e:
-        logger.error("Erro na correção do guardrail (LLM): %s", e)
-        return _FALLBACK_SEGURO
+        logger.error("Guardrail correction LLM error: %s", e)
+        return _SAFE_FALLBACK
 
 
-def _formatar_historico(history: list[dict], max_mensagens: int = 10) -> str:
-    """Formata as últimas mensagens do histórico de forma legível."""
-    recentes = [m for m in history if m.get("role") in ("user", "assistant")][-max_mensagens:]
-    linhas = []
-    for m in recentes:
+def _format_history(history: list[dict], max_messages: int = 10) -> str:
+    """Formats the last N messages from the history in a readable form."""
+    recent = [m for m in history if m.get("role") in ("user", "assistant")][-max_messages:]
+    lines = []
+    for m in recent:
         role = "Usuário" if m["role"] == "user" else "NOTHA"
-        conteudo = m.get("content") or ""
-        if conteudo:
-            linhas.append(f"{role}: {conteudo[:300]}")
-    return "\n".join(linhas) if linhas else "(sem histórico anterior)"
+        content = m.get("content") or ""
+        if content:
+            lines.append(f"{role}: {content[:300]}")
+    return "\n".join(lines) if lines else "(sem histórico anterior)"
 
 
-def _ultima_mensagem_usuario(history: list[dict]) -> str:
-    """Extrai a última mensagem do usuário do histórico."""
+def _last_user_message(history: list[dict]) -> str:
+    """Extracts the last user message from the history."""
     for m in reversed(history):
         if m.get("role") == "user" and m.get("content"):
             return m["content"]
     return ""
 
 
-async def validar_resposta(
-    resposta: str,
+async def validate_reply(
+    reply: str,
     history: list[dict],
-    contexto: str,
+    context: str,
     user_message: str = "",
 ) -> str:
     """
-    Valida a resposta gerada antes de enviar ao usuário.
+    Validates the generated response before sending to the user.
 
-    Parâmetros:
-      resposta     — texto gerado pelo agente
-      history      — histórico completo da conversa (roles: user/assistant)
-      contexto     — string de contexto do usuário (do _build_context)
-      user_message — última mensagem do usuário (se não estiver no history)
+    Parameters:
+      reply        — text generated by the agent
+      history      — full conversation history (roles: user/assistant)
+      context      — user context string (from _build_context)
+      user_message — last user message (if not already in history)
 
-    Retorna a resposta original se aprovada, uma versão corrigida se possível,
-    ou um fallback seguro se o problema persistir.
+    Returns the original reply if approved, a corrected version if possible,
+    or a safe fallback if the problem persists.
     """
-    if not resposta or not resposta.strip():
-        logger.warning("Guardrail: resposta vazia recebida — usando fallback.")
-        return _FALLBACK_SEGURO
+    if not reply or not reply.strip():
+        logger.warning("Guardrail: empty reply received — using fallback.")
+        return _SAFE_FALLBACK
 
-    ultima = user_message or _ultima_mensagem_usuario(history)
-    historico_fmt = _formatar_historico(history)
+    last_msg = user_message or _last_user_message(history)
+    history_fmt = _format_history(history)
 
-    # ── Fase 1: Avaliação ────────────────────────────────────────────────────
-    prompt_avaliacao = _GUARDRAIL_PROMPT.format(
-        contexto=contexto or "sem contexto",
-        historico=historico_fmt,
-        ultima_mensagem=ultima or "(sem mensagem)",
-        resposta=resposta,
+    # ── Phase 1: Evaluation ──────────────────────────────────────────────────
+    evaluation_prompt = _GUARDRAIL_PROMPT.format(
+        context=context or "sem contexto",
+        history=history_fmt,
+        last_message=last_msg or "(sem mensagem)",
+        reply=reply,
     )
-    resultado = await _chamar_llm_guardrail([
-        {"role": "user", "content": prompt_avaliacao}
+    result = await _call_guardrail_llm([
+        {"role": "user", "content": evaluation_prompt}
     ])
 
-    if resultado.get("aprovado", True):
-        return resposta
+    if result.get("aprovado", True):
+        return reply
 
-    categoria = resultado.get("categoria", "desconhecido")
-    motivo = resultado.get("motivo", "sem motivo especificado")
-    logger.warning("Guardrail REPROVADO — categoria=%s | motivo=%s", categoria, motivo)
+    category = result.get("categoria", "desconhecido")
+    reason = result.get("motivo", "sem motivo especificado")
+    logger.warning("Guardrail REJECTED — category=%s | reason=%s", category, reason)
 
-    # ── Fase 2: Tentativa de correção ────────────────────────────────────────
-    prompt_correcao = _CORRECAO_PROMPT.format(
-        motivo=motivo,
-        categoria=categoria,
-        contexto=contexto or "sem contexto",
-        ultima_mensagem=ultima or "(sem mensagem)",
-        resposta_reprovada=resposta,
+    # ── Phase 2: Correction attempt ──────────────────────────────────────────
+    correction_prompt = _CORRECTION_PROMPT.format(
+        reason=reason,
+        category=category,
+        context=context or "sem contexto",
+        last_message=last_msg or "(sem mensagem)",
+        rejected_reply=reply,
     )
-    resposta_corrigida = await _chamar_llm_correcao([
-        {"role": "user", "content": prompt_correcao}
+    corrected_reply = await _call_correction_llm([
+        {"role": "user", "content": correction_prompt}
     ])
 
-    # ── Fase 3: Re-avaliação da resposta corrigida ───────────────────────────
-    prompt_re_avaliacao = _GUARDRAIL_PROMPT.format(
-        contexto=contexto or "sem contexto",
-        historico=historico_fmt,
-        ultima_mensagem=ultima or "(sem mensagem)",
-        resposta=resposta_corrigida,
+    # ── Phase 3: Re-evaluate the corrected reply ─────────────────────────────
+    re_evaluation_prompt = _GUARDRAIL_PROMPT.format(
+        context=context or "sem contexto",
+        history=history_fmt,
+        last_message=last_msg or "(sem mensagem)",
+        reply=corrected_reply,
     )
-    resultado_final = await _chamar_llm_guardrail([
-        {"role": "user", "content": prompt_re_avaliacao}
+    final_result = await _call_guardrail_llm([
+        {"role": "user", "content": re_evaluation_prompt}
     ])
 
-    if resultado_final.get("aprovado", True):
-        logger.info("Guardrail: resposta corrigida aprovada na segunda tentativa.")
-        return resposta_corrigida
+    if final_result.get("aprovado", True):
+        logger.info("Guardrail: corrected reply approved on second attempt.")
+        return corrected_reply
 
     logger.error(
-        "Guardrail: resposta corrigida também reprovada — usando fallback seguro. "
-        "categoria=%s | motivo=%s",
-        resultado_final.get("categoria"),
-        resultado_final.get("motivo"),
+        "Guardrail: corrected reply also rejected — using safe fallback. "
+        "category=%s | reason=%s",
+        final_result.get("categoria"),
+        final_result.get("motivo"),
     )
-    return _FALLBACK_SEGURO
+    return _SAFE_FALLBACK

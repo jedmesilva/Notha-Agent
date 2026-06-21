@@ -1,18 +1,18 @@
 """
-Inferência de fuso horário a partir de número de telefone e/ou cidade cadastrada.
+Timezone inference from phone number and/or registered city.
 
-Ordem de prioridade:
-  1. Cidade cadastrada no banco (mais precisa — resolve fusos dentro do mesmo país)
-  2. DDI + código de área (DDD no Brasil, area code nos EUA etc.)
-  3. DDI sozinho (fallback por país)
-  4. UTC (último recurso)
+Priority order:
+  1. City registered in the database (most accurate — resolves timezones within the same country)
+  2. Country code + area code (DDD in Brazil, area code in the US, etc.)
+  3. Country code alone (country-level fallback)
+  4. UTC (last resort)
 """
 
 # ---------------------------------------------------------------------------
-# 1. Cidade → timezone (cidades mais comuns globalmente)
+# 1. City → timezone (most common cities globally)
 # ---------------------------------------------------------------------------
 _CITY_TZ: dict[str, str] = {
-    # Brasil
+    # Brazil
     "são paulo": "America/Sao_Paulo", "sao paulo": "America/Sao_Paulo",
     "rio de janeiro": "America/Sao_Paulo", "rio": "America/Sao_Paulo",
     "belo horizonte": "America/Sao_Paulo", "bh": "America/Sao_Paulo",
@@ -43,9 +43,9 @@ _CITY_TZ: dict[str, str] = {
     "ponta delgada": "Atlantic/Azores",
     # Angola
     "luanda": "Africa/Luanda",
-    # Moçambique
+    # Mozambique
     "maputo": "Africa/Maputo",
-    # Cabo Verde
+    # Cape Verde
     "praia": "Atlantic/Cape_Verde",
     # USA
     "new york": "America/New_York", "nova york": "America/New_York",
@@ -76,18 +76,18 @@ _CITY_TZ: dict[str, str] = {
     "córdoba": "America/Argentina/Cordoba", "cordoba": "America/Argentina/Cordoba",
     # Chile
     "santiago": "America/Santiago",
-    # Colômbia
+    # Colombia
     "bogotá": "America/Bogota", "bogota": "America/Bogota",
     # Peru
     "lima": "America/Lima",
-    # México
+    # Mexico
     "cidade do méxico": "America/Mexico_City", "ciudad de mexico": "America/Mexico_City",
     "mexico city": "America/Mexico_City",
     "monterrey": "America/Monterrey",
     # UK
     "london": "Europe/London", "londres": "Europe/London",
     "manchester": "Europe/London", "birmingham": "Europe/London",
-    # Europa
+    # Europe
     "paris": "Europe/Paris",
     "berlin": "Europe/Berlin", "berlim": "Europe/Berlin",
     "madrid": "Europe/Madrid",
@@ -108,7 +108,7 @@ _CITY_TZ: dict[str, str] = {
     "moscou": "Europe/Moscow", "moscow": "Europe/Moscow",
     "kiev": "Europe/Kiev",
     "istambul": "Europe/Istanbul", "istanbul": "Europe/Istanbul",
-    # Oriente Médio
+    # Middle East
     "dubai": "Asia/Dubai",
     "abu dhabi": "Asia/Dubai",
     "riad": "Asia/Riyadh", "riyadh": "Asia/Riyadh",
@@ -117,7 +117,7 @@ _CITY_TZ: dict[str, str] = {
     "beirute": "Asia/Beirut", "beirut": "Asia/Beirut",
     "doha": "Asia/Qatar",
     "kuwait": "Asia/Kuwait",
-    # Ásia
+    # Asia
     "mumbai": "Asia/Kolkata", "nova delhi": "Asia/Kolkata", "new delhi": "Asia/Kolkata",
     "bangalore": "Asia/Kolkata", "kolkata": "Asia/Kolkata",
     "tóquio": "Asia/Tokyo", "tokyo": "Asia/Tokyo",
@@ -138,7 +138,7 @@ _CITY_TZ: dict[str, str] = {
     "brisbane": "Australia/Brisbane",
     "perth": "Australia/Perth",
     "auckland": "Pacific/Auckland",
-    # África
+    # Africa
     "johannesburgo": "Africa/Johannesburg", "johannesburg": "Africa/Johannesburg",
     "cape town": "Africa/Johannesburg", "cidade do cabo": "Africa/Johannesburg",
     "cairo": "Africa/Cairo",
@@ -149,10 +149,10 @@ _CITY_TZ: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Brasil: DDD → timezone
+# 2. Brazil: DDD → timezone
 # ---------------------------------------------------------------------------
 _BRAZIL_DDD_TZ: dict[str, str] = {
-    # Sudeste / Sul / Centro-Oeste (UTC-3, sem horário de verão desde 2019)
+    # Southeast / South / Central-West (UTC-3, no DST since 2019)
     **{d: "America/Sao_Paulo" for d in [
         "11", "12", "13", "14", "15", "16", "17", "18", "19",  # SP
         "21", "22", "24",                                        # RJ
@@ -165,7 +165,7 @@ _BRAZIL_DDD_TZ: dict[str, str] = {
         "71", "73", "74", "75", "77",                            # BA
         "79",                                                    # SE
     ]},
-    # Nordeste (UTC-3, sem horário de verão)
+    # Northeast (UTC-3, no DST)
     **{d: "America/Fortaleza" for d in [
         "81", "87",  # PE
         "82",        # AL
@@ -175,21 +175,21 @@ _BRAZIL_DDD_TZ: dict[str, str] = {
         "86", "89",  # PI
         "98", "99",  # MA
     ]},
-    # Norte
+    # North
     **{d: "America/Belem" for d in ["91", "93", "94", "96"]},   # PA + AP (UTC-3)
     **{d: "America/Manaus" for d in ["92", "97"]},               # AM (UTC-4)
     "69": "America/Porto_Velho",  # RO (UTC-4)
     "68": "America/Rio_Branco",   # AC (UTC-5)
     "95": "America/Boa_Vista",    # RR (UTC-4)
     "63": "America/Araguaina",    # TO (UTC-3)
-    # Centro-Oeste específicos
+    # Central-West specifics
     "65": "America/Cuiaba",       # MT (UTC-4)
     "66": "America/Cuiaba",       # MT interior
     "67": "America/Campo_Grande", # MS (UTC-4)
 }
 
 # ---------------------------------------------------------------------------
-# 3. USA: area code (3 dígitos) → timezone (principais)
+# 3. USA: area code (3 digits) → timezone (main ones)
 # ---------------------------------------------------------------------------
 _USA_AREA_TZ: dict[str, str] = {
     # Eastern
@@ -223,7 +223,7 @@ _USA_AREA_TZ: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# 4. DDI → timezone representativo por país
+# 4. Country code → representative timezone
 # ---------------------------------------------------------------------------
 _DDI_TZ: dict[str, str] = {
     "55": "America/Sao_Paulo",
@@ -303,15 +303,15 @@ _DDI_TZ: dict[str, str] = {
 
 def infer_timezone(phone: str, cidade: str | None = None) -> str:
     """
-    Infere o timezone IANA mais provável para um usuário.
+    Infers the most likely IANA timezone for a user.
 
-    Ordem de prioridade:
-      1. Cidade cadastrada no banco
-      2. DDI + código de área (DDD ou area code)
-      3. DDI sozinho
+    Priority order:
+      1. City registered in the database
+      2. Country code + area code (DDD or area code)
+      3. Country code alone
       4. UTC
     """
-    # 1. Cidade cadastrada — mais precisa
+    # 1. Registered city — most accurate
     if cidade:
         tz = _CITY_TZ.get(cidade.lower().strip())
         if tz:
@@ -322,39 +322,39 @@ def infer_timezone(phone: str, cidade: str | None = None) -> str:
 
     digits = "".join(c for c in phone if c.isdigit())
 
-    # 2. DDI de 4 dígitos (ex: 1809, 1787)
+    # 2. 4-digit country code (e.g. 1809, 1787)
     ddi4 = digits[:4]
     if ddi4 in _DDI_TZ:
         return _DDI_TZ[ddi4]
 
-    # 3. DDI de 3 dígitos (ex: 351, 420, 244)
+    # 3. 3-digit country code (e.g. 351, 420, 244)
     ddi3 = digits[:3]
     if ddi3 in _DDI_TZ:
         return _DDI_TZ[ddi3]
 
-    # 4. DDI de 2 dígitos (ex: 55, 44, 49)
+    # 4. 2-digit country code (e.g. 55, 44, 49)
     ddi2 = digits[:2]
 
-    # Brasil: refinar pelo DDD (2 dígitos após o 55)
+    # Brazil: refine by DDD (2 digits after 55)
     if ddi2 == "55" and len(digits) >= 4:
         ddd = digits[2:4]
         tz = _BRAZIL_DDD_TZ.get(ddd)
         if tz:
             return tz
-        return "America/Sao_Paulo"  # fallback Brasil
+        return "America/Sao_Paulo"  # Brazil fallback
 
-    # EUA/Canadá: refinar pelo area code (3 dígitos após o 1)
+    # USA/Canada: refine by area code (3 digits after 1)
     if digits[0] == "1" and len(digits) >= 4:
         area = digits[1:4]
         tz = _USA_AREA_TZ.get(area)
         if tz:
             return tz
-        return "America/New_York"  # fallback EUA
+        return "America/New_York"  # USA fallback
 
     if ddi2 in _DDI_TZ:
         return _DDI_TZ[ddi2]
 
-    # 5. DDI de 1 dígito (ex: 7 = Rússia)
+    # 5. 1-digit country code (e.g. 7 = Russia)
     ddi1 = digits[:1]
     if ddi1 in _DDI_TZ:
         return _DDI_TZ[ddi1]
