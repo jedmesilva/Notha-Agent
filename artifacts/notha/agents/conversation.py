@@ -402,33 +402,6 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
     },
 ]
 
-REPLY_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
-
-Transforme a instrução abaixo em uma mensagem natural, curta e direta para enviar pelo WhatsApp.
-
-Regras:
-- No máximo 3 frases curtas
-- Tom informal mas profissional (como uma pessoa real de confiança)
-- Português brasileiro coloquial — sem "Prezado", sem "Venho por meio desta"
-- Sem markdown (sem *, sem #, sem _)
-- Emojis: 0 a 2, somente se ficarem naturais
-- Nunca mencione "sistema", "algoritmo", "banco de dados" ou termos técnicos
-- Se o contexto tiver um valor em R$, sempre formate como "R$ 1.200,00"
-- NUNCA comece com saudação ("Oi!", "Olá!", "Ei!", "Hey!", "Opa!", ou qualquer variação em qualquer idioma) — vá direto ao conteúdo
-"""
-
-CONFIRMATION_SYSTEM_PROMPT = """Você é o NOTHA, agente de negociação de produtos físicos via WhatsApp.
-
-Crie uma pergunta de confirmação clara e direta (resposta esperada: sim ou não).
-
-Regras:
-- Uma única pergunta, máximo 2 frases
-- Tom direto e amigável
-- Português coloquial
-- Sem markdown
-- Se houver valor em R$, formate como "R$ 1.200,00"
-- Termine com "Confirma?" ou "Pode confirmar?" ou variação natural
-"""
 
 INTENT_EXTRACTION_PROMPT = """Você é um extrator de intenção para o sistema NOTHA de negociação de produtos via WhatsApp.
 
@@ -624,36 +597,38 @@ class ConversationAgent:
             logger.error("Erro ao extrair intenção: %s", e)
             return {"intencao": "outro", "descricao": mensagem}
 
-    async def build_reply(self, instrucao: str, contexto: dict | None = None) -> str:
-        ctx_str = json.dumps(contexto or {}, ensure_ascii=False)
-        messages = [
-            {"role": "system", "content": REPLY_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Instrução: {instrucao}\nContexto: {ctx_str}"},
-        ]
+    async def speak(
+        self,
+        instrucao: str,
+        history: list[dict] | None = None,
+        contexto: str = "",
+    ) -> str:
+        """Gera resposta ao usuário com histórico e contexto completos.
+
+        O backend informa *o que* comunicar via instrucao; o agente decide
+        *como* falar, mantendo tom e continuidade da conversa.
+        Substitui build_reply e ask_confirmation.
+        """
+        history = history or []
+        system = SYSTEM_PROMPT.format(contexto=contexto or "sem contexto disponível")
+        system += (
+            "\n\n━━━ INSTRUÇÃO DO SISTEMA ━━━\n"
+            f"{instrucao}\n"
+            "Transforme em mensagem natural para WhatsApp. Não cite termos técnicos."
+        )
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for h in history[-20:]:
+            messages.append(h)
+
+        has_history = len(history) > 0
         try:
             resp = await get_provider().complete(
                 messages=messages,
                 temperature=0.6,
-                max_tokens=300,
+                max_tokens=500,
             )
-            return resp.text or instrucao
+            reply = resp.text or instrucao
+            return await _sanitize_response(reply, has_history)
         except Exception as e:
-            logger.error("Erro ao construir reply: %s", e)
-            return instrucao
-
-    async def ask_confirmation(self, instrucao: str, contexto: dict | None = None) -> str:
-        ctx_str = json.dumps(contexto or {}, ensure_ascii=False)
-        messages = [
-            {"role": "system", "content": CONFIRMATION_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Instrução: {instrucao}\nContexto: {ctx_str}"},
-        ]
-        try:
-            resp = await get_provider().complete(
-                messages=messages,
-                temperature=0.5,
-                max_tokens=200,
-            )
-            return resp.text or instrucao
-        except Exception as e:
-            logger.error("Erro ao construir confirmação: %s", e)
+            logger.error("Erro no speak: %s", e)
             return instrucao

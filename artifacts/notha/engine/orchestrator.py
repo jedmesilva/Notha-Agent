@@ -13,7 +13,7 @@ from db.repositories import (
     NegotiationRepository, TransactionRepository, DeliveryRepository,
     ConversationRepository, BuscaSalvaRepository,
 )
-from agents.conversation import ConversationAgent, NOTHA_TOOLS, _sanitize_response
+from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
@@ -154,18 +154,7 @@ class Orchestrator:
                 db=db,
             )
 
-        # Confirmações pendentes de negócio (ex: confirmar preço de anúncio)
-        pending = PENDING_CONFIRMATIONS.get(phone)
-        if pending:
-            reply = await self._handle_confirmation(
-                phone, text, pending, user, user_repo, listing_repo,
-                neg_repo, tx_repo, delivery_repo, engine,
-            )
-            await conv_repo.add(user_id, "user", text)
-            await conv_repo.add(user_id, "assistant", reply)
-            return reply
-
-        # Carrega dados em paralelo para minimizar latência
+        # Carrega dados em paralelo — necessário em todos os caminhos de resposta
         active_negs, seller_profile, history = await _gather(
             neg_repo.find_active_by_buyer(user_id),
             user_repo.get_seller_profile(user_id),
@@ -174,6 +163,18 @@ class Orchestrator:
 
         # Contexto rico com dados reais do banco — o LLM sempre trabalha com info atual
         contexto = self._build_context(user, active_negs, seller_profile)
+
+        # Confirmações pendentes de negócio (ex: confirmar preço de anúncio)
+        pending = PENDING_CONFIRMATIONS.get(phone)
+        if pending:
+            reply = await self._handle_confirmation(
+                phone, text, pending, user, user_repo, listing_repo,
+                neg_repo, tx_repo, delivery_repo, engine,
+                history=history, contexto=contexto,
+            )
+            await conv_repo.add(user_id, "user", text)
+            await conv_repo.add(user_id, "assistant", reply)
+            return reply
 
         # Fase 1: LLM vê o histórico completo e decide quais ferramentas chamar
         messages, tool_calls = await self._conv.get_tool_calls(
@@ -192,13 +193,14 @@ class Orchestrator:
             result_text, complex_reply = await self._execute_tool(
                 tc, phone, text, user,
                 user_repo, listing_repo, neg_repo, engine, active_negs,
+                history=history, contexto=contexto,
             )
             tool_results[tc["id"]] = result_text
             if complex_reply is not None:
                 override_reply = complex_reply
 
         if override_reply:
-            final_reply = await _sanitize_response(override_reply, len(history) > 0)
+            final_reply = override_reply
         elif tool_calls:
             # Fase 2: LLM recebe os resultados reais e gera resposta natural
             final_reply = await self._conv.get_reply_after_tools(messages, tool_results)
@@ -237,6 +239,8 @@ class Orchestrator:
         user_repo: UserRepository, listing_repo: ListingRepository,
         neg_repo: NegotiationRepository, engine: NegotiationEngine,
         active_negs: list,
+        history: list[dict] | None = None,
+        contexto: str = "",
     ) -> tuple[str, str | None]:
         """Executa deterministicamente a ferramenta que o LLM escolheu.
 
@@ -378,6 +382,8 @@ class Orchestrator:
                 user=user,
                 user_repo=user_repo,
                 db=db,
+                history=history or [],
+                contexto=contexto,
             )
             return "fluxo de cadastro iniciado", complex_reply
 
@@ -388,7 +394,10 @@ class Orchestrator:
                 "cidade_busca": args.get("cidade_busca", "").strip() or None,
                 "bairro_busca": args.get("bairro_busca", "").strip() or None,
             }
-            complex_reply = await self._handle_search(phone, text, user, listing_repo, intent)
+            complex_reply = await self._handle_search(
+                phone, text, user, listing_repo, intent,
+                history=history or [], contexto=contexto,
+            )
             return "busca executada", complex_reply
 
         if name in _BUILTIN_TOOL_MAP:
@@ -507,13 +516,14 @@ class Orchestrator:
 
         return " | ".join(parts)
 
-    async def _handle_list_product(self, phone, text, user, user_repo, listing_repo, intent) -> str:
+    async def _handle_list_product(self, phone, text, user, user_repo, listing_repo, intent,
+                                   history: list[dict] | None = None, contexto: str = "") -> str:
         check = await user_repo.check_missing_fields(user["id"], "listar_produto")
         if check["falta"]:
             campos = ", ".join(check["falta"])
-            return await self._conv.build_reply(
-                f"Para listar um produto, preciso de: {campos}. Pode me informar?",
-                {"falta": check["falta"]},
+            return await self._conv.speak(
+                f"Para listar um produto, preciso de: {campos}. Peça de forma natural.",
+                history, contexto,
             )
 
         descricao = intent.get("descricao", text)
@@ -545,15 +555,17 @@ class Orchestrator:
         if appraisal.get("alerta_preco_vendedor"):
             alerta = " (Atenção: o preço que você informou difere muito do mercado!)"
 
-        return await self._conv.ask_confirmation(
+        return await self._conv.speak(
             f"Avaliei o produto. Preço sugerido: R${appraisal['preco_sugerido']:.2f}{alerta}. "
             f"Justificativa: {appraisal['justificativa']}. "
-            f"Confirma o anúncio por R${appraisal['preco_sugerido']:.2f} "
-            f"(mínimo interno: R${appraisal['preco_minimo_sugerido']:.2f})?",
-            appraisal,
+            f"Comunique o preço sugerido e pergunte se confirma o anúncio por esse valor "
+            f"(mínimo interno: R${appraisal['preco_minimo_sugerido']:.2f}). Termine com pergunta de confirmação sim/não.",
+            history, contexto,
         )
 
-    async def _handle_search(self, phone, text, user, listing_repo, intent) -> str:
+    async def _handle_search(self, phone, text, user, listing_repo, intent,
+                             history: list[dict] | None = None, contexto: str = "") -> str:
+        historia = history or []
         categoria = intent.get("categoria")
         descricao_busca = intent.get("descricao_busca") or categoria or "produto"
         cidade_busca: str | None = intent.get("cidade_busca")
@@ -570,32 +582,31 @@ class Orchestrator:
                 f"em {cidade_busca}" if cidade_busca else
                 "disponíveis"
             )
-            return await self._format_search_results(listings, regiao_label)
+            return await self._format_search_results(listings, regiao_label, historia, contexto)
 
         # --- Nível 2: se buscou por bairro e não achou, tenta só a cidade ---
-        aviso_ampliacao = ""
         if bairro_busca and cidade_busca:
             listings = await listing_repo.find_available(
                 categoria=categoria, limit=5, cidade=cidade_busca,
             )
             if listings:
-                aviso_ampliacao = f"Nada no {bairro_busca}, mas achei em {cidade_busca}:"
-                return await self._format_search_results(listings, f"em {cidade_busca}", prefixo=aviso_ampliacao)
+                prefixo = f"Nada no {bairro_busca}, mas achei em {cidade_busca}:"
+                return await self._format_search_results(listings, f"em {cidade_busca}", historia, contexto, prefixo=prefixo)
 
         # --- Nível 3: tenta Brasil inteiro ---
         if cidade_busca or bairro_busca:
             listings = await listing_repo.find_available(categoria=categoria, limit=5)
             regiao_original = bairro_busca or cidade_busca or "essa região"
             if listings:
-                aviso_ampliacao = f"Não encontrei nada em {regiao_original}. Mas tem isso disponível em outras regiões:"
-                return await self._format_search_results(listings, "em outras regiões", prefixo=aviso_ampliacao)
+                prefixo = f"Não encontrei nada em {regiao_original}. Mas tem isso disponível em outras regiões:"
+                return await self._format_search_results(listings, "em outras regiões", historia, contexto, prefixo=prefixo)
 
         # --- Nada em lugar nenhum ---
         regiao_original = bairro_busca or cidade_busca or "qualquer região"
-        return await self._conv.build_reply(
+        return await self._conv.speak(
             f"Nenhum '{descricao_busca}' disponível agora em {regiao_original}. "
-            f"Posso te avisar assim que aparecer um — quer que eu salve esse alerta?",
-            {"produto_buscado": descricao_busca, "regiao": regiao_original},
+            f"Informe isso e pergunte se quer salvar um alerta para ser avisado quando aparecer.",
+            historia, contexto,
         )
 
     async def _notify_interested_users(self, listing: dict, db: DB) -> None:
@@ -630,57 +641,62 @@ class Orchestrator:
             logger.error("Erro em _notify_interested_users: %s", e)
 
     async def _format_search_results(
-        self, listings: list, regiao_label: str, prefixo: str = ""
+        self, listings: list, regiao_label: str,
+        history: list[dict] | None = None, contexto: str = "", prefixo: str = ""
     ) -> str:
         items = [
             f"• {l['descricao']} — R${l['preco_anunciado']:.2f}"
             f" ({l.get('cidade_vendedor') or 'localização não informada'})"
             for l in listings
         ]
-        corpo = "\n".join(items) + "\n\nQuer negociar algum? Me diz qual te interessa!"
+        corpo = "\n".join(items)
         instrucao = (
             f"{prefixo}\n{corpo}".strip() if prefixo
             else f"Encontrei {len(listings)} produto(s) {regiao_label}:\n{corpo}"
         )
-        return await self._conv.build_reply(instrucao, {})
+        instrucao += "\n\nPergunte se o usuário quer negociar algum."
+        return await self._conv.speak(instrucao, history or [], contexto)
 
     async def _handle_negotiation_response(
         self, phone, intent, user, neg, user_repo, neg_repo, listing_repo, engine,
         history: list[dict] | None = None,
+        contexto: str = "",
     ) -> str:
+        hist = history or []
         aceitou = intent.get("aceitou", False)
         status = neg["status"]
 
         if status == "proposta_ao_vendedor":
             if aceitou:
-                result = await engine.aceitar_proposta_vendedor(neg["id"])
-                return await self._conv.build_reply(
-                    f"Ótimo! Proposta de R${neg['preco_atual_proposto']:.2f} confirmada. Vou notificar o comprador.",
-                    result,
+                await engine.aceitar_proposta_vendedor(neg["id"])
+                return await self._conv.speak(
+                    f"Proposta de R${neg['preco_atual_proposto']:.2f} confirmada. Comunique de forma positiva e informe que o comprador será notificado.",
+                    hist, contexto,
                 )
             else:
                 await engine.recusar_proposta_vendedor(neg["id"])
-                return await self._conv.build_reply(
-                    "Entendido! Vou renegociar com o comprador e trazer uma nova proposta.", {}
+                return await self._conv.speak(
+                    "Proposta recusada. Informe que vai renegociar com o comprador e trazer uma nova proposta.",
+                    hist, contexto,
                 )
 
         if status == "proposta_ao_comprador":
             if aceitou:
-                result = await engine.aceitar_proposta_comprador(neg["id"])
-                return await self._conv.build_reply(
-                    f"Negócio fechado em R${neg['preco_atual_proposto']:.2f}! "
-                    "Vou gerar o link de pagamento em seguida.",
-                    result,
+                await engine.aceitar_proposta_comprador(neg["id"])
+                return await self._conv.speak(
+                    f"Negócio fechado em R${neg['preco_atual_proposto']:.2f}! Comunique o fechamento e informe que o link de pagamento será gerado.",
+                    hist, contexto,
                 )
             else:
                 await engine.recusar_proposta_comprador(neg["id"])
-                return await self._conv.build_reply(
-                    "Beleza! Vou tentar uma nova rodada de negociação.", {}
+                return await self._conv.speak(
+                    "Proposta recusada pelo comprador. Informe que vai tentar uma nova rodada de negociação.",
+                    hist, contexto,
                 )
 
         reply, _ = await self._conv.chat_with_tools(
-            contexto=f"negociação status={status}",
-            history=history or [],
+            contexto=contexto or f"negociação status={status}",
+            history=hist,
             user_message=intent.get("descricao", ""),
             tools=None,
         )
@@ -689,7 +705,9 @@ class Orchestrator:
     async def _handle_confirmation(
         self, phone, text, pending, user, user_repo, listing_repo,
         neg_repo, tx_repo, delivery_repo, engine,
+        history: list[dict] | None = None, contexto: str = "",
     ) -> str:
+        hist = history or []
         tipo = pending.get("tipo")
         intent = await self._conv.extract_intent(text, contexto="confirmacao")
         aceitou = intent.get("aceitou", False)
@@ -697,8 +715,9 @@ class Orchestrator:
         if tipo == "confirmar_preco_listing":
             PENDING_CONFIRMATIONS.pop(phone, None)
             if not aceitou:
-                return await self._conv.build_reply(
-                    "Sem problema! Me diz o preço que você prefere anunciar.", {}
+                return await self._conv.speak(
+                    "Usuário não confirmou o preço. Peça de forma natural que informe o preço que prefere anunciar.",
+                    hist, contexto,
                 )
             appraisal = pending["appraisal"]
             listing = await listing_repo.create(
@@ -715,15 +734,15 @@ class Orchestrator:
             if db:
                 import asyncio as _asyncio
                 _asyncio.create_task(self._notify_interested_users(dict(listing), db))
-            return await self._conv.build_reply(
-                f"Produto anunciado! ID #{listing['id']}. "
-                f"Preço: R${appraisal['preco_sugerido']:.2f}. "
-                "Avisarei quando houver interessados!",
-                {"listing_id": listing["id"]},
+            return await self._conv.speak(
+                f"Produto anunciado com sucesso (ID #{listing['id']}, "
+                f"R${appraisal['preco_sugerido']:.2f}). "
+                "Comunique a confirmação de forma positiva e informe que avisará quando houver interessados.",
+                hist, contexto,
             )
 
         PENDING_CONFIRMATIONS.pop(phone, None)
-        return await self._conv.build_reply("Ok, ação cancelada.", {})
+        return await self._conv.speak("Ação cancelada. Informe de forma natural.", hist, contexto)
 
     # ─────────────────────────────────────────────
     # Fluxo de cadastro de produto (listing flow)
@@ -731,14 +750,15 @@ class Orchestrator:
 
     async def _start_listing_flow(
         self, phone: str, text: str, user, user_repo: UserRepository, db: DB,
+        history: list[dict] | None = None, contexto: str = "",
     ) -> str:
         """Inicia o fluxo de cadastro de produto (state machine persistida no banco)."""
         check = await user_repo.check_missing_fields(user["id"], "listar_produto")
         if check["falta"]:
             campos = ", ".join(check["falta"])
-            return await self._conv.build_reply(
-                f"Para listar um produto, preciso de: {campos}. Pode me informar?",
-                {"falta": check["falta"]},
+            return await self._conv.speak(
+                f"Para listar um produto, preciso de: {campos}. Peça de forma natural.",
+                history or [], contexto,
             )
 
         flow_repo = ListingFlowRepository(db)
