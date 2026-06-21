@@ -552,7 +552,8 @@ class ConversationAgent:
                 temperature=0.6,
                 max_tokens=500,
             )
-            return resp.text or "Feito!"
+            reply = resp.text or "Feito!"
+            return await _sanitize_response(reply, has_history)
         except Exception as e:
             logger.error("Erro no get_reply_after_tools: %s", e)
             return "Feito!"
