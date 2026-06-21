@@ -456,9 +456,9 @@ class Orchestrator:
 
         # Apelido (como chamar o usuário)
         if apelido:
-            parts.append(f"apelido: {apelido} (chame-o assim)")
+            parts.append(f"apelido: {apelido}")
         else:
-            parts.append("apelido: não definido (use o primeiro nome ou pergunte como prefere ser chamado)")
+            parts.append("apelido: não definido")
 
         # CPF e verificação de identidade
         parts.append(f"CPF: {'registrado (✓)' if cpf else 'não registrado'}")
