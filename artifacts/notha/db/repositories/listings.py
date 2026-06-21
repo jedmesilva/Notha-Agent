@@ -74,17 +74,36 @@ class ListingRepository:
     async def find_by_id(self, listing_id: int) -> asyncpg.Record | None:
         return await self._db.fetch_one("SELECT * FROM listings WHERE id = $1", listing_id)
 
-    async def find_available(self, categoria: str | None = None, limit: int = 20) -> list[asyncpg.Record]:
+    async def find_available(
+        self,
+        categoria: str | None = None,
+        limit: int = 20,
+        cidade: str | None = None,
+        bairro: str | None = None,
+    ) -> list[asyncpg.Record]:
+        """Busca listings disponíveis com filtros opcionais de categoria e localização."""
+        conditions = ["status = 'disponivel'"]
+        params: list = []
+        idx = 1
+
         if categoria:
-            return await self._db.fetch_all(
-                "SELECT * FROM listings WHERE status = 'disponivel' AND categoria ILIKE $1 ORDER BY created_at DESC LIMIT $2",
-                f"%{categoria}%",
-                limit,
-            )
-        return await self._db.fetch_all(
-            "SELECT * FROM listings WHERE status = 'disponivel' ORDER BY created_at DESC LIMIT $1",
-            limit,
-        )
+            conditions.append(f"categoria ILIKE ${idx}")
+            params.append(f"%{categoria}%")
+            idx += 1
+
+        if bairro:
+            conditions.append(f"bairro_vendedor ILIKE ${idx}")
+            params.append(f"%{bairro}%")
+            idx += 1
+        elif cidade:
+            conditions.append(f"cidade_vendedor ILIKE ${idx}")
+            params.append(f"%{cidade}%")
+            idx += 1
+
+        params.append(limit)
+        where = " AND ".join(conditions)
+        query = f"SELECT * FROM listings WHERE {where} ORDER BY created_at DESC LIMIT ${idx}"
+        return await self._db.fetch_all(query, *params)
 
     async def find_by_seller(self, seller_id: int) -> list[asyncpg.Record]:
         return await self._db.fetch_all(

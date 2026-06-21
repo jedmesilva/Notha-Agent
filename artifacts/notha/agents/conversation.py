@@ -70,17 +70,29 @@ SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos fí
 - Se ainda não tiver o nome do usuário: peça de forma natural na primeira oportunidade
 - Se ainda não tiver o CPF: explique que é só para emitir comprovante, é seguro
 - Ao pedir chave Pix: "Qual sua chave Pix para receber? Pode ser CPF, e-mail, celular ou chave aleatória."
-- Ao pedir endereço: "Me passa o endereço completo (rua, número, bairro, cidade e CEP)."
+- Ao pedir endereço de retirada (vendedor): "Me passa o endereço de retirada (rua, número, bairro e cidade)."
+
+━━━ LOCALIZAÇÃO DO USUÁRIO ━━━
+- O contexto informa se o usuário tem cidade e bairro salvos.
+- Se o usuário quiser COMPRAR e não tem localização salva: pergunte cidade e bairro antes de buscar.
+  Exemplo: "Pra filtrar os produtos perto de você, me diz: qual sua cidade e bairro?"
+- Se o usuário fornecer cidade e/ou bairro → chame atualizar_localizacao imediatamente.
+- Quando o usuário for buscar um produto E já tem localização salva: pergunte o raio de busca:
+  "Quer buscar só no seu bairro, na sua cidade toda, ou em qualquer lugar do Brasil?"
+- Passe o raio_busca para buscar_produto: "bairro" | "cidade" | "qualquer"
+- Se o usuário disser "perto de mim", "aqui", "na minha região" → use raio "bairro" ou "cidade"
+- Se disser "em qualquer lugar", "tanto faz", "Brasil inteiro" → use raio "qualquer"
 
 ━━━ USO DAS FERRAMENTAS ━━━
 Você tem acesso a ferramentas. Use-as sempre que o usuário:
 - Fornecer ou corrigir o nome completo → chame atualizar_nome
 - Quiser mudar como é chamado / fornecer apelido → chame atualizar_apelido
 - Fornecer ou corrigir o CPF → chame atualizar_cpf
+- Fornecer cidade e/ou bairro (localização) → chame atualizar_localizacao
 - Quiser vender UM produto (qualquer menção a "vender", "anunciar", "tenho pra vender") → chame listar_produto IMEDIATAMENTE, sem perguntar nada antes
-- Quiser comprar/buscar um produto → chame buscar_produto
+- Quiser comprar/buscar um produto → chame buscar_produto (com raio_busca definido)
 - Fornecer chave Pix → chame atualizar_chave_pix
-- Fornecer endereço → chame atualizar_endereco
+- Fornecer endereço de retirada → chame atualizar_endereco
 
 REGRA CRÍTICA: Quando o usuário quiser vender, NÃO faça perguntas sobre o produto antes de chamar listar_produto. O fluxo de cadastro faz todas as perguntas necessárias. Chame a ferramenta imediatamente.
 
@@ -190,7 +202,12 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "type": "function",
         "function": {
             "name": "buscar_produto",
-            "description": "Busca produtos disponíveis para compra.",
+            "description": (
+                "Busca produtos disponíveis para compra, com filtro opcional de localização. "
+                "Sempre passe raio_busca: 'bairro' (só no bairro do usuário), "
+                "'cidade' (cidade inteira), ou 'qualquer' (sem filtro geográfico). "
+                "Se o usuário não informou preferência, use 'cidade' como padrão quando há localização salva."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -201,6 +218,36 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
                     "descricao_busca": {
                         "type": "string",
                         "description": "Descrição do que o usuário quer comprar"
+                    },
+                    "raio_busca": {
+                        "type": "string",
+                        "enum": ["bairro", "cidade", "qualquer"],
+                        "description": "Raio geográfico da busca: 'bairro' (só no bairro), 'cidade' (cidade toda), 'qualquer' (Brasil inteiro)"
+                    }
+                },
+                "required": ["raio_busca"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "atualizar_localizacao",
+            "description": (
+                "Salva a cidade e/ou bairro do usuário para buscas por região. "
+                "Use quando o usuário informar onde mora ou sua cidade/bairro. "
+                "Exemplos: 'moro em São Paulo, Pinheiros', 'sou de Campinas', 'meu bairro é Copacabana'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cidade": {
+                        "type": "string",
+                        "description": "Cidade do usuário (ex: 'São Paulo', 'Campinas', 'Rio de Janeiro')"
+                    },
+                    "bairro": {
+                        "type": "string",
+                        "description": "Bairro do usuário (ex: 'Pinheiros', 'Copacabana', 'Savassi')"
                     }
                 },
                 "required": []

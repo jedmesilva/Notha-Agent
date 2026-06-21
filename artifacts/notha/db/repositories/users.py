@@ -59,6 +59,21 @@ class UserRepository:
             user_id,
         )
 
+    async def update_localizacao(self, user_id: int, cidade: str | None = None, bairro: str | None = None) -> None:
+        """Atualiza cidade e/ou bairro do usuário para busca por região."""
+        await self._db.execute(
+            """
+            UPDATE users SET
+                cidade = COALESCE($1, cidade),
+                bairro = COALESCE($2, bairro),
+                updated_at = now()
+            WHERE id = $3
+            """,
+            cidade,
+            bairro,
+            user_id,
+        )
+
     async def update_identidade_status(
         self,
         user_id: int,
