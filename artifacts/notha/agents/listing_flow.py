@@ -668,13 +668,53 @@ class ListingFlowAgent:
                     base64_images.append(data_uri)
             logger.info(f"Download de {len(base64_images)}/{len(fotos[:4])} fotos para análise visual")
 
-        # 3b. Análise visual das fotos (GPT-4o Vision)
-        vision_result = None
+        # 3b. Análise visual das fotos (GPT-4o Vision — extrai condição + texto visível)
+        vision_data: dict | None = None
         if base64_images:
-            vision_result = await self._analisar_fotos(
+            vision_data = await self._analisar_fotos(
                 fotos, nome_produto, condicao, base64_images=base64_images
             )
-        dados["vision_analysis"] = vision_result
+        dados["vision_analysis"] = vision_data
+
+        # 3c. Preenche campos vazios com dados extraídos visualmente (se literalmente visíveis)
+        if vision_data:
+            campos_preenchidos = []
+            if not dados.get("marca") and vision_data.get("marca_visivel"):
+                dados["marca"] = vision_data["marca_visivel"]
+                dados["marca_fonte"] = "visao"
+                campos_preenchidos.append(f"marca='{dados['marca']}'")
+            if not dados.get("modelo") and vision_data.get("modelo_visivel"):
+                dados["modelo"] = vision_data["modelo_visivel"]
+                dados["modelo_fonte"] = "visao"
+                campos_preenchidos.append(f"modelo='{dados['modelo']}'")
+            if not dados.get("versao") and vision_data.get("versao_visivel"):
+                dados["versao"] = vision_data["versao_visivel"]
+                dados["versao_fonte"] = "visao"
+                campos_preenchidos.append(f"versao='{dados['versao']}'")
+            if vision_data.get("detalhes_visiveis"):
+                dados["detalhes_tecnicos_visao"] = vision_data["detalhes_visiveis"]
+            if campos_preenchidos:
+                logger.info(f"Campos preenchidos via visão: {', '.join(campos_preenchidos)}")
+            if not vision_data.get("condicao_consistente", True):
+                logger.warning(
+                    f"Condição inconsistente: vendedor declarou '{condicao}' "
+                    f"mas visão detectou: {vision_data.get('descricao_visual', '')[:100]}"
+                )
+
+        # Recalcula nome_produto com campos eventualmente enriquecidos pela visão
+        marca   = dados.get("marca") or ""
+        modelo  = dados.get("modelo") or ""
+        versao  = dados.get("versao") or ""
+        nome_produto = " ".join(filter(None, [marca, modelo, versao])) or descricao
+
+        # Texto descritivo para o PricingAgent
+        descricao_visual_txt = (vision_data or {}).get("descricao_visual", "") if vision_data else ""
+        condicao_ok = (vision_data or {}).get("condicao_consistente", True) if vision_data else True
+        alerta_condicao = (
+            f"ATENÇÃO: análise visual detecta inconsistência com a condição declarada. "
+            f"Descrição visual: {descricao_visual_txt}. "
+            if not condicao_ok else ""
+        )
 
         # 4. Precificação com todos os dados (+ imagens para contexto visual no pricing)
         descricao_rica = (
@@ -682,7 +722,8 @@ class ListingFlowAgent:
             f"Estado: {estado_uso}. "
             f"Condição: {CONDICAO_LABEL.get(condicao, condicao)}. "
             f"Nota fiscal: {'sim' if tem_nota_fiscal else 'não'}. "
-            + (f"Análise visual: {vision_result}. " if vision_result else "")
+            + (f"Análise visual: {descricao_visual_txt}. " if descricao_visual_txt else "")
+            + alerta_condicao
             + (f"Preços encontrados na web: {web_precos[:300]}." if web_precos else "")
         )
         pricing_agent = PricingAgent(db)
@@ -725,11 +766,34 @@ class ListingFlowAgent:
         # Monta mensagem de confirmação
         linhas = [
             f"Produto: {nome_produto}",
+        ]
+
+        # Indica quando marca/modelo/versão vieram das fotos
+        origem_visao = [
+            c for c in ("marca", "modelo", "versao")
+            if dados.get(f"{c}_fonte") == "visao"
+        ]
+        if origem_visao:
+            linhas.append(f"  (detectado nas fotos: {', '.join(origem_visao)})")
+
+        if vision_data and vision_data.get("detalhes_visiveis"):
+            detalhes = ", ".join(vision_data["detalhes_visiveis"][:4])
+            linhas.append(f"Detalhes lidos nas fotos: {detalhes}")
+
+        linhas += [
             f"Estado: {estado_uso} | Condição: {CONDICAO_LABEL.get(condicao, condicao)}",
             f"Nota fiscal: {'sim' if tem_nota_fiscal else 'não'}",
             f"Fotos: {len(fotos)} enviada(s)",
             f"Retirada: {endereco or 'não informado'}",
         ]
+
+        # Alerta de inconsistência de condição detectada pela visão
+        if vision_data and not vision_data.get("condicao_consistente", True):
+            linhas.append(
+                f"Atenção: a análise das fotos sugere que o estado pode ser diferente do declarado. "
+                f"({vision_data.get('descricao_visual', '')[:120]})"
+            )
+
         if preco_desejado:
             linhas.append(f"Seu preço: R$ {preco_desejado:.2f}")
         if preco_min_vend:
@@ -749,13 +813,22 @@ class ListingFlowAgent:
     async def _analisar_fotos(
         self, fotos: list, produto: str, condicao_declarada: str,
         base64_images: list[str] | None = None,
-    ) -> str | None:
+    ) -> dict | None:
         """
-        Usa GPT-4o Vision para analisar as fotos e verificar a condição declarada.
+        Usa GPT-4o Vision para analisar as fotos do produto.
 
-        Aceita base64_images (lista de data URIs já baixadas) para evitar download duplo.
-        Se não fornecido, baixa cada foto do WhatsApp como base64 internamente.
-        URLs diretas do WhatsApp não funcionam com GPT-4o — exigem Authorization header.
+        Retorna dict estruturado com:
+          - descricao_visual: descrição objetiva do estado físico
+          - condicao_consistente: true/false — condição declarada bate com as fotos
+          - marca_visivel: marca lida de etiqueta/caixa/tela (null se não visível)
+          - modelo_visivel: modelo lido de etiqueta/caixa/tela (null se não visível)
+          - versao_visivel: versão/capacidade lida nas fotos (null se não visível)
+          - detalhes_visiveis: lista de specs lidas literalmente nas imagens
+          - fotos_suficientes: true se as fotos permitem avaliação confiável
+
+        GUARDRAIL: só extrai texto que esteja LITERALMENTE IMPRESSO nas imagens.
+        Aceita base64_images (data URIs já baixadas) para evitar download duplo.
+        URLs diretas do WhatsApp exigem Authorization header e não funcionam aqui.
         """
         from whatsapp import download_media_as_base64
 
@@ -769,34 +842,79 @@ class ListingFlowAgent:
                 if data_uri:
                     imagens.append(data_uri)
 
-        content = []
-        for data_uri in imagens:
-            content.append({"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}})
-
-        if not content:
+        if not imagens:
             return None
+
+        content: list = []
+        for data_uri in imagens:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": data_uri, "detail": "high"},
+            })
 
         content.append({
             "type": "text",
             "text": (
-                f"Produto: {produto}. Condição declarada pelo vendedor: {CONDICAO_LABEL.get(condicao_declarada, condicao_declarada)}.\n\n"
-                "REGRAS DA ANÁLISE (obrigatórias):\n"
-                "1. Descreva APENAS o que é visualmente observável nas imagens — não infira especificações técnicas, modelos, preços ou procedência.\n"
-                "2. Liste objetivamente: acabamento, arranhões, manchas, amassados, desgaste ou danos visíveis.\n"
-                "3. Diga se a condição declarada é CONSISTENTE ou INCONSISTENTE com o que aparece nas fotos — justifique com o que você viu.\n"
-                "4. NÃO atribua valor de mercado. NÃO sugira preços. NÃO faça afirmações sobre autenticidade.\n"
-                "5. Se as fotos estiverem desfocadas, escuras ou insuficientes para avaliar, diga isso explicitamente em vez de adivinhar.\n"
-                "Responda em 2-4 frases objetivas."
+                f"Produto declarado: {produto}.\n"
+                f"Condição declarada pelo vendedor: {CONDICAO_LABEL.get(condicao_declarada, condicao_declarada)}.\n\n"
+                "Retorne SOMENTE um JSON válido com os campos abaixo. Nenhum texto fora do JSON.\n\n"
+                "CAMPO 1 — descricao_visual (string):\n"
+                "  Descreva objetivamente o estado físico visível: acabamento, arranhões, manchas, amassados, desgaste.\n"
+                "  Se as fotos forem insuficientes (desfocadas, escuras), diga isso.\n\n"
+                "CAMPO 2 — condicao_consistente (true | false):\n"
+                "  A condição declarada é consistente com o que aparece nas fotos?\n\n"
+                "CAMPO 3 — marca_visivel (string | null):\n"
+                "  Leia a marca SOMENTE se ela estiver LITERALMENTE ESCRITA/IMPRESSA em etiqueta, caixa, tela ou adesivo.\n"
+                "  NÃO infira a marca pela forma ou aparência do produto. Se não está escrito → null.\n\n"
+                "CAMPO 4 — modelo_visivel (string | null):\n"
+                "  Leia o modelo/nome do produto SOMENTE se LITERALMENTE ESCRITO nas imagens. Ex: 'iPhone 13 Pro', 'Galaxy S21'.\n"
+                "  NÃO adivinhe pelo formato. Se não está escrito → null.\n\n"
+                "CAMPO 5 — versao_visivel (string | null):\n"
+                "  Leia versão/capacidade/variante SOMENTE se ESCRITA nas imagens. Ex: '256GB', '8GB RAM', 'Midnight Black'.\n"
+                "  NÃO infira pela cor ou tamanho. Se não está escrito → null.\n\n"
+                "CAMPO 6 — detalhes_visiveis (array de strings):\n"
+                "  Lista de quaisquer informações técnicas LIDAS literalmente nas imagens:\n"
+                "  números de série, IMEI, voltagem, wattagem, datas de fabricação, certificações, etc.\n"
+                "  Inclua apenas o que está escrito. Array vazio [] se nada for legível.\n\n"
+                "CAMPO 7 — fotos_suficientes (true | false):\n"
+                "  As fotos têm qualidade e ângulos suficientes para avaliação confiável?\n\n"
+                "REGRAS CRÍTICAS:\n"
+                "- NUNCA atribua valor de mercado ou sugira preços.\n"
+                "- NUNCA faça afirmações sobre autenticidade ou procedência.\n"
+                "- Para marca/modelo/versao: se não está escrito na imagem, retorne null — não use conhecimento externo.\n"
+                "- A evidência de cada campo é o texto visível na imagem, não o que você sabe sobre o produto."
             ),
         })
+
         try:
             resp = await self._get_client().chat.completions.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": content}],
-                max_tokens=250,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Você é um avaliador visual de produtos físicos. "
+                            "Retorne SEMPRE um JSON válido. "
+                            "Só extraia informações literalmente visíveis nas imagens."
+                        ),
+                    },
+                    {"role": "user", "content": content},
+                ],
+                max_tokens=600,
                 temperature=0.0,
+                response_format={"type": "json_object"},
             )
-            return resp.choices[0].message.content
+            raw = json.loads(resp.choices[0].message.content or "{}")
+            # Normaliza tipos para segurança
+            return {
+                "descricao_visual":    str(raw.get("descricao_visual") or ""),
+                "condicao_consistente": bool(raw.get("condicao_consistente", True)),
+                "marca_visivel":        raw.get("marca_visivel") or None,
+                "modelo_visivel":       raw.get("modelo_visivel") or None,
+                "versao_visivel":       raw.get("versao_visivel") or None,
+                "detalhes_visiveis":    list(raw.get("detalhes_visiveis") or []),
+                "fotos_suficientes":    bool(raw.get("fotos_suficientes", True)),
+            }
         except Exception as e:
             logger.warning(f"Análise visual falhou: {e}")
             return None
