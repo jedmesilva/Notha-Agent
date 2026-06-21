@@ -13,7 +13,7 @@ from db.repositories import (
     NegotiationRepository, TransactionRepository, DeliveryRepository,
     ConversationRepository, BuscaSalvaRepository,
 )
-from agents.conversation import ConversationAgent, NOTHA_TOOLS
+from agents.conversation import ConversationAgent, NOTHA_TOOLS, _sanitize_response
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
@@ -198,7 +198,7 @@ class Orchestrator:
                 override_reply = complex_reply
 
         if override_reply:
-            final_reply = override_reply
+            final_reply = await _sanitize_response(override_reply, len(history) > 0)
         elif tool_calls:
             # Fase 2: LLM recebe os resultados reais e gera resposta natural
             final_reply = await self._conv.get_reply_after_tools(messages, tool_results)
