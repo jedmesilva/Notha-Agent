@@ -218,64 +218,43 @@ class ListingFlowAgent:
     # Product type classification
     # ─────────────────────────────────────────────
 
-    # Fixed-location product types — never need logistics or pickup address
-    _FIXED_LOCATION_KEYWORDS = [
-        # Real estate
-        "imóvel", "imovel", "apartamento", "apto", "casa", "sobrado", "terreno",
-        "lote", "chácara", "sitio", "sítio", "fazenda", "mansão", "mansao",
-        "kitnet", "studio", "flat", "sala comercial", "sala", "andar", "prédio", "predio",
-        "galpão", "galpao", "armazém", "armazem", "depósito", "deposito",
-        # Businesses / commercial points
-        "lanchonete", "restaurante", "padaria", "mercearia", "loja", "comércio", "comercio",
-        "empresa", "negócio", "negocio", "ponto comercial", "franquia", "bar", "café", "cafe",
-        "salão", "salao", "barbearia", "clínica", "clinica", "consultório", "consultorio",
-        "academia", "hotel", "pousada", "petshop", "farmácia", "farmacia", "supermercado",
-        "posto de gasolina", "posto", "oficina", "borracharia",
-    ]
-
-    @classmethod
-    def _is_fixed_location_by_keywords(cls, description: str) -> bool:
-        """Fast keyword check before calling the LLM."""
-        lower = description.lower()
-        return any(kw in lower for kw in cls._FIXED_LOCATION_KEYWORDS)
-
     async def _classify_product_type(self, description: str) -> dict:
         """
-        Classifies the product as movable or fixed_location.
+        Classifies the product as movable or fixed_location using the LLM.
+        Works in any language — no keyword lists.
 
         Returns:
           {
             "product_type": "movable" | "fixed_location",
             "needs_logistics": True | False,
-            "type_label": str  (human-readable: "produto físico", "imóvel", "negócio", etc.)
+            "type_label": str  (short label in the user's language, e.g. "imóvel", "business", "producto físico")
           }
         """
-        # Fast path via keywords to avoid LLM call
-        if self._is_fixed_location_by_keywords(description):
-            return {
-                "product_type":   "fixed_location",
-                "needs_logistics": False,
-                "type_label":     "imóvel ou negócio",
-            }
-
         try:
             resp = await get_provider().complete(
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "Classify the product described by the user into one of two categories:\n\n"
-                            "FIXED_LOCATION — products that cannot be moved/shipped and have a fixed physical address:\n"
-                            "  - Real estate: apartments, houses, land, commercial properties, warehouses\n"
-                            "  - Businesses for sale: restaurants, shops, bakeries, snack bars, clinics, franchises\n"
-                            "  - Commercial spaces: offices, stores, showrooms\n\n"
-                            "MOVABLE — everything else that can be physically transported:\n"
-                            "  - Electronics, appliances, furniture, clothing, vehicles, tools, toys, books, etc.\n\n"
-                            "Return ONLY valid JSON: {\"product_type\": \"movable\" | \"fixed_location\", \"type_label\": \"<short Portuguese label>\"}\n"
-                            "type_label examples: 'produto físico', 'imóvel', 'negócio comercial', 'veículo', 'eletrodoméstico'"
+                            "Classify the item described by the user into one of two categories.\n\n"
+                            "FIXED_LOCATION — items that have a permanent physical address and cannot be shipped:\n"
+                            "  - Real estate: apartments, houses, land, farms, warehouses, commercial units\n"
+                            "  - Businesses for sale: restaurants, shops, bakeries, clinics, hotels, franchises, any operating business\n"
+                            "  - Commercial spaces: offices, showrooms, stores\n\n"
+                            "MOVABLE — anything that can be physically picked up and transported:\n"
+                            "  - Electronics, appliances, furniture, clothing, vehicles, tools, toys, books, animals, etc.\n\n"
+                            "The description may be in ANY language. Understand it as-is.\n\n"
+                            "Return ONLY valid JSON:\n"
+                            "{\"product_type\": \"movable\" | \"fixed_location\", \"type_label\": \"<3–5 word label in the same language as the description>\"}\n\n"
+                            "Examples:\n"
+                            "  'lanchonete' → {\"product_type\": \"fixed_location\", \"type_label\": \"negócio comercial\"}\n"
+                            "  'iPhone 13' → {\"product_type\": \"movable\", \"type_label\": \"produto físico\"}\n"
+                            "  'apartment in London' → {\"product_type\": \"fixed_location\", \"type_label\": \"real estate\"}\n"
+                            "  'tienda de ropa' → {\"product_type\": \"fixed_location\", \"type_label\": \"negocio comercial\"}\n"
+                            "  'laptop' → {\"product_type\": \"movable\", \"type_label\": \"produto físico\"}"
                         ),
                     },
-                    {"role": "user", "content": f"Product to sell: {description}"},
+                    {"role": "user", "content": description},
                 ],
                 temperature=0.0,
                 max_tokens=80,
@@ -288,14 +267,14 @@ class ListingFlowAgent:
             return {
                 "product_type":    product_type,
                 "needs_logistics": product_type == "movable",
-                "type_label":      raw.get("type_label", "produto físico"),
+                "type_label":      raw.get("type_label", "product"),
             }
         except Exception as e:
             logger.warning(f"Product type classification failed: {e} — defaulting to movable")
             return {
                 "product_type":    "movable",
                 "needs_logistics": True,
-                "type_label":      "produto físico",
+                "type_label":      "product",
             }
 
     async def _reply(self, instruction: str) -> str:
@@ -856,7 +835,10 @@ class ListingFlowAgent:
 
         # 2. Similar sales history from DB
         similar_history = []
-        category = data.get("category") or _infer_category(product_name)
+        if is_fixed_loc:
+            category = data.get("category") or "fixed_location"
+        else:
+            category = data.get("category") or _infer_category(product_name)
         data["category"] = category
         if db and listing_repo:
             try:
@@ -1145,23 +1127,15 @@ class ListingFlowAgent:
 # ─────────────────────────────────────────────
 
 def _infer_category(name: str) -> str:
+    """
+    Fast category inference from product name.
+    For fixed-location products (real_estate, business), the category is set
+    directly from the product_type classification — this function is only
+    called for movable products and uses a short English keyword list as a
+    lightweight heuristic (not a translation list — just common brand/model names).
+    """
     n = name.lower()
     categories = {
-        "real_estate": [
-            "imóvel", "imovel", "apartamento", "apto", "casa", "sobrado", "terreno",
-            "lote", "chácara", "sitio", "sítio", "fazenda", "mansão", "mansao",
-            "kitnet", "studio", "flat", "sala comercial", "sala", "andar", "prédio",
-            "predio", "galpão", "galpao", "armazém", "armazem", "depósito", "deposito",
-            "condomínio", "condominio",
-        ],
-        "business": [
-            "lanchonete", "restaurante", "padaria", "mercearia", "loja", "comércio",
-            "comercio", "empresa", "negócio", "negocio", "ponto comercial", "franquia",
-            "bar", "café", "cafe", "salão", "salao", "barbearia", "clínica", "clinica",
-            "consultório", "consultorio", "academia", "hotel", "pousada", "petshop",
-            "farmácia", "farmacia", "supermercado", "posto de gasolina", "oficina",
-            "borracharia",
-        ],
         "electronics": [
             "iphone", "samsung", "celular", "smartphone", "notebook", "computador",
             "tablet", "ipad", "tv", "monitor", "fone", "headphone", "console",
