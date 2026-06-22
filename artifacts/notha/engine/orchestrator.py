@@ -219,23 +219,6 @@ class Orchestrator:
             tools=NOTHA_TOOLS,
         )
 
-        # Send a short "please wait" message upfront when slow tools are involved.
-        # Always use the fixed fallback text — never the LLM's Phase-1 content.
-        # The LLM's Phase-1 text alongside a tool call is a "thinking" response
-        # that must NOT be forwarded to the user: the tool's actual result is
-        # what gets sent as the final reply, so forwarding the Phase-1 text
-        # would cause the user to receive two messages for a single input.
-        if send_fn and tool_calls:
-            slow_tools = [tc for tc in tool_calls if tc["name"] in self._SLOW_TOOLS]
-            if slow_tools:
-                interim_text = self._WAIT_MSG_FALLBACK.get(slow_tools[0]["name"])
-                if interim_text:
-                    try:
-                        await send_fn(phone, interim_text)
-                        logger.info("Interim message sent to %s: %s", phone, interim_text[:60])
-                    except Exception as e:
-                        logger.warning("Failed to send interim message: %s", e)
-
         # Tools that modify user data in the DB — require reloading context
         _USER_DATA_TOOLS = {
             "update_name", "update_nickname", "update_tax_id",
@@ -246,10 +229,11 @@ class Orchestrator:
         # Execute tool calls, feed results back to the LLM *with tools still
         # available*, and repeat until the LLM produces a plain-text reply.
         #
-        # This fixes the check_restriction → search_product chaining bug:
-        # previously Phase 2 called the LLM WITHOUT tools, so after
-        # check_restriction returned "ALLOWED" the LLM could only generate text
-        # ("I'll search now…") and search_product was never actually executed.
+        # The interim "please wait" message is sent from INSIDE the loop so it
+        # fires in whichever iteration the slow tool actually appears — not only
+        # in Phase-1. This matters for check_restriction → search_product chains:
+        # check_restriction runs in iteration 0 (fast, no interim), then the LLM
+        # calls search_product in iteration 1 where the interim is now sent.
         # ──────────────────────────────────────────────────────────────────────
         current_messages = messages
         current_tool_calls = tool_calls
@@ -257,6 +241,7 @@ class Orchestrator:
         user_data_changed = False
         final_reply: str | None = None
         _MAX_AGENT_LOOPS = 5
+        _interim_sent = False  # ensure at most one interim per user message
 
         for _loop in range(_MAX_AGENT_LOOPS):
             if not current_tool_calls:
@@ -268,6 +253,23 @@ class Orchestrator:
                     None,
                 )
                 break
+
+            # Send a single interim "please wait" before any slow tool executes,
+            # regardless of which loop iteration it appears in.
+            if send_fn and not _interim_sent:
+                for tc in current_tool_calls:
+                    interim_text = self._WAIT_MSG_FALLBACK.get(tc["name"])
+                    if interim_text:
+                        try:
+                            await send_fn(phone, interim_text)
+                            logger.info(
+                                "Interim message sent to %s (loop=%d): %s",
+                                phone, _loop, interim_text[:60],
+                            )
+                            _interim_sent = True
+                        except Exception as e:
+                            logger.warning("Failed to send interim message: %s", e)
+                        break  # one interim per turn is enough
 
             # Execute all tool calls in this iteration
             current_tool_results: dict[str, str] = {}
