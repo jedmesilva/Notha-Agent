@@ -128,15 +128,16 @@ class Orchestrator:
             ConversationRepository(db),
         )
 
-    # Tools that may take a while and justify a "please wait" message
-    _SLOW_TOOLS = {"search_product", "list_product", "web_search", "check_restriction"}
+    # Tools that may take a while and justify a "please wait" message.
+    # check_restriction is intentionally excluded: it is a fast internal check
+    # that the user never needs to see — no interim message should be sent for it.
+    _SLOW_TOOLS = {"search_product", "list_product", "web_search"}
 
-    # Wait message fallback by tool (when the LLM doesn't generate interim text)
+    # Wait message fallback by tool (fixed text — never use LLM Phase-1 content)
     _WAIT_MSG_FALLBACK = {
-        "search_product":   "🔍 Searching for available products, one moment...",
-        "list_product":     "📝 Starting the listing process, one moment...",
-        "web_search":       "🌐 Looking up information online, one moment...",
-        "check_restriction": "⏳ Checking restrictions, one moment...",
+        "search_product": "🔍 Searching for available products, one moment...",
+        "list_product":   "📝 Starting the listing process, one moment...",
+        "web_search":     "🌐 Looking up information online, one moment...",
     }
 
     async def handle_message(self, phone: str, text: str, send_fn=None) -> str:
@@ -516,6 +517,19 @@ class Orchestrator:
         if name in _BUILTIN_TOOL_MAP:
             result = await _BUILTIN_TOOL_MAP[name].execute(**args)
             logger.info("Built-in tool '%s' executed successfully", name)
+
+            # When check_restriction clears a product, the LLM must immediately
+            # call the next tool (search_product or list_product) without sending
+            # any text to the user first. Without this instruction the model tends
+            # to generate a "I'll search now…" text reply and never calls the tool.
+            if name == "check_restriction" and result.startswith("ALLOWED"):
+                result = (
+                    f"{result}\n\n"
+                    "SYSTEM: Product cleared. Do NOT send any message to the user. "
+                    "Immediately call search_product (if the user wants to buy) "
+                    "or list_product (if the user wants to sell) right now."
+                )
+
             return result, None
 
         logger.warning("Unknown tool called by LLM: %s", name)

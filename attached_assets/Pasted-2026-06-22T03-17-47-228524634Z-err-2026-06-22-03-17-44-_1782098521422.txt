@@ -1,0 +1,20 @@
+2026-06-22T03:17:47.228524634Z [err]  2026-06-22 03:17:44,329 [INFO] notha - Message from 556999785065: Oi...
+2026-06-22T03:17:47.228527348Z [err]  2026-06-22 03:17:44,991 [INFO] notha.llm - LLM provider initialized: OpenAI (model=gpt-4o-mini)
+2026-06-22T03:17:47.228530092Z [err]  2026-06-22 03:17:46,070 [INFO] httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22T03:17:47.228532848Z [err]  2026-06-22 03:17:47,159 [INFO] httpx - HTTP Request: POST https://graph.facebook.com/v21.0/1191026230760747/messages "HTTP/1.1 200 OK"
+2026-06-22T03:17:47.228535662Z [err]  2026-06-22 03:17:47,161 [INFO] notha - Reply sent to 556999785065.
+2026-06-22T03:17:57.763401317Z [err]  2026-06-22 03:17:57,736 [INFO] notha - Message from 556999785065: Preciso de um carro...
+2026-06-22T03:17:59.782727239Z [err]  2026-06-22 03:17:59,760 [INFO] httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22T03:18:00.805178845Z [err]  2026-06-22 03:18:00,788 [INFO] httpx - HTTP Request: POST https://graph.facebook.com/v21.0/1191026230760747/messages "HTTP/1.1 200 OK"
+2026-06-22T03:18:00.805185159Z [err]  2026-06-22 03:18:00,789 [INFO] notha - Reply sent to 556999785065.
+2026-06-22T03:18:12.318009048Z [err]  2026-06-22 03:18:12,276 [INFO] notha - Message from 556999785065: Honda fit 2006...
+2026-06-22T03:18:15.029054227Z [err]  2026-06-22 03:18:15,025 [INFO] httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22T03:18:15.784907977Z [err]  2026-06-22 03:18:15,548 [INFO] httpx - HTTP Request: POST https://graph.facebook.com/v21.0/1191026230760747/messages "HTTP/1.1 200 OK"
+2026-06-22T03:18:15.784911959Z [err]  2026-06-22 03:18:15,549 [INFO] notha.orchestrator - Interim message sent to 556999785065: ⏳ Checking restrictions, one moment...
+2026-06-22T03:18:17.951668112Z [err]  2026-06-22 03:18:17,950 [INFO] httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22T03:18:17.958023438Z [err]  2026-06-22 03:18:17,956 [INFO] notha.tools.restrictions - Restriction check: product='Honda Fit 2006' terms=['Honda Fit 2006', 'Honda Fit', 'Honda Jazz', 'Honda Fit 2006 Brasil', 'Honda Fit 2006 MG']
+2026-06-22T03:18:18.119083815Z [err]  2026-06-22 03:18:18,118 [INFO] notha.tools.restrictions - Restriction check: ALLOWED — no records found for 'Honda Fit 2006'
+2026-06-22T03:18:18.119086990Z [err]  2026-06-22 03:18:18,118 [INFO] notha.orchestrator - Built-in tool 'check_restriction' executed successfully
+2026-06-22T03:18:19.106338602Z [err]  2026-06-22 03:18:19,087 [INFO] httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-22T03:18:20.002091409Z [err]  2026-06-22 03:18:19,998 [INFO] httpx - HTTP Request: POST https://graph.facebook.com/v21.0/1191026230760747/messages "HTTP/1.1 200 OK"
+2026-06-22T03:18:20.002096433Z [err]  2026-06-22 03:18:19,999 [INFO] notha - Reply sent to 556999785065.
