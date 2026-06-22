@@ -856,11 +856,14 @@ class ConversationAgent:
         history: list[dict],
         context: str,
         synthesis_instruction: str = "",
+        user_message: str = "",
     ) -> str:
         """Phase 3 — Synthesize collected results into a final natural reply.
 
         outcome: "done" | "abort" | "no_tools" (direct response, no tools needed)
         synthesis_instruction: extra guidance for the LLM (e.g. listing results text)
+        user_message: the current user message (not yet in history); used to
+                      correctly determine greeting state and guardrail evaluation.
         """
         history_fmt = _fmt_history(history, max_messages=20)
         results_fmt = "\n".join(
@@ -877,10 +880,13 @@ class ConversationAgent:
         )
 
         has_history = len(history) > 0
-        last_user_msg = next(
+        # Use the current user message if provided; only fall back to history
+        # when not available. This prevents using a stale previous message
+        # (e.g. a greeting) as the reference for the current turn.
+        current_user_msg = user_message or next(
             (m["content"] for m in reversed(history) if m["role"] == "user"), ""
         )
-        user_greeted = _is_pure_greeting(last_user_msg)
+        user_greeted = _is_pure_greeting(current_user_msg)
 
         try:
             resp = await get_provider().complete(
@@ -890,9 +896,9 @@ class ConversationAgent:
             )
             reply = resp.text or "Done!"
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
-            history_for_guardrail = list(history) + [{"role": "user", "content": last_user_msg}]
+            history_for_guardrail = list(history) + [{"role": "user", "content": current_user_msg}]
             return await validate_reply(
-                sanitized, history_for_guardrail, context, last_user_msg,
+                sanitized, history_for_guardrail, context, current_user_msg,
                 objective=objective,
             )
         except Exception as e:

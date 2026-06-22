@@ -315,9 +315,11 @@ class Orchestrator:
             user_msg  = step.get("user_message")
 
             # Send pre-step message to user (only for slow/visible steps)
+            pre_step_msg_sent = False
             if send_fn and user_msg:
                 try:
                     await send_fn(phone, user_msg)
+                    pre_step_msg_sent = True
                     logger.info("Pre-step message sent (%s): %s", tool_name, user_msg[:80])
                 except Exception as e:
                     logger.warning("Failed to send pre-step message: %s", e)
@@ -365,7 +367,8 @@ class Orchestrator:
             new_steps        = assessment.get("new_steps", [])
 
             # Optional mid-execution progress update to user
-            if send_fn and progress_message:
+            # Skip if a pre-step message was already sent for this step to avoid duplicates
+            if send_fn and progress_message and not pre_step_msg_sent:
                 try:
                     await send_fn(phone, progress_message)
                     logger.info("Progress message sent (%s): %s", tool_name, progress_message[:80])
@@ -405,6 +408,7 @@ class Orchestrator:
                 history=history,
                 context=context,
                 synthesis_instruction=synthesis_instruction,
+                user_message=text,
             )
 
             # If synthesis itself failed, try the plain chat fallback
