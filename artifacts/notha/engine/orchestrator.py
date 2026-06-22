@@ -211,111 +211,195 @@ class Orchestrator:
             await conv_repo.add(user_id, "assistant", reply)
             return reply
 
-        # Phase 1: LLM sees full history and decides which tools to call
-        messages, tool_calls = await self._conv.get_tool_calls(
-            contexto=context,
-            history=history,
-            user_message=text,
-            tools=NOTHA_TOOLS,
-        )
+        # ══════════════════════════════════════════════════════════════════════
+        # 4-PHASE AGENTIC PIPELINE
+        # ══════════════════════════════════════════════════════════════════════
+        # Phase 0 — Understand: what does the user want? (fast, no tools)
+        # Phase 1 — Plan:       which tools, in what order, with what messages?
+        # Phase 2 — Execute:    run each step; assess result before continuing
+        # Phase 3 — Synthesize: turn collected results into a final reply
+        # ══════════════════════════════════════════════════════════════════════
 
-        # Tools that modify user data in the DB — require reloading context
         _USER_DATA_TOOLS = {
             "update_name", "update_nickname", "update_tax_id",
             "update_pix_key", "update_address", "update_location",
         }
 
-        # ── Agentic tool loop ──────────────────────────────────────────────────
-        # Execute tool calls, feed results back to the LLM *with tools still
-        # available*, and repeat until the LLM produces a plain-text reply.
-        #
-        # The interim "please wait" message is sent from INSIDE the loop so it
-        # fires in whichever iteration the slow tool actually appears — not only
-        # in Phase-1. This matters for check_restriction → search_product chains:
-        # check_restriction runs in iteration 0 (fast, no interim), then the LLM
-        # calls search_product in iteration 1 where the interim is now sent.
-        # ──────────────────────────────────────────────────────────────────────
-        current_messages = messages
-        current_tool_calls = tool_calls
-        override_reply: str | None = None
-        user_data_changed = False
-        final_reply: str | None = None
-        _MAX_AGENT_LOOPS = 5
-        _interim_sent = False  # ensure at most one interim per user message
+        # ── Phase 0: Understand ───────────────────────────────────────────────
+        understanding = await self._conv.understand(
+            user_message=text,
+            history=history,
+            context=context,
+        )
+        objective   = understanding.get("objective", text)
+        intent      = understanding.get("intent", "other")
+        needs_tools = understanding.get("needs_tools", True)
 
-        for _loop in range(_MAX_AGENT_LOOPS):
-            if not current_tool_calls:
-                # LLM produced a plain-text response — extract it
-                final_reply = next(
-                    (m.get("content") for m in reversed(current_messages)
-                     if m["role"] == "assistant" and not m.get("tool_calls")
-                     and m.get("content")),
-                    None,
-                )
+        # Active negotiations: intercept confirm/reject/counteroffer first
+        if active_negs and intent in ("confirm", "reject", "counteroffer"):
+            neg_reply = await self._check_negotiation_response(
+                phone, text, user, active_negs[0],
+                user_repo, neg_repo, listing_repo, engine,
+                history=history,
+            )
+            if neg_reply:
+                await conv_repo.add(user_id, "user", text)
+                await conv_repo.add(user_id, "assistant", neg_reply)
+                return neg_reply
+
+        # ── Phase 1: Plan ─────────────────────────────────────────────────────
+        # Build a compact tool catalog for the planner: name + required params
+        _TOOL_CATALOG: list[dict] = []
+        for t in NOTHA_TOOLS:
+            if t.get("type") != "function":
+                continue
+            fn = t["function"]
+            params = fn.get("parameters", {}).get("properties", {})
+            required = fn.get("parameters", {}).get("required", [])
+            _TOOL_CATALOG.append({
+                "name": fn["name"],
+                "description": fn.get("description", "")[:120],
+                "parameters": {
+                    k: {"type": v.get("type", "string"), "required": k in required}
+                    for k, v in params.items()
+                },
+            })
+        # Add builtin tools from their Tool objects
+        from tools.base import Tool as _BaseTool
+        for _tool_obj in _BUILTIN_TOOL_MAP.values():
+            params = getattr(_tool_obj, "parameters", {}).get("properties", {})
+            required = getattr(_tool_obj, "parameters", {}).get("required", [])
+            _TOOL_CATALOG.append({
+                "name": _tool_obj.name,
+                "description": getattr(_tool_obj, "description", "")[:120],
+                "parameters": {
+                    k: {"type": v.get("type", "string"), "required": k in required}
+                    for k, v in params.items()
+                },
+            })
+
+        steps = await self._conv.plan(
+            objective=objective,
+            intent=intent,
+            history=history,
+            context=context,
+            tool_catalog=_TOOL_CATALOG,
+            needs_tools=needs_tools,
+        )
+
+        logger.info(
+            "Pipeline: objective=%r intent=%s needs_tools=%s steps=%d",
+            objective, intent, needs_tools, len(steps),
+        )
+
+        # ── Phase 2: Execute plan ─────────────────────────────────────────────
+        all_tool_results: dict[str, str] = {}   # tool_name → last result
+        synthesis_instruction: str = ""          # set when a tool produces its own reply text
+        final_reply: str | None = None           # set when a tool produces the complete reply
+        outcome = "done"
+
+        remaining = list(steps)
+
+        _MAX_STEPS = 8
+        steps_executed = 0
+
+        while remaining and steps_executed < _MAX_STEPS:
+            step = remaining.pop(0)
+            tool_name = step.get("tool", "")
+            args      = step.get("args", {}) or {}
+            user_msg  = step.get("user_message")
+
+            # Send pre-step message to user (only for slow/visible steps)
+            if send_fn and user_msg:
+                try:
+                    await send_fn(phone, user_msg)
+                    logger.info("Pre-step message sent (%s): %s", tool_name, user_msg[:80])
+                except Exception as e:
+                    logger.warning("Failed to send pre-step message: %s", e)
+
+            # Execute the tool
+            if tool_name in _USER_DATA_TOOLS:
+                user_data_changed = True
+            else:
+                user_data_changed = False
+
+            tc = {"id": f"step_{steps_executed}", "name": tool_name, "arguments": args}
+            result_text, complex_reply = await self._execute_tool(
+                tc, phone, text, user,
+                user_repo, listing_repo, neg_repo, engine, active_negs,
+                history=history, context=context,
+            )
+            steps_executed += 1
+            all_tool_results[tool_name] = result_text
+
+            # Tool produced its own complete reply (search results, listing flow, etc.)
+            if complex_reply is not None:
+                final_reply = complex_reply
+                outcome = "done"
                 break
 
-            # Send a single interim "please wait" before any slow tool executes,
-            # regardless of which loop iteration it appears in.
-            if send_fn and not _interim_sent:
-                for tc in current_tool_calls:
-                    interim_text = self._WAIT_MSG_FALLBACK.get(tc["name"])
-                    if interim_text:
-                        try:
-                            await send_fn(phone, interim_text)
-                            logger.info(
-                                "Interim message sent to %s (loop=%d): %s",
-                                phone, _loop, interim_text[:60],
-                            )
-                            _interim_sent = True
-                        except Exception as e:
-                            logger.warning("Failed to send interim message: %s", e)
-                        break  # one interim per turn is enough
-
-            # Execute all tool calls in this iteration
-            current_tool_results: dict[str, str] = {}
-            for tc in current_tool_calls:
-                if tc["name"] in _USER_DATA_TOOLS:
-                    user_data_changed = True
-                result_text, complex_reply = await self._execute_tool(
-                    tc, phone, text, user,
-                    user_repo, listing_repo, neg_repo, engine, active_negs,
-                    history=history, context=context,
-                )
-                current_tool_results[tc["id"]] = result_text
-                if complex_reply is not None:
-                    override_reply = complex_reply
-
-            # A tool (search/listing) already produced the complete reply
-            if override_reply:
-                final_reply = override_reply
-                break
-
-            # Reload user context if any data-mutation tool ran
+            # Reload context if user data changed
             if user_data_changed:
                 user = await user_repo.find_by_id(user_id) or user
                 seller_profile = await user_repo.get_seller_profile(user_id)
                 context = self._build_context(user, active_negs, seller_profile, phone=phone, phone_row=phone_row)
-                user_data_changed = False
 
-            # Feed results back to LLM with tools available — lets it chain calls
-            current_messages, current_tool_calls = await self._conv.continue_with_results(
-                messages=current_messages,
-                tool_results=current_tool_results,
-                tools=NOTHA_TOOLS,
-                contexto=context,
+            # Assess the result — decide whether to continue, replan, or stop
+            assessment = await self._conv.assess_result(
+                objective=objective,
+                tool_name=tool_name,
+                result=result_text,
+                remaining_steps=remaining,
             )
-            # Next iteration: if current_tool_calls is non-empty, execute them;
-            # if empty, extract the text reply at the top of the loop.
+            decision         = assessment.get("decision", "continue")
+            progress_message = assessment.get("progress_message")
+            new_steps        = assessment.get("new_steps", [])
 
-        # ── Fallback: Phase 1 produced no tool calls at all ───────────────────
-        if not tool_calls and final_reply is None:
-            last_assistant = next(
-                (m["content"] for m in reversed(messages) if m["role"] == "assistant"),
-                None,
+            # Optional mid-execution progress update to user
+            if send_fn and progress_message:
+                try:
+                    await send_fn(phone, progress_message)
+                    logger.info("Progress message sent (%s): %s", tool_name, progress_message[:80])
+                except Exception as e:
+                    logger.warning("Failed to send progress message: %s", e)
+
+            if decision == "done":
+                outcome = "done"
+                break
+            elif decision == "abort":
+                outcome = "abort"
+                synthesis_instruction = (
+                    f"The objective could not be achieved: {assessment.get('reason', '')}. "
+                    "Inform the user naturally and offer alternatives if possible."
+                )
+                break
+            elif decision == "replan" and new_steps:
+                logger.info("Replan triggered by %s: %d new steps", tool_name, len(new_steps))
+                remaining = new_steps + remaining
+            # "continue" → just keep going with remaining steps
+
+        # ── Phase 3: Synthesize ───────────────────────────────────────────────
+        # Only synthesize if no tool already produced the final reply
+        if final_reply is None:
+            if not steps and not needs_tools:
+                # No tools needed — direct conversational response
+                outcome = "no_tools"
+                synthesis_instruction = (
+                    "Respond directly and naturally to the user's message. "
+                    "No tools were needed."
+                )
+
+            final_reply = await self._conv.synthesize(
+                objective=objective,
+                outcome=outcome,
+                tool_results=all_tool_results,
+                history=history,
+                context=context,
+                synthesis_instruction=synthesis_instruction,
             )
-            if last_assistant:
-                final_reply = last_assistant
-            else:
+
+            # If synthesis itself failed, try the plain chat fallback
+            if not final_reply or not final_reply.strip():
                 final_reply, _ = await self._conv.chat_with_tools(
                     contexto=context,
                     history=history,
@@ -323,17 +407,7 @@ class Orchestrator:
                     tools=None,
                 )
 
-            # Check active negotiations for confirmation / rejection
-            if active_negs:
-                neg_reply = await self._check_negotiation_response(
-                    phone, text, user, active_negs[0],
-                    user_repo, neg_repo, listing_repo, engine,
-                    history=history,
-                )
-                if neg_reply:
-                    final_reply = neg_reply
-
-        if final_reply is None:
+        if not final_reply:
             final_reply = "Desculpe, ocorreu um erro interno. Tente novamente em instantes."
 
         # Persist message and reply in DB

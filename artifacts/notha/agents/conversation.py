@@ -17,6 +17,18 @@ from guardrail import validate_reply
 
 logger = logging.getLogger("notha.agent.conversation")
 
+def _fmt_history(history: list[dict], max_messages: int = 15) -> str:
+    """Formats conversation history into a readable string for prompts."""
+    recent = [m for m in history if m.get("role") in ("user", "assistant")][-max_messages:]
+    lines = []
+    for m in recent:
+        role = "User" if m["role"] == "user" else "NOTHA"
+        content = (m.get("content") or "")[:400]
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines) if lines else "(no history yet)"
+
+
 _GREETING_RE = re.compile(
     r"^\s*(oi|olá|ola|hey|hi|hello|bom\s+dia|boa\s+tarde|boa\s+noite|e\s+a[ií]|tudo\s+bem"
     r"|tudo\s+bom|opa|salve|eae|eaí|como\s+vai|como\s+você\s+está|o[i]+)"
@@ -546,7 +558,348 @@ Other:
 """
 
 
+_UNDERSTAND_PROMPT = """You are the intent analyser for NOTHA, a WhatsApp marketplace for physical products.
+
+Read the user message and full conversation history, then return ONLY valid JSON describing the user's intent.
+
+━━━ USER CONTEXT ━━━
+{context}
+
+━━━ CONVERSATION HISTORY ━━━
+{history}
+
+━━━ LATEST USER MESSAGE ━━━
+{message}
+
+━━━ RETURN FORMAT ━━━
+{{
+  "objective": "<short English phrase: what the user wants to achieve>",
+  "intent": "buy|sell|negotiate|confirm|reject|counteroffer|chitchat|info|onboarding|out_of_scope|other",
+  "flow": "product_search|listing|negotiation|payment|delivery|onboarding|greeting|chitchat|out_of_scope|other",
+  "needs_tools": true|false,
+  "confidence": 0.0-1.0,
+  "notes": "<any nuance worth noting for the planner, or empty string>"
+}}
+
+Rules:
+- needs_tools=false only for pure greetings or clearly out-of-scope messages (no DB/web lookup needed)
+- Be concise in objective, e.g. "Find iPhone 14 in São Paulo" or "List used sofa for sale"
+- Return ONLY valid JSON, no extra text"""
+
+_PLAN_PROMPT = """You are the planner for NOTHA, a WhatsApp marketplace for physical products.
+
+The user's objective has been identified. Your job is to produce a precise execution plan.
+
+━━━ USER CONTEXT ━━━
+{context}
+
+━━━ CONVERSATION HISTORY ━━━
+{history}
+
+━━━ OBJECTIVE ━━━
+{objective}
+
+━━━ INTENT ━━━
+{intent}
+
+━━━ AVAILABLE TOOLS (name | required params | description) ━━━
+{tool_catalog}
+
+━━━ RULES ━━━
+1. check_restriction MUST come before search_product or list_product — always.
+   For check_restriction, args MUST include "product_description" (string, required).
+2. user_message in a step is what NOTHA says to the user BEFORE executing that tool.
+   - Set it only for slow/visible steps (search_product, list_product, web_search).
+   - For internal checks (check_restriction, update_*, get_datetime) set it to null.
+   - Generate the message in the user's language (detect from history), naturally, for WhatsApp.
+   - Example for search_product: "🔍 Buscando iPhone 14 disponível pra você, um momento..."
+3. args MUST be a valid JSON object with all required parameters for that tool.
+   Always populate required params — never leave them empty or null.
+4. reason is internal only — the user never sees it.
+5. Include only the tools that are actually needed. Keep the plan minimal.
+6. If needs_tools is false (greeting, out_of_scope), return an empty steps array.
+
+━━━ RETURN FORMAT ━━━
+{{
+  "steps": [
+    {{
+      "step": 1,
+      "tool": "<tool_name>",
+      "args": {{"<required_param>": "<value>"}},
+      "reason": "<why this tool is needed>",
+      "user_message": "<message to send before executing, or null>"
+    }}
+  ]
+}}
+
+Return ONLY valid JSON, no extra text."""
+
+_ASSESS_PROMPT = """You are a step result evaluator for NOTHA, a WhatsApp marketplace for physical products.
+
+A tool was just executed. Decide what to do next.
+
+━━━ OBJECTIVE ━━━
+{objective}
+
+━━━ TOOL EXECUTED ━━━
+{tool_name}
+
+━━━ RESULT ━━━
+{result}
+
+━━━ STEPS REMAINING ━━━
+{remaining_steps}
+
+━━━ DECISION OPTIONS ━━━
+- "continue"  → result is good, execute the next planned step
+- "done"      → objective is achieved, proceed to synthesis
+- "replan"    → result changed what is needed; provide new steps
+- "abort"     → objective cannot be achieved (e.g. product restricted, no results)
+
+━━━ RETURN FORMAT ━━━
+{{
+  "decision": "continue|done|replan|abort",
+  "reason": "<one line why>",
+  "progress_message": "<optional short message to send user mid-execution, or null>",
+  "new_steps": []
+}}
+
+- progress_message: use only if execution is visibly taking time and user should be updated.
+  Generate it in the user's language if you include it.
+- new_steps: fill only when decision=replan, using the same step format as the planner.
+- Return ONLY valid JSON, no extra text."""
+
+_SYNTHESIZE_PROMPT = """You are NOTHA — a physical product buy-and-sell agent on WhatsApp.
+
+Produce the final reply to the user. Write as NOTHA, naturally and concisely.
+
+━━━ IDENTITY AND TONE ━━━
+- Tone: human, warm, efficient — like a trusted friend who understands business
+- Language: detect the user's language from history and ALWAYS reply in the same language
+- Max 3 short sentences unless listing items
+- Use emojis sparingly (1-2) when it feels natural
+- No markdown (no asterisks, hashtags, underlines)
+- Never start with "Hi!", "Hello!" if there is already conversation history
+- Never mention AI, GPT, OpenAI, algorithm, LLM
+
+━━━ USER CONTEXT ━━━
+{context}
+
+━━━ CONVERSATION HISTORY ━━━
+{history}
+
+━━━ OBJECTIVE THAT WAS ATTEMPTED ━━━
+{objective}
+
+━━━ OUTCOME ━━━
+{outcome}
+
+━━━ TOOL RESULTS COLLECTED ━━━
+{tool_results}
+
+━━━ INSTRUCTIONS ━━━
+{synthesis_instruction}
+
+Write the reply now. Return ONLY the reply text, nothing else."""
+
+
 class ConversationAgent:
+
+    # ─── New 4-phase architecture ─────────────────────────────────────────────
+
+    async def understand(
+        self,
+        user_message: str,
+        history: list[dict],
+        context: str,
+    ) -> dict:
+        """Phase 0 — Understand the user's intent and objective.
+
+        Returns a dict with: objective, intent, flow, needs_tools, confidence, notes.
+        Fast: no tools, small output, gpt-4o-mini.
+        """
+        history_fmt = _fmt_history(history, max_messages=15)
+        prompt = _UNDERSTAND_PROMPT.format(
+            context=context or "no context",
+            history=history_fmt,
+            message=user_message,
+        )
+        try:
+            resp = await get_provider().complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=250,
+                json_mode=True,
+            )
+            result = json.loads(resp.text or "{}")
+            logger.info(
+                "understand() → intent=%s flow=%s needs_tools=%s objective=%r",
+                result.get("intent"), result.get("flow"),
+                result.get("needs_tools"), result.get("objective"),
+            )
+            return result
+        except Exception as e:
+            logger.error("understand() error: %s", e)
+            return {
+                "objective": user_message,
+                "intent": "other",
+                "flow": "other",
+                "needs_tools": True,
+                "confidence": 0.5,
+                "notes": "",
+            }
+
+    async def plan(
+        self,
+        objective: str,
+        intent: str,
+        history: list[dict],
+        context: str,
+        tool_catalog: list[dict] | None = None,
+        tool_names: list[str] | None = None,
+        needs_tools: bool = True,
+    ) -> list[dict]:
+        """Phase 1 — Build an explicit execution plan.
+
+        Returns a list of step dicts: {step, tool, args, reason, user_message}.
+        Empty list when no tools are needed.
+        Accepts either tool_catalog (preferred, includes param signatures) or
+        tool_names (legacy, names only) for backwards compatibility.
+        """
+        if not needs_tools:
+            return []
+
+        # Format tool catalog for the prompt
+        if tool_catalog:
+            catalog_lines = []
+            for t in tool_catalog:
+                req_params = [
+                    k for k, v in t.get("parameters", {}).items() if v.get("required")
+                ]
+                opt_params = [
+                    k for k, v in t.get("parameters", {}).items() if not v.get("required")
+                ]
+                params_str = ""
+                if req_params:
+                    params_str += f"required: {', '.join(req_params)}"
+                if opt_params:
+                    params_str += f"{' | ' if params_str else ''}optional: {', '.join(opt_params)}"
+                desc = t.get("description", "")[:100]
+                catalog_lines.append(f"- {t['name']} [{params_str}] — {desc}")
+            catalog_fmt = "\n".join(catalog_lines)
+        else:
+            catalog_fmt = ", ".join(tool_names or [])
+
+        history_fmt = _fmt_history(history, max_messages=15)
+        prompt = _PLAN_PROMPT.format(
+            context=context or "no context",
+            history=history_fmt,
+            objective=objective,
+            intent=intent,
+            tool_catalog=catalog_fmt,
+        )
+        try:
+            resp = await get_provider().complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=600,
+                json_mode=True,
+            )
+            data = json.loads(resp.text or "{}")
+            steps = data.get("steps", [])
+            logger.info("plan() → %d step(s): %s", len(steps), [s.get("tool") for s in steps])
+            return steps
+        except Exception as e:
+            logger.error("plan() error: %s", e)
+            return []
+
+    async def assess_result(
+        self,
+        objective: str,
+        tool_name: str,
+        result: str,
+        remaining_steps: list[dict],
+    ) -> dict:
+        """Phase 2 (per step) — Evaluate a tool result and decide what to do next.
+
+        Returns: {decision, reason, progress_message, new_steps}
+        decision: "continue" | "done" | "replan" | "abort"
+        """
+        prompt = _ASSESS_PROMPT.format(
+            objective=objective,
+            tool_name=tool_name,
+            result=result[:1500],  # cap to avoid token waste
+            remaining_steps=json.dumps(remaining_steps, ensure_ascii=False),
+        )
+        try:
+            resp = await get_provider().complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=300,
+                json_mode=True,
+            )
+            data = json.loads(resp.text or "{}")
+            logger.info(
+                "assess_result() tool=%s → decision=%s reason=%r",
+                tool_name, data.get("decision"), data.get("reason"),
+            )
+            return data
+        except Exception as e:
+            logger.error("assess_result() error: %s", e)
+            return {"decision": "continue", "reason": str(e), "progress_message": None, "new_steps": []}
+
+    async def synthesize(
+        self,
+        objective: str,
+        outcome: str,
+        tool_results: dict[str, str],
+        history: list[dict],
+        context: str,
+        synthesis_instruction: str = "",
+    ) -> str:
+        """Phase 3 — Synthesize collected results into a final natural reply.
+
+        outcome: "done" | "abort" | "no_tools" (direct response, no tools needed)
+        synthesis_instruction: extra guidance for the LLM (e.g. listing results text)
+        """
+        history_fmt = _fmt_history(history, max_messages=20)
+        results_fmt = "\n".join(
+            f"[{k}]: {v[:800]}" for k, v in tool_results.items()
+        ) if tool_results else "(no tools were executed)"
+
+        prompt = _SYNTHESIZE_PROMPT.format(
+            context=context or "no context",
+            history=history_fmt,
+            objective=objective,
+            outcome=outcome,
+            tool_results=results_fmt,
+            synthesis_instruction=synthesis_instruction or "Generate the appropriate response.",
+        )
+
+        has_history = len(history) > 0
+        last_user_msg = next(
+            (m["content"] for m in reversed(history) if m["role"] == "user"), ""
+        )
+        user_greeted = _is_pure_greeting(last_user_msg)
+
+        try:
+            resp = await get_provider().complete(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.6,
+                max_tokens=500,
+            )
+            reply = resp.text or "Done!"
+            sanitized = await _sanitize_response(reply, has_history, user_greeted)
+            history_for_guardrail = list(history) + [{"role": "user", "content": last_user_msg}]
+            return await validate_reply(
+                sanitized, history_for_guardrail, context, last_user_msg,
+                objective=objective,
+            )
+        except Exception as e:
+            logger.error("synthesize() error: %s", e)
+            return "Desculpe, tive um problema técnico. Tente novamente em instantes."
+
+    # ─── Legacy helpers (kept for listing flow, negotiation, speak, etc.) ──────
 
     async def get_tool_calls(
         self,
