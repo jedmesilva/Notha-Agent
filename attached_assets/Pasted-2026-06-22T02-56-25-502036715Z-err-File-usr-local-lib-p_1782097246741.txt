@@ -1,0 +1,1001 @@
+2026-06-22T02:56:25.502036715Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:25.502039875Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:25.502395491Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502398651Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:25.502401211Z [err]      return runner.run(main)
+2026-06-22T02:56:25.502404091Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502406721Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:25.502410111Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:25.502412771Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502415171Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:25.502417851Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:25.502420061Z [err]      await self._serve(sockets)
+2026-06-22T02:56:25.502422531Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:25.502425141Z [err]      config.load()
+2026-06-22T02:56:25.502427461Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:25.502430061Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:25.502432591Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502435091Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:25.502437411Z [err]      raise exc from None
+2026-06-22T02:56:25.502439701Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:25.502441891Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:25.502444401Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502446531Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:25.502694820Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:25.502698140Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:25.502700860Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:25.502703120Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:25.502705420Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:25.502707850Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:25.502710570Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:25.502712860Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:25.502714970Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:25.502717740Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:25.502719910Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:25.502722310Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:25.502724480Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:25.502726840Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:25.502729090Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:25.502731279Z [err]      import phonenumbers
+2026-06-22T02:56:25.502734069Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:56:26.943771161Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:56:26.943778931Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:56:26.943783541Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.943784671Z [err]  Traceback (most recent call last):
+2026-06-22T02:56:26.943787651Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:56:26.943787761Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:56:26.943791541Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:56:26.943808411Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.943811351Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:56:26.943816661Z [err]      run(
+2026-06-22T02:56:26.943819651Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:56:26.943822801Z [err]      server.run()
+2026-06-22T02:56:26.943826151Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:26.943826941Z [err]      sys.exit(main())
+2026-06-22T02:56:26.943829581Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:26.943829791Z [err]               ^^^^^^
+2026-06-22T02:56:26.943832351Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:56:26.943835081Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:56:26.943846841Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.943849211Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:56:26.943861271Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:56:26.943863751Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944805723Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944808573Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:26.944811003Z [err]      return runner.run(main)
+2026-06-22T02:56:26.944811733Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:26.944813943Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944815183Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944816713Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:26.944819063Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:26.944819433Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:26.944821713Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944822093Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:26.944824273Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:26.944826573Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:26.944828373Z [err]      config.load()
+2026-06-22T02:56:26.944829153Z [err]      await self._serve(sockets)
+2026-06-22T02:56:26.944832393Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:26.944835873Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:26.944840733Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.944843943Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:26.944846633Z [err]      raise exc from None
+2026-06-22T02:56:26.944849123Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:26.945866955Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:26.945871315Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:26.945874485Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:26.945877605Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:26.945877815Z [err]      import phonenumbers
+2026-06-22T02:56:26.945880575Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:56:26.945887385Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:26.945889945Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:26.945901515Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:26.945904015Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:26.945906525Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:26.945909125Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:26.945922304Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:26.945925874Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:26.945928284Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:26.945941614Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:26.945944294Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:28.759172848Z [err]      server.run()
+2026-06-22T02:56:28.759223657Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:28.759229187Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:28.759370296Z [err]  Traceback (most recent call last):
+2026-06-22T02:56:28.759374996Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:56:28.759393776Z [err]      sys.exit(main())
+2026-06-22T02:56:28.759397286Z [err]               ^^^^^^
+2026-06-22T02:56:28.759409496Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:56:28.759413326Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:56:28.759425176Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759441295Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:56:28.759445335Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:56:28.759457305Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759461055Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:56:28.759464335Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:56:28.759467715Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759473445Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:56:28.759476925Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:56:28.759480865Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759484415Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:56:28.759490705Z [err]      run(
+2026-06-22T02:56:28.759493995Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:56:28.759588065Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759592095Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:28.759596615Z [err]      return runner.run(main)
+2026-06-22T02:56:28.759602485Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759607715Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:28.759613275Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:28.759619645Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759625665Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:28.759630685Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:28.759635555Z [err]      await self._serve(sockets)
+2026-06-22T02:56:28.759641005Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:28.759646125Z [err]      config.load()
+2026-06-22T02:56:28.759652065Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:28.759657625Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:28.759663365Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759668284Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:28.759673624Z [err]      raise exc from None
+2026-06-22T02:56:28.759678444Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:28.759683414Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:28.759688514Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.759693104Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:28.760303889Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:28.760311489Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:28.760316019Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:28.760321899Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:28.760326489Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:28.760331289Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:28.760337219Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:28.760341869Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:28.760346338Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:28.760351308Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:28.760356758Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:28.760361508Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:28.760365768Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:28.760370058Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:28.760376058Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:28.760380348Z [err]      import phonenumbers
+2026-06-22T02:56:28.760385138Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:56:30.148998799Z [err]  Traceback (most recent call last):
+2026-06-22T02:56:30.149005789Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:56:30.149010149Z [err]      sys.exit(main())
+2026-06-22T02:56:30.149013879Z [err]               ^^^^^^
+2026-06-22T02:56:30.149018489Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:56:30.149022239Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:56:30.149025838Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149029188Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:56:30.149032608Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:56:30.149036028Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149039408Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:56:30.149042428Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:56:30.149045558Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149048538Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:56:30.149051518Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:56:30.149054908Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149058138Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:56:30.149061698Z [err]      run(
+2026-06-22T02:56:30.149064848Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:56:30.149067718Z [err]      server.run()
+2026-06-22T02:56:30.149071348Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:30.149074898Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:30.149804293Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149813703Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:30.149819252Z [err]      return runner.run(main)
+2026-06-22T02:56:30.149822642Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149826962Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:30.149831752Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:30.149835052Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149838052Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:30.149840842Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:30.149843842Z [err]      await self._serve(sockets)
+2026-06-22T02:56:30.149846812Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:30.149849902Z [err]      config.load()
+2026-06-22T02:56:30.149852612Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:30.149855452Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:30.149858542Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149861082Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:30.149864402Z [err]      raise exc from None
+2026-06-22T02:56:30.149867352Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:30.149870312Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:30.149873342Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.149876472Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:30.150418867Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:30.150420407Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:30.150426887Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:30.150428277Z [err]      import phonenumbers
+2026-06-22T02:56:30.150430647Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:30.150432417Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:56:30.150434457Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:30.150437947Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:30.150441507Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:30.150445127Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:30.150448677Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:30.150452427Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:30.150456017Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:30.150459127Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:30.150462307Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:30.150465487Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:30.150468957Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:31.945522724Z [err]  Traceback (most recent call last):
+2026-06-22T02:56:31.945527284Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:56:31.945531244Z [err]      sys.exit(main())
+2026-06-22T02:56:31.945534974Z [err]               ^^^^^^
+2026-06-22T02:56:31.945539334Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:56:31.945542794Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:56:31.945546274Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945549923Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:56:31.945553693Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:56:31.945557083Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945560243Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:56:31.945563793Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:56:31.945567643Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945571063Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:56:31.945574193Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:56:31.945577263Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945580543Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:56:31.945583903Z [err]      run(
+2026-06-22T02:56:31.945587443Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:56:31.945591023Z [err]      server.run()
+2026-06-22T02:56:31.945594113Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:31.945597173Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:31.945856381Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:31.945860361Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945864211Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:31.945865751Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:31.945868541Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945868901Z [err]      return runner.run(main)
+2026-06-22T02:56:31.945871291Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:31.945872851Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945876901Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:31.945878491Z [err]      raise exc from None
+2026-06-22T02:56:31.945880921Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:31.945881941Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:31.945884780Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945885660Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:31.945888620Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.945889640Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:31.945891100Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:31.945893850Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:31.945896410Z [err]      await self._serve(sockets)
+2026-06-22T02:56:31.945898810Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:31.945901380Z [err]      config.load()
+2026-06-22T02:56:31.946217518Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:31.946220427Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:31.946223297Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:31.946223417Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:31.946226627Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:31.946226767Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:31.946229438Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:31.946229648Z [err]      import phonenumbers
+2026-06-22T02:56:31.946232598Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:31.946232648Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:56:31.946235128Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:31.946235558Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:31.946237468Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:31.946240148Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:31.946241668Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:31.946245148Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:31.946248498Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:32.525277032Z [inf]  Stopping Container
+2026-06-22T02:56:33.304847695Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.304854655Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:56:33.304860845Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:56:33.304864315Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.304867945Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:56:33.304871335Z [err]      run(
+2026-06-22T02:56:33.304874495Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:56:33.304877805Z [err]      server.run()
+2026-06-22T02:56:33.304881375Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:56:33.304884965Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:56:33.304926775Z [err]  Traceback (most recent call last):
+2026-06-22T02:56:33.304931165Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:56:33.304934665Z [err]      sys.exit(main())
+2026-06-22T02:56:33.304938455Z [err]               ^^^^^^
+2026-06-22T02:56:33.304941825Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:56:33.304945155Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:56:33.304949315Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.304952235Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:56:33.304955575Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:56:33.304959015Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.304962215Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:56:33.304965695Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:56:33.305425411Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.305430051Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:56:33.305434521Z [err]      return runner.run(main)
+2026-06-22T02:56:33.305435831Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:56:33.305437351Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.305439441Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.305441351Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:56:33.305445041Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:56:33.305446161Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:56:33.305446681Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.305450311Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:56:33.305451211Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:56:33.305455131Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.305456401Z [err]      raise exc from None
+2026-06-22T02:56:33.305460141Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:56:33.305464100Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:56:33.305464420Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:56:33.305468870Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:56:33.305469450Z [err]      await self._serve(sockets)
+2026-06-22T02:56:33.305473740Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:56:33.305478670Z [err]      config.load()
+2026-06-22T02:56:33.306453183Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:56:33.306459833Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:56:33.306464433Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:56:33.306468913Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:56:33.306473082Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:56:33.306477642Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:56:33.306482262Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:56:33.306486762Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:56:33.306491322Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:56:33.306495182Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:33.306499432Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:56:33.306503762Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:56:33.306508172Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:56:33.306512612Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:56:33.306516722Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:56:33.306520802Z [err]      import phonenumbers
+2026-06-22T02:56:33.306524832Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.395594218Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.395596387Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.395598537Z [err]      sys.exit(main())
+2026-06-22T02:57:23.395601677Z [err]               ^^^^^^
+2026-06-22T02:57:23.395603817Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.395606027Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.395608447Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.395610777Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.395613167Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.395615687Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.395618197Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.395620727Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.395623497Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.395625937Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.395628457Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.395630937Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.395633167Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.395635477Z [err]      run(
+2026-06-22T02:57:23.395637587Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.395639997Z [err]      server.run()
+2026-06-22T02:57:23.395642317Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.395644607Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.399223538Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399226148Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.399228538Z [err]      return runner.run(main)
+2026-06-22T02:57:23.399231248Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399233918Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.399236568Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.399239478Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399242118Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.399244948Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.399247308Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.399249458Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.399251658Z [err]      config.load()
+2026-06-22T02:57:23.399254418Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.399256728Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.399258998Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399261198Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.399263438Z [err]      raise exc from None
+2026-06-22T02:57:23.399267978Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.399270838Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.399273008Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399275318Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.399425387Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.399428497Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399431307Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.399433877Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.399436417Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.399439387Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.399442067Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.399445267Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.399447967Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.399451436Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.399454216Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.399456496Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.399459286Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.399461566Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.399464306Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.399466766Z [err]      import phonenumbers
+2026-06-22T02:57:23.399469366Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.399471586Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.399474666Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.399477596Z [err]      sys.exit(main())
+2026-06-22T02:57:23.399480136Z [err]               ^^^^^^
+2026-06-22T02:57:23.399482496Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.399484806Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.399487216Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399490006Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.399492876Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.399496036Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399498586Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.399501306Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.399504056Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399506966Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.399509416Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.399511766Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399514786Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.399517266Z [err]      run(
+2026-06-22T02:57:23.399520516Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.399523006Z [err]      server.run()
+2026-06-22T02:57:23.399525426Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.399527816Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.399530406Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399533696Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.399536216Z [err]      return runner.run(main)
+2026-06-22T02:57:23.399538576Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399541186Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.399543936Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.399546426Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399549266Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.399552416Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.399554936Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.399557296Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.399559996Z [err]      config.load()
+2026-06-22T02:57:23.399562725Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.399573275Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.399575965Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399578775Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.399581305Z [err]      raise exc from None
+2026-06-22T02:57:23.399584125Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.399586915Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.399589175Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399591625Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.399594085Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.399597005Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399600355Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.399602995Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.399605525Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.399608345Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.399610975Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.399613885Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.399617615Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.399620545Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.399623635Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.399627795Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.399630655Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.399633495Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.399635975Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.399638845Z [err]      import phonenumbers
+2026-06-22T02:57:23.399641555Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.399644125Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.399647255Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.399649705Z [err]      sys.exit(main())
+2026-06-22T02:57:23.399652695Z [err]               ^^^^^^
+2026-06-22T02:57:23.399655495Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.399658345Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.399661195Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399664065Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.399960363Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.399962763Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399964993Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.399967253Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.399969953Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399972563Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.399975383Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.399988333Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.399990763Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.399992913Z [err]      run(
+2026-06-22T02:57:23.399995073Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.399998313Z [err]      server.run()
+2026-06-22T02:57:23.400000833Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.400003183Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.400005323Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400007443Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.400009573Z [err]      return runner.run(main)
+2026-06-22T02:57:23.400012563Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400015113Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.400017252Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.400019532Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400021712Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.400461399Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.400466639Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.400469548Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.400472228Z [err]      config.load()
+2026-06-22T02:57:23.400475218Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.400478258Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.400480808Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400482988Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.400485288Z [err]      raise exc from None
+2026-06-22T02:57:23.400487708Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.400490668Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.400493358Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400496168Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.400498618Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.400501218Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.400504308Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.400507088Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.400509528Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.400512258Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.404502446Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.404505716Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.404513656Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.404517616Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.404522376Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404528226Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.404531006Z [err]      config.load()
+2026-06-22T02:57:23.404531946Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.404534166Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.404534186Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.404538896Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.404545826Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.404546066Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.404547786Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.404548356Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.404553485Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.404557415Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.404557605Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.404559315Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404564215Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.404566125Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404569105Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.404570645Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.404575595Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.404576905Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.404579765Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.404580235Z [err]      run(
+2026-06-22T02:57:23.404586405Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.404591375Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.404591535Z [err]      raise exc from None
+2026-06-22T02:57:23.404592965Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404595305Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.404601425Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.404603915Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.404604985Z [err]      server.run()
+2026-06-22T02:57:23.404611045Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404613415Z [err]      import phonenumbers
+2026-06-22T02:57:23.404614565Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.404616915Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.404622345Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.404624535Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.404625435Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.404631465Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.404632375Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404638155Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.404639285Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.404640585Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.404649135Z [err]      return runner.run(main)
+2026-06-22T02:57:23.404649745Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.404656685Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404658555Z [err]      sys.exit(main())
+2026-06-22T02:57:23.404664184Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.404668304Z [err]               ^^^^^^
+2026-06-22T02:57:23.404671584Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.404672404Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.404680794Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.404681314Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404682194Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.404689594Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.404690644Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.404692444Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.404699294Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.404702124Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404706994Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.404709684Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.404712744Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.404718574Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.404719424Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.404724934Z [err]      import phonenumbers
+2026-06-22T02:57:23.404727244Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404730634Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.404733974Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.404737114Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.404740934Z [err]      sys.exit(main())
+2026-06-22T02:57:23.404744984Z [err]               ^^^^^^
+2026-06-22T02:57:23.404748404Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.404751424Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.404754164Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404757304Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.404760194Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.404764764Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404767954Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.404771174Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.404775724Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.404779223Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.409069670Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.409072450Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409075410Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.409078660Z [err]      run(
+2026-06-22T02:57:23.409082100Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.409086069Z [err]      server.run()
+2026-06-22T02:57:23.409089489Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.409092389Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.409095149Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409098479Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.409101869Z [err]      return runner.run(main)
+2026-06-22T02:57:23.409105409Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409109099Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.409112419Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.409115369Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409118479Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.409121889Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.409125399Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.409128699Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.409180089Z [err]      config.load()
+2026-06-22T02:57:23.409184939Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.409188449Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.409191599Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409195179Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.409198078Z [err]      raise exc from None
+2026-06-22T02:57:23.409201008Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.409203818Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.409207128Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409212028Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.409215208Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.409218198Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409222698Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.409225448Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.409228828Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.409232248Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.409235218Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.409238618Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.409241858Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.409244748Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.409248148Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.409251238Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.409255968Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.409259298Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.409263878Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.409266798Z [err]      import phonenumbers
+2026-06-22T02:57:23.409270458Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:23.409273608Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:23.409276818Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:23.409279738Z [err]      sys.exit(main())
+2026-06-22T02:57:23.409283078Z [err]               ^^^^^^
+2026-06-22T02:57:23.409286138Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:23.409289248Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:23.409292228Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409295788Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:23.409298618Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:23.409301698Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409304718Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:23.409307708Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:23.409310897Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409958172Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:23.409961332Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:23.409964452Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409967672Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:23.409970692Z [err]      run(
+2026-06-22T02:57:23.409973642Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:23.409978082Z [err]      server.run()
+2026-06-22T02:57:23.409981442Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:23.409984572Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:23.409987552Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.409990542Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:23.409993561Z [err]      return runner.run(main)
+2026-06-22T02:57:23.409996981Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.410000161Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:23.410003311Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:23.410006621Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.410009571Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:23.410012851Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:23.410016191Z [err]      await self._serve(sockets)
+2026-06-22T02:57:23.410019391Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:23.410022551Z [err]      config.load()
+2026-06-22T02:57:23.410025381Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:23.410028501Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:23.410031801Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.410034731Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:23.410037481Z [err]      raise exc from None
+2026-06-22T02:57:23.410040701Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:23.410043731Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:23.410046991Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.410049861Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:23.410052591Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:23.410055501Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:23.410058341Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:23.410061561Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:23.410064681Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:23.410067411Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:23.410070361Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:23.410073221Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:23.410076211Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:23.410079491Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.410082441Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:23.410085571Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:23.410088671Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:23.410091681Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:23.410094801Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:23.412094045Z [err]      import phonenumbers
+2026-06-22T02:57:23.412097175Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:24.598820786Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:24.598826746Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:24.598829586Z [err]      sys.exit(main())
+2026-06-22T02:57:24.598832876Z [err]               ^^^^^^
+2026-06-22T02:57:24.598836266Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:24.598839126Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:24.598841636Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.598845756Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:24.598849036Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:24.598852606Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.598855156Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:24.598857596Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:24.598859966Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.598862615Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:24.598865605Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:24.598868205Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.598870975Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:24.598873425Z [err]      run(
+2026-06-22T02:57:24.598876465Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:24.598879375Z [err]      server.run()
+2026-06-22T02:57:24.598881835Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:24.598884675Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:24.599137473Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599147653Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:24.599152113Z [err]      return runner.run(main)
+2026-06-22T02:57:24.599156383Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599161153Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:24.599164673Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:24.599168743Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599172333Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:24.599176473Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:24.599181123Z [err]      await self._serve(sockets)
+2026-06-22T02:57:24.599184843Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:24.599188413Z [err]      config.load()
+2026-06-22T02:57:24.599191483Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:24.599197093Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:24.599200332Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599203622Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:24.599206942Z [err]      raise exc from None
+2026-06-22T02:57:24.599210122Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:24.599213162Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:24.599216232Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599220452Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:24.599669928Z [err]      import phonenumbers
+2026-06-22T02:57:24.599670388Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:24.599676848Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:24.599679898Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:24.599684278Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:24.599685868Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:24.599690128Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:24.599693198Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:24.599695628Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:24.599698298Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:24.599701298Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:24.599704638Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:24.599707678Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:24.599710278Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:24.599713008Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:24.599715808Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:24.599719318Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:26.102603619Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.102609518Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:26.102614288Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:26.102618558Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.102623778Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:26.102625978Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:26.102627978Z [err]      run(
+2026-06-22T02:57:26.102632408Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:26.102636798Z [err]      server.run()
+2026-06-22T02:57:26.102639718Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:26.102643068Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:26.102649378Z [err]      sys.exit(main())
+2026-06-22T02:57:26.102649678Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:26.102654938Z [err]               ^^^^^^
+2026-06-22T02:57:26.102658438Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:26.102662128Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:26.102665068Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.102668748Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:26.102672098Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:26.102675248Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.102681548Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:26.102684668Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:26.103301273Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103305573Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:26.103308323Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103315103Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:26.103316303Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:26.103321813Z [err]      return runner.run(main)
+2026-06-22T02:57:26.103322403Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103326283Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103327063Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:26.103329813Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:26.103331143Z [err]      raise exc from None
+2026-06-22T02:57:26.103336933Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:26.103338473Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:26.103341313Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:26.103343143Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103346633Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:26.103350053Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:26.103353733Z [err]      await self._serve(sockets)
+2026-06-22T02:57:26.103356973Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:26.103360203Z [err]      config.load()
+2026-06-22T02:57:26.103363623Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:26.103898628Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:26.103909018Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:26.103915868Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:26.103921968Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:26.103926088Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:26.103930118Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:26.103934458Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:26.103938408Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:26.103941908Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:26.103945258Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:26.103948348Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:26.103951478Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:26.103954958Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:26.103968188Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:26.103971617Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:26.103974947Z [err]      import phonenumbers
+2026-06-22T02:57:26.103990027Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:27.564028374Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:27.564035454Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:27.564042584Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:27.564042604Z [err]               ^^^^^^
+2026-06-22T02:57:27.564047304Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564057804Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:27.564058564Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564060034Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:27.564061744Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564062524Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:27.564064344Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:27.564072754Z [err]      run(
+2026-06-22T02:57:27.564073244Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:27.564077114Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:27.564078094Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:27.564081844Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:27.564086184Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:27.564090014Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564090314Z [err]      server.run()
+2026-06-22T02:57:27.564097324Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:27.564103594Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:27.564108794Z [err]      sys.exit(main())
+2026-06-22T02:57:27.564361142Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564367292Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:27.564370972Z [err]      return runner.run(main)
+2026-06-22T02:57:27.564374492Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564378282Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:27.564381182Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:27.564385282Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564390812Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:27.564394282Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:27.564397132Z [err]      await self._serve(sockets)
+2026-06-22T02:57:27.564400342Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:27.564403512Z [err]      config.load()
+2026-06-22T02:57:27.564407192Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:27.564410292Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:27.564413702Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564417232Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:27.564420492Z [err]      raise exc from None
+2026-06-22T02:57:27.564424102Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:27.564427632Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:27.564431012Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.564434162Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:27.565746421Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:27.565751611Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:27.565754611Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:27.565757551Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:27.565760201Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:27.565763001Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:27.565765601Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:27.565768171Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:27.565771021Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:27.565774011Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:27.565776471Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:27.565778771Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:27.565781341Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:27.565783571Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:27.565786351Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:27.565788801Z [err]      import phonenumbers
+2026-06-22T02:57:27.565791701Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:29.040330342Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:29.040335452Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:29.040338312Z [err]      sys.exit(main())
+2026-06-22T02:57:29.040341202Z [err]               ^^^^^^
+2026-06-22T02:57:29.040344872Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:29.040347652Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:29.040350332Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040352962Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:29.040355432Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:29.040357832Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040360342Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:29.040363402Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:29.040365872Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040368562Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:29.040370922Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:29.040373292Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040375892Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:29.040378662Z [err]      run(
+2026-06-22T02:57:29.040382992Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:29.040385442Z [err]      server.run()
+2026-06-22T02:57:29.040387832Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:29.040390542Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:29.040753639Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040756969Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:29.040759009Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040759929Z [err]      return runner.run(main)
+2026-06-22T02:57:29.040762448Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040765068Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:29.040765258Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:29.040768538Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:29.040768958Z [err]      raise exc from None
+2026-06-22T02:57:29.040770918Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040772148Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:29.040773558Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:29.040774688Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:29.040776808Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:29.040777678Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.040779318Z [err]      await self._serve(sockets)
+2026-06-22T02:57:29.040780498Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:29.040781958Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:29.040784698Z [err]      config.load()
+2026-06-22T02:57:29.040787018Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:29.040789608Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:29.041282085Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:29.041285685Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:29.041288165Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:29.041288495Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:29.041291155Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:29.041291845Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:29.041293855Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:29.041295015Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:29.041296565Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:29.041297855Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:29.041299645Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:29.041301055Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:29.041303845Z [err]      import phonenumbers
+2026-06-22T02:57:29.041306215Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
+2026-06-22T02:57:29.041329294Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:29.041341164Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:29.041345904Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:30.776678543Z [err]  Traceback (most recent call last):
+2026-06-22T02:57:30.776682463Z [err]    File "/usr/local/bin/uvicorn", line 8, in <module>
+2026-06-22T02:57:30.776687643Z [err]      sys.exit(main())
+2026-06-22T02:57:30.776691303Z [err]               ^^^^^^
+2026-06-22T02:57:30.776695413Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1524, in __call__
+2026-06-22T02:57:30.776699113Z [err]      return self.main(*args, **kwargs)
+2026-06-22T02:57:30.776704003Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.776708183Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1445, in main
+2026-06-22T02:57:30.776711703Z [err]      rv = self.invoke(ctx)
+2026-06-22T02:57:30.776715913Z [err]           ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.776719443Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 1308, in invoke
+2026-06-22T02:57:30.776723363Z [err]      return ctx.invoke(self.callback, **ctx.params)
+2026-06-22T02:57:30.776727892Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.776731502Z [err]    File "/usr/local/lib/python3.11/site-packages/click/core.py", line 877, in invoke
+2026-06-22T02:57:30.776743052Z [err]      return callback(*args, **kwargs)
+2026-06-22T02:57:30.776747192Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.776750692Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 412, in main
+2026-06-22T02:57:30.776754082Z [err]      run(
+2026-06-22T02:57:30.776757192Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/main.py", line 579, in run
+2026-06-22T02:57:30.776760642Z [err]      server.run()
+2026-06-22T02:57:30.776763802Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 65, in run
+2026-06-22T02:57:30.776766842Z [err]      return asyncio.run(self.serve(sockets=sockets))
+2026-06-22T02:57:30.777456507Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777464077Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+2026-06-22T02:57:30.777468097Z [err]      return runner.run(main)
+2026-06-22T02:57:30.777471567Z [err]             ^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777474797Z [err]    File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+2026-06-22T02:57:30.777479007Z [err]      return self._loop.run_until_complete(task)
+2026-06-22T02:57:30.777482777Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777486947Z [err]    File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+2026-06-22T02:57:30.777490647Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 69, in serve
+2026-06-22T02:57:30.777494417Z [err]      await self._serve(sockets)
+2026-06-22T02:57:30.777497727Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/server.py", line 76, in _serve
+2026-06-22T02:57:30.777501187Z [err]      config.load()
+2026-06-22T02:57:30.777504987Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/config.py", line 434, in load
+2026-06-22T02:57:30.777509267Z [err]      self.loaded_app = import_from_string(self.app)
+2026-06-22T02:57:30.777513247Z [err]                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777517207Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 22, in import_from_string
+2026-06-22T02:57:30.777520496Z [err]      raise exc from None
+2026-06-22T02:57:30.777524216Z [err]    File "/usr/local/lib/python3.11/site-packages/uvicorn/importer.py", line 19, in import_from_string
+2026-06-22T02:57:30.777527036Z [err]      module = importlib.import_module(module_str)
+2026-06-22T02:57:30.777531206Z [err]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777535046Z [err]    File "/usr/local/lib/python3.11/importlib/__init__.py", line 126, in import_module
+2026-06-22T02:57:30.777713775Z [err]      return _bootstrap._gcd_import(name[level:], package, level)
+2026-06-22T02:57:30.777717595Z [err]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-06-22T02:57:30.777720305Z [err]    File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+2026-06-22T02:57:30.777724155Z [err]    File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+2026-06-22T02:57:30.777728075Z [err]    File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+2026-06-22T02:57:30.777730505Z [err]    File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+2026-06-22T02:57:30.777732975Z [err]    File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+2026-06-22T02:57:30.777735245Z [err]    File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+2026-06-22T02:57:30.777737505Z [err]    File "/app/main.py", line 11, in <module>
+2026-06-22T02:57:30.777739845Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:30.777743055Z [err]    File "/app/engine/__init__.py", line 2, in <module>
+2026-06-22T02:57:30.777745314Z [err]      from engine.orchestrator import Orchestrator
+2026-06-22T02:57:30.777748444Z [err]    File "/app/engine/orchestrator.py", line 22, in <module>
+2026-06-22T02:57:30.777751484Z [err]      from phone_info import parse_phone, get_timezone
+2026-06-22T02:57:30.777753884Z [err]    File "/app/phone_info.py", line 14, in <module>
+2026-06-22T02:57:30.777756044Z [err]      import phonenumbers
+2026-06-22T02:57:30.777758244Z [err]  ModuleNotFoundError: No module named 'phonenumbers'
