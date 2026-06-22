@@ -1,19 +1,32 @@
 """
 ListingFlowAgent — state machine for complete product listing via WhatsApp.
 
-Steps:
+MOVABLE PRODUCTS (electronics, appliances, furniture, vehicles, clothing, etc.):
   product          → What do you want to sell?
   brand_model      → Brand, model and version
   usage_state      → New or used?
   condition        → Condition
   receipt          → Do you have a receipt?
   photos_upload    → Product photos (multiple; text = "done")
-  address          → Pickup address
+  address          → Pickup address (where buyer/courier will collect)
   price            → Desired price and minimum acceptable
   processing       → [automatic] web search + DB + vision + pricing
   review_condition → [conditional] paused when vision detects inconsistent condition
   confirm          → Summary and confirmation
   done             → Listing created
+
+FIXED-LOCATION PRODUCTS (real estate, businesses, commercial spaces, land, etc.):
+  product          → What do you want to sell?
+  photos_upload    → Property/business photos (multiple; text = "done")
+  location_address → Address/location of the property or business
+  price            → Desired price and minimum acceptable
+  processing       → [automatic] web search + DB + vision + pricing
+  confirm          → Summary and confirmation
+  done             → Listing created
+
+  Note: fixed-location products skip brand_model, usage_state, condition, receipt,
+        and do NOT request a pickup address — they have a fixed location instead.
+        No logistics service is needed for these listings.
 """
 import json
 import logging
@@ -201,6 +214,90 @@ class ListingFlowAgent:
             return v
         return None
 
+    # ─────────────────────────────────────────────
+    # Product type classification
+    # ─────────────────────────────────────────────
+
+    # Fixed-location product types — never need logistics or pickup address
+    _FIXED_LOCATION_KEYWORDS = [
+        # Real estate
+        "imóvel", "imovel", "apartamento", "apto", "casa", "sobrado", "terreno",
+        "lote", "chácara", "sitio", "sítio", "fazenda", "mansão", "mansao",
+        "kitnet", "studio", "flat", "sala comercial", "sala", "andar", "prédio", "predio",
+        "galpão", "galpao", "armazém", "armazem", "depósito", "deposito",
+        # Businesses / commercial points
+        "lanchonete", "restaurante", "padaria", "mercearia", "loja", "comércio", "comercio",
+        "empresa", "negócio", "negocio", "ponto comercial", "franquia", "bar", "café", "cafe",
+        "salão", "salao", "barbearia", "clínica", "clinica", "consultório", "consultorio",
+        "academia", "hotel", "pousada", "petshop", "farmácia", "farmacia", "supermercado",
+        "posto de gasolina", "posto", "oficina", "borracharia",
+    ]
+
+    @classmethod
+    def _is_fixed_location_by_keywords(cls, description: str) -> bool:
+        """Fast keyword check before calling the LLM."""
+        lower = description.lower()
+        return any(kw in lower for kw in cls._FIXED_LOCATION_KEYWORDS)
+
+    async def _classify_product_type(self, description: str) -> dict:
+        """
+        Classifies the product as movable or fixed_location.
+
+        Returns:
+          {
+            "product_type": "movable" | "fixed_location",
+            "needs_logistics": True | False,
+            "type_label": str  (human-readable: "produto físico", "imóvel", "negócio", etc.)
+          }
+        """
+        # Fast path via keywords to avoid LLM call
+        if self._is_fixed_location_by_keywords(description):
+            return {
+                "product_type":   "fixed_location",
+                "needs_logistics": False,
+                "type_label":     "imóvel ou negócio",
+            }
+
+        try:
+            resp = await get_provider().complete(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Classify the product described by the user into one of two categories:\n\n"
+                            "FIXED_LOCATION — products that cannot be moved/shipped and have a fixed physical address:\n"
+                            "  - Real estate: apartments, houses, land, commercial properties, warehouses\n"
+                            "  - Businesses for sale: restaurants, shops, bakeries, snack bars, clinics, franchises\n"
+                            "  - Commercial spaces: offices, stores, showrooms\n\n"
+                            "MOVABLE — everything else that can be physically transported:\n"
+                            "  - Electronics, appliances, furniture, clothing, vehicles, tools, toys, books, etc.\n\n"
+                            "Return ONLY valid JSON: {\"product_type\": \"movable\" | \"fixed_location\", \"type_label\": \"<short Portuguese label>\"}\n"
+                            "type_label examples: 'produto físico', 'imóvel', 'negócio comercial', 'veículo', 'eletrodoméstico'"
+                        ),
+                    },
+                    {"role": "user", "content": f"Product to sell: {description}"},
+                ],
+                temperature=0.0,
+                max_tokens=80,
+                json_mode=True,
+            )
+            raw = json.loads(resp.text or "{}")
+            product_type = raw.get("product_type", "movable")
+            if product_type not in ("movable", "fixed_location"):
+                product_type = "movable"
+            return {
+                "product_type":    product_type,
+                "needs_logistics": product_type == "movable",
+                "type_label":      raw.get("type_label", "produto físico"),
+            }
+        except Exception as e:
+            logger.warning(f"Product type classification failed: {e} — defaulting to movable")
+            return {
+                "product_type":    "movable",
+                "needs_logistics": True,
+                "type_label":      "produto físico",
+            }
+
     async def _reply(self, instruction: str) -> str:
         """
         Generates a conversational response from a script instruction.
@@ -273,6 +370,7 @@ class ListingFlowAgent:
             "receipt":          self._step_receipt,
             "photos_upload":    self._step_photos_text,
             "address":          self._step_address,
+            "location_address": self._step_location_address,
             "price":            self._step_price,
             "review_condition": self._step_review_condition,
             "confirm":          self._step_confirm,
@@ -282,7 +380,7 @@ class ListingFlowAgent:
         if not handler:
             return data, photos, "", False
 
-        if step in ("photos_upload", "address"):
+        if step in ("photos_upload", "address", "location_address"):
             return await handler(data, photos, text, seller_profile)
         elif step == "price":
             return await handler(data, photos, text, db)
@@ -326,13 +424,33 @@ class ListingFlowAgent:
 
     async def _step_product(self, data, photos, text):
         data["description"] = text.strip()
-        question = await self._reply(
-            f"The user wants to sell: '{text}'. "
-            "Now ask for the brand, model and version (if applicable). "
-            "Example expected response: 'iPhone 13 Pro, 256GB' or 'Nike Air Max 90'. "
-            "If there is no brand/model, they can answer 'no brand' or 'don't know'."
-        )
-        data["step_next"] = "brand_model"
+
+        # Classify product type to determine flow path
+        classification = await self._classify_product_type(text.strip())
+        data["product_type"]    = classification["product_type"]
+        data["needs_logistics"] = classification["needs_logistics"]
+        data["type_label"]      = classification["type_label"]
+
+        if classification["product_type"] == "fixed_location":
+            # Fixed-location products (real estate, businesses): go straight to photos
+            question = await self._reply(
+                f"The user wants to sell a fixed-location asset: '{text}' "
+                f"(classified as: {classification['type_label']}). "
+                "Ask them to send photos of the property or business — "
+                "they can send as many as they like from different angles. "
+                "When done sending photos, just type 'done'."
+            )
+            data["step_next"] = "photos_upload"
+        else:
+            # Movable products: standard flow with brand/model/condition/etc.
+            question = await self._reply(
+                f"The user wants to sell: '{text}'. "
+                "Now ask for the brand, model and version (if applicable). "
+                "Example expected response: 'iPhone 13 Pro, 256GB' or 'Nike Air Max 90'. "
+                "If there is no brand/model, they can answer 'no brand' or 'don't know'."
+            )
+            data["step_next"] = "brand_model"
+
         return data, photos, question, False
 
     async def _step_brand_model(self, data, photos, text):
@@ -432,15 +550,22 @@ class ListingFlowAgent:
 
     async def _step_photos_text(self, data, photos, text, seller_profile):
         """Text received during the photos step — usually indicates they're done."""
+        is_fixed = data.get("product_type") == "fixed_location"
+
         if not photos:
-            reply = await self._reply(
-                "No photo received yet. Please send at least one product photo to continue!"
-            )
+            if is_fixed:
+                reply = await self._reply(
+                    "No photo received yet. Please send at least one photo of the property or business to continue!"
+                )
+            else:
+                reply = await self._reply(
+                    "No photo received yet. Please send at least one product photo to continue!"
+                )
             return data, photos, reply, False
 
         ready = await self._extract_validated(
             system=(
-                "The user is in the process of sending product photos.\n"
+                "The user is in the process of sending photos.\n"
                 "Determine ONLY whether the message indicates they have finished sending photos.\n"
                 "Field 'ready': true if the message signals completion, false if they want to send more.\n"
                 "Words indicating completion: done, ok, that's it, finished, go ahead, continue, all done, pronto, ok, é isso, terminei, pode seguir.\n"
@@ -454,21 +579,44 @@ class ListingFlowAgent:
             reply = await self._reply("Got it! Send more photos or type 'done' to continue.")
             return data, photos, reply, False
 
-        pickup_address = (seller_profile or {}).get("pickup_address")
-        if pickup_address:
+        if is_fixed:
+            # Fixed-location: ask for the address WHERE the property/business is located
             question = await self._reply(
                 f"Received {len(photos)} photo(s)! "
-                f"The registered pickup address is: {pickup_address}. "
-                "Ask if they want to use this address or provide a different one for this product."
+                f"Now I need the address of the {data.get('type_label', 'property/business')}. "
+                "Ask for the full address: street, number, neighbourhood, city and state."
             )
+            data["step_next"] = "location_address"
         else:
-            question = await self._reply(
-                f"Received {len(photos)} photo(s)! "
-                "Now I need the pickup address after the sale. "
-                "Ask for the full address: street, number, neighbourhood, city and postcode."
-            )
-        data["_suggested_address"] = pickup_address
-        data["step_next"] = "address"
+            # Movable product: ask for pickup address
+            pickup_address = (seller_profile or {}).get("pickup_address")
+            if pickup_address:
+                question = await self._reply(
+                    f"Received {len(photos)} photo(s)! "
+                    f"The registered pickup address is: {pickup_address}. "
+                    "Ask if they want to use this address or provide a different one for this product."
+                )
+            else:
+                question = await self._reply(
+                    f"Received {len(photos)} photo(s)! "
+                    "Now I need the pickup address after the sale. "
+                    "Ask for the full address: street, number, neighbourhood, city and postcode."
+                )
+            data["_suggested_address"] = pickup_address
+            data["step_next"] = "address"
+
+        return data, photos, question, False
+
+    async def _step_location_address(self, data, photos, text, seller_profile):
+        """Collects the location address for fixed-location products (real estate, businesses)."""
+        data["location_address"] = text.strip()
+        data["pickup_address"]   = None  # Explicitly no pickup address for fixed-location
+        question = await self._reply(
+            "Now ask what selling price the seller wants to list at, "
+            "and what is the minimum they would accept. "
+            "Explain that the minimum is confidential and will never be revealed to the buyer."
+        )
+        data["step_next"] = "price"
         return data, photos, question, False
 
     async def _step_address(self, data, photos, text, seller_profile):
@@ -672,19 +820,32 @@ class ListingFlowAgent:
         seller_min     = data.get("seller_min_price")
         pickup_address = data.get("pickup_address", "")
 
+        is_fixed_loc = data.get("product_type") == "fixed_location"
         product_name = " ".join(filter(None, [brand, model, version])) or description
 
-        # 1. Web search — prices + product specs
+        # 1. Web search — prices + specs (adapted for fixed-location vs movable)
         searcher = WebSearchTool()
         web_prices, web_specs = None, None
         try:
-            web_prices = await searcher.execute(
-                f"price {product_name} used site:olx.com.br OR site:mercadolivre.com.br"
-            )
+            if is_fixed_loc:
+                location_addr = data.get("location_address", "")
+                city_hint = _extract_city(location_addr) or ""
+                web_prices = await searcher.execute(
+                    f"preço venda {description} {city_hint} site:vivareal.com.br OR site:zapimoveis.com.br OR site:olx.com.br"
+                )
+            else:
+                web_prices = await searcher.execute(
+                    f"price {product_name} used site:olx.com.br OR site:mercadolivre.com.br"
+                )
         except Exception as e:
             logger.warning(f"Price search failed: {e}")
         try:
-            web_specs = await searcher.execute(f"{product_name} specifications technical sheet")
+            if is_fixed_loc:
+                web_specs = await searcher.execute(
+                    f"avaliação {description} características venda"
+                )
+            else:
+                web_specs = await searcher.execute(f"{product_name} specifications technical sheet")
         except Exception as e:
             logger.warning(f"Specs search failed: {e}")
 
@@ -785,7 +946,13 @@ class ListingFlowAgent:
         )
         data["appraisal"] = appraisal
 
-        data["seller_city"] = _extract_city(pickup_address)
+        is_fixed = data.get("product_type") == "fixed_location"
+        location_address = data.get("location_address", "")
+
+        if is_fixed:
+            data["seller_city"] = _extract_city(location_address)
+        else:
+            data["seller_city"] = _extract_city(pickup_address)
 
         price_agent   = appraisal.get("suggested_price", 0) or 0
         min_agent     = appraisal.get("min_suggested_price", 0) or 0
@@ -797,7 +964,11 @@ class ListingFlowAgent:
 
         data["listed_price"] = listed_price
         data["floor_price"]  = floor_price
-        data["step_next"] = "review_condition" if data.get("_condition_inconsistent") else "confirm"
+        # Fixed-location products never have condition inconsistency to review
+        if is_fixed:
+            data["step_next"] = "confirm"
+        else:
+            data["step_next"] = "review_condition" if data.get("_condition_inconsistent") else "confirm"
 
         price_alert = ""
         if asking_price and price_agent > 0:
@@ -809,25 +980,34 @@ class ListingFlowAgent:
                     f"{diff*100:.0f}% {direction} the market value of R$ {price_agent:.2f}. "
                 )
 
-        lines = [f"Product: {product_name}"]
+        type_label = data.get("type_label", "product")
+        lines = [f"{'Property/Business' if is_fixed else 'Product'}: {product_name or description}"]
 
-        origin_vision = [
-            c for c in ("brand", "model", "version")
-            if data.get(f"{c}_source") == "vision"
-        ]
-        if origin_vision:
-            lines.append(f"  (detected in photos: {', '.join(origin_vision)})")
+        if not is_fixed:
+            origin_vision = [
+                c for c in ("brand", "model", "version")
+                if data.get(f"{c}_source") == "vision"
+            ]
+            if origin_vision:
+                lines.append(f"  (detected in photos: {', '.join(origin_vision)})")
 
         if vision_data and vision_data.get("visible_details"):
             details = ", ".join(vision_data["visible_details"][:4])
             lines.append(f"Details read from photos: {details}")
 
-        lines += [
-            f"State: {usage_state} | Condition: {CONDITION_LABEL.get(condition, condition)}",
-            f"Receipt: {'yes' if has_receipt else 'no'}",
-            f"Photos: {len(photos)} submitted",
-            f"Pickup: {pickup_address or 'not provided'}",
-        ]
+        if is_fixed:
+            lines += [
+                f"Type: {type_label}",
+                f"Photos: {len(photos)} submitted",
+                f"Location: {location_address or 'not provided'}",
+            ]
+        else:
+            lines += [
+                f"State: {usage_state} | Condition: {CONDITION_LABEL.get(condition, condition)}",
+                f"Receipt: {'yes' if has_receipt else 'no'}",
+                f"Photos: {len(photos)} submitted",
+                f"Pickup: {pickup_address or 'not provided'}",
+            ]
 
         if asking_price:
             lines.append(f"Your price: R$ {asking_price:.2f}")
@@ -967,6 +1147,21 @@ class ListingFlowAgent:
 def _infer_category(name: str) -> str:
     n = name.lower()
     categories = {
+        "real_estate": [
+            "imóvel", "imovel", "apartamento", "apto", "casa", "sobrado", "terreno",
+            "lote", "chácara", "sitio", "sítio", "fazenda", "mansão", "mansao",
+            "kitnet", "studio", "flat", "sala comercial", "sala", "andar", "prédio",
+            "predio", "galpão", "galpao", "armazém", "armazem", "depósito", "deposito",
+            "condomínio", "condominio",
+        ],
+        "business": [
+            "lanchonete", "restaurante", "padaria", "mercearia", "loja", "comércio",
+            "comercio", "empresa", "negócio", "negocio", "ponto comercial", "franquia",
+            "bar", "café", "cafe", "salão", "salao", "barbearia", "clínica", "clinica",
+            "consultório", "consultorio", "academia", "hotel", "pousada", "petshop",
+            "farmácia", "farmacia", "supermercado", "posto de gasolina", "oficina",
+            "borracharia",
+        ],
         "electronics": [
             "iphone", "samsung", "celular", "smartphone", "notebook", "computador",
             "tablet", "ipad", "tv", "monitor", "fone", "headphone", "console",
