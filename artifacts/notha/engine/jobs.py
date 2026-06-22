@@ -66,8 +66,8 @@ async def check_round_timeouts() -> None:
                     listing_id=neg["listing_id"],
                     buyer_id=next_in_queue["buyer_id"],
                     buyer_limits={
-                        "maximo": next_in_queue["initial_offer"],
-                        "ideal":  next_in_queue["initial_offer"],
+                        "maximum": next_in_queue["initial_offer"],
+                        "target":  next_in_queue["initial_offer"],
                     },
                 )
                 logger.info(

@@ -327,7 +327,7 @@ async def identidade_pendentes(limit: int = 50) -> dict:
 
     rows = await db.fetch_all(
         """
-        SELECT d.id, d.user_id, d.document_type, d.image_url, d.status,
+        SELECT d.id, d.user_id, d.doc_type, d.image_url, d.status,
                d.created_at, d.whatsapp_media_id,
                u.full_name, u.nickname, u.tax_id
         FROM identity_documents d

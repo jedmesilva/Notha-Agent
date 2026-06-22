@@ -649,8 +649,8 @@ class Orchestrator:
 
         # Level 1: search with full filter (neighborhood + city)
         listings = await listing_repo.find_available(
-            categoria=category, limit=5,
-            cidade=city_filter, bairro=neighborhood_filter,
+            category=category, limit=5,
+            city=city_filter, neighborhood=neighborhood_filter,
         )
         if listings:
             region_label = (
@@ -663,7 +663,7 @@ class Orchestrator:
         # Level 2: try just the city
         if neighborhood_filter and city_filter:
             listings = await listing_repo.find_available(
-                categoria=category, limit=5, cidade=city_filter,
+                category=category, limit=5, city=city_filter,
             )
             if listings:
                 prefix = f"Nothing in {neighborhood_filter}, but I found something in {city_filter}:"
@@ -673,7 +673,7 @@ class Orchestrator:
 
         # Level 3: try all of Brazil
         if city_filter or neighborhood_filter:
-            listings = await listing_repo.find_available(categoria=category, limit=5)
+            listings = await listing_repo.find_available(category=category, limit=5)
             original_region = neighborhood_filter or city_filter or "that region"
             if listings:
                 prefix = f"Nothing found in {original_region}. But here is what is available in other regions:"
@@ -804,7 +804,7 @@ class Orchestrator:
                 seller_id=pending["seller_id"],
                 description=pending["description"],
                 category=pending.get("category"),
-                asking_price=pending.get("asking_price"),
+                seller_asking_price=pending.get("asking_price"),
                 suggested_price=appraisal["suggested_price"],
                 listed_price=appraisal["suggested_price"],
                 floor_price=appraisal["min_suggested_price"],
@@ -938,7 +938,7 @@ class Orchestrator:
             description=data.get("description", product_name),
             category=data.get("category"),
             photos=[f["media_id"] for f in photos if f.get("media_id")],
-            asking_price=data.get("asking_price"),
+            seller_asking_price=data.get("asking_price"),
             suggested_price=appraisal.get("suggested_price"),
             listed_price=data.get("listed_price") or appraisal.get("suggested_price", 0),
             floor_price=data.get("floor_price") or appraisal.get("min_suggested_price", 0),
@@ -949,7 +949,7 @@ class Orchestrator:
             usage_state=data.get("usage_state"),
             condition=data.get("condition"),
             has_receipt=data.get("has_receipt"),
-            seller_min_price=data.get("seller_min_price"),
+            seller_minimum_price=data.get("seller_min_price"),
             web_info=data.get("web_info"),
             seller_city=data.get("seller_city"),
             vision_analysis=data.get("vision_analysis"),

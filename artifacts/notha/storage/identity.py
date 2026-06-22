@@ -103,7 +103,7 @@ async def process_identity_document(
             doc = await user_repo.register_identity_document(
                 user_id=user_id,
                 image_url=object_path,
-                document_type=doc_type,
+                doc_type=doc_type,
                 whatsapp_media_id=media_id,
             )
             logger.info(
