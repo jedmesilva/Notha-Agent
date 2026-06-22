@@ -1,12 +1,12 @@
 """
-Analytics Repository — persists observability and intelligence data.
+Analytics Repository — persiste dados de observabilidade e inteligência.
 
-Tables:
-  product_searches    — every search executed (query, location, results)
-  tool_execution_logs — every tool call (name, args, result, duration)
-  restriction_checks  — every check_restriction call and outcome
-  guardrail_events    — when guardrail rejects or corrects a response
-  pipeline_events     — one row per message processed by the 4-phase pipeline
+Tabelas:
+  product_searches    — cada busca executada (query, localização, resultados)
+  tool_execution_logs — cada chamada de ferramenta (nome, args, resultado, duração)
+  restriction_checks  — cada chamada check_restriction e seu resultado
+  guardrail_events    — quando o guardrail rejeita ou corrige uma resposta
+  pipeline_events     — uma linha por mensagem processada pelo pipeline de 4 fases
 """
 import json
 import logging
@@ -20,7 +20,7 @@ class AnalyticsRepository:
     def __init__(self, db: DB):
         self._db = db
 
-    # ── Product searches ──────────────────────────────────────────────────────
+    # ── Buscas de produtos ────────────────────────────────────────────────────
 
     async def log_search(
         self,
@@ -58,7 +58,27 @@ class AnalyticsRepository:
         except Exception as e:
             logger.warning("log_search failed: %s", e)
 
-    # ── Tool execution logs ───────────────────────────────────────────────────
+    async def get_recent_searches(self, user_id: int, limit: int = 5) -> list[dict]:
+        """Retorna as últimas buscas do usuário — para o contexto do agente."""
+        try:
+            rows = await self._db.fetch_all(
+                """
+                SELECT query, category, search_city, search_neighborhood,
+                       results_count, created_at
+                FROM product_searches
+                WHERE user_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                user_id,
+                limit,
+            )
+            return [dict(r) for r in rows]
+        except Exception as e:
+            logger.warning("get_recent_searches failed: %s", e)
+            return []
+
+    # ── Logs de execução de ferramentas ──────────────────────────────────────
 
     async def log_tool(
         self,
@@ -91,7 +111,7 @@ class AnalyticsRepository:
         except Exception as e:
             logger.warning("log_tool failed: %s", e)
 
-    # ── Restriction checks ────────────────────────────────────────────────────
+    # ── Verificações de restrição ─────────────────────────────────────────────
 
     async def log_restriction_check(
         self,
@@ -122,7 +142,7 @@ class AnalyticsRepository:
         except Exception as e:
             logger.warning("log_restriction_check failed: %s", e)
 
-    # ── Guardrail events ──────────────────────────────────────────────────────
+    # ── Eventos de guardrail ──────────────────────────────────────────────────
 
     async def log_guardrail_event(
         self,
@@ -149,7 +169,7 @@ class AnalyticsRepository:
         except Exception as e:
             logger.warning("log_guardrail_event failed: %s", e)
 
-    # ── Pipeline events ───────────────────────────────────────────────────────
+    # ── Eventos de pipeline ───────────────────────────────────────────────────
 
     async def log_pipeline_event(
         self,
@@ -181,10 +201,10 @@ class AnalyticsRepository:
         except Exception as e:
             logger.warning("log_pipeline_event failed: %s", e)
 
-    # ── Admin queries ─────────────────────────────────────────────────────────
+    # ── Consultas administrativas ─────────────────────────────────────────────
 
     async def get_search_stats(self, days: int = 7) -> dict:
-        """Returns aggregate search stats for the last N days."""
+        """Retorna estatísticas agregadas de busca dos últimos N dias."""
         try:
             row = await self._db.fetch_one(
                 """
@@ -205,7 +225,7 @@ class AnalyticsRepository:
             return {}
 
     async def get_top_queries(self, days: int = 7, limit: int = 10) -> list[dict]:
-        """Returns most searched queries in the last N days."""
+        """Retorna as buscas mais frequentes dos últimos N dias."""
         try:
             rows = await self._db.fetch_all(
                 """
@@ -224,7 +244,7 @@ class AnalyticsRepository:
             return []
 
     async def get_restriction_violations(self, days: int = 30) -> list[dict]:
-        """Returns RESTRICTED checks in the last N days — compliance monitoring."""
+        """Retorna verificações RESTRICTED dos últimos N dias — monitoramento de conformidade."""
         try:
             rows = await self._db.fetch_all(
                 """

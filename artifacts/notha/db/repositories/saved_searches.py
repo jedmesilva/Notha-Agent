@@ -15,7 +15,7 @@ class SavedSearchRepository:
         search_city: str | None = None,
         search_neighborhood: str | None = None,
     ) -> asyncpg.Record:
-        """Save a product interest search for the user."""
+        """Salva um alerta de interesse de produto para o usuário."""
         return await self._db.fetch_one(
             """
             INSERT INTO saved_searches
@@ -32,7 +32,7 @@ class SavedSearchRepository:
         )
 
     async def find_active(self) -> list[asyncpg.Record]:
-        """Return all active searches to check against new listings."""
+        """Retorna todos os alertas ativos para verificar contra novos anúncios."""
         return await self._db.fetch_all(
             "SELECT * FROM saved_searches WHERE status = 'active' ORDER BY created_at ASC"
         )
@@ -53,14 +53,44 @@ class SavedSearchRepository:
             search_id,
         )
 
-    async def cancel_all_by_user(self, user_id: int) -> None:
-        await self._db.execute(
+    async def cancel_all_by_user(self, user_id: int) -> int:
+        """Cancela todos os alertas ativos do usuário. Retorna quantos foram cancelados."""
+        result = await self._db.execute(
             "UPDATE saved_searches SET status = 'cancelled' WHERE user_id = $1 AND status = 'active'",
             user_id,
         )
+        try:
+            return int(result.split()[-1])
+        except Exception:
+            return 0
+
+    async def cancel_by_description(self, user_id: int, description: str) -> list[asyncpg.Record]:
+        """Cancela alertas cujo search_description contenha as palavras-chave da descrição.
+
+        Retorna os registros cancelados para que o agente possa confirmar quais foram removidos.
+        """
+        _STOP = {"de", "da", "do", "das", "dos", "em", "um", "uma", "e", "ou", "para", "com"}
+        words = [
+            w for w in description.lower().split()
+            if len(w) >= 3 and w not in _STOP
+        ]
+        if not words:
+            return []
+
+        active = await self.find_by_user(user_id)
+        matched = []
+        for alert in active:
+            alert_text = (alert["search_description"] or "").lower()
+            if any(w in alert_text for w in words):
+                matched.append(alert)
+
+        for alert in matched:
+            await self.cancel(alert["id"])
+
+        return matched
 
     async def record_notification(self, search_id: int) -> None:
-        """Update the timestamp of the last notification sent for this search."""
+        """Atualiza o timestamp da última notificação enviada para este alerta."""
         from datetime import datetime, timezone
         await self._db.execute(
             "UPDATE saved_searches SET last_notified_at = $1 WHERE id = $2",
@@ -69,19 +99,18 @@ class SavedSearchRepository:
         )
 
     def matches(self, search: asyncpg.Record, listing: dict) -> bool:
-        """Check if a newly-created listing matches a saved search.
+        """Verifica se um novo anúncio corresponde a um alerta salvo.
 
-        Criteria:
-        - At least one significant word from search_description appears in
-          the listing's description or category (case-insensitive)
-        - If the search has a search_city: listing.seller_city must be compatible
-          (or seller_city is null/empty — benefit of the doubt)
+        Critérios:
+        - Pelo menos uma palavra significativa da descrição do alerta aparece
+          na descrição ou categoria do anúncio (case-insensitive)
+        - Se o alerta tem search_city: a cidade do anúncio deve ser compatível
+          (ou seller_city vazio — benefício da dúvida)
         """
         listing_description = (listing.get("description") or "").lower()
         listing_category    = (listing.get("category") or "").lower()
         listing_text = f"{listing_description} {listing_category}"
 
-        # Words with >= 3 chars (ignore articles, prepositions)
         _STOP = {"de", "da", "do", "das", "dos", "em", "um", "uma", "e", "ou", "para", "com"}
         words = [
             w for w in search["search_description"].lower().split()
@@ -93,7 +122,6 @@ class SavedSearchRepository:
         if not any(w in listing_text for w in words):
             return False
 
-        # Geographic filter: if the search specifies a city, the listing must match
         search_city  = (search["search_city"] or "").lower().strip()
         listing_city = (listing.get("seller_city") or "").lower().strip()
         if search_city and listing_city:

@@ -32,6 +32,34 @@ def _phone_lock(phone: str) -> asyncio.Lock:
     return _PHONE_LOCKS[phone]
 
 
+async def _migrate_user_profile_columns() -> None:
+    """Adiciona colunas de perfil estendido à tabela users se ainda não existirem.
+
+    Seguro para executar a cada startup — usa IF NOT EXISTS para cada ALTER TABLE.
+    Colunas: gender, date_of_birth, preferred_language, street, street_number,
+             state, country, zip_code.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    columns = [
+        ("gender",             "VARCHAR(20)"),
+        ("date_of_birth",      "DATE"),
+        ("preferred_language", "VARCHAR(10)"),
+        ("street",             "VARCHAR(200)"),
+        ("street_number",      "VARCHAR(30)"),
+        ("state",              "VARCHAR(100)"),
+        ("country",            "VARCHAR(100)"),
+        ("zip_code",           "VARCHAR(20)"),
+    ]
+    async with pool.acquire() as conn:
+        for col, col_type in columns:
+            await conn.execute(
+                f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {col_type}"
+            )
+    logger.info("User profile columns ready in users table.")
+
+
 async def _migrate_phone_info_columns() -> None:
     """Adds phone-info columns to user_phone_numbers if they don't exist yet.
 
@@ -133,6 +161,7 @@ async def lifespan(app: FastAPI):
     global orchestrator
 
     await init_pool()
+    await _migrate_user_profile_columns()
     await _migrate_phone_info_columns()
     await _init_webhook_dedup_table()
 

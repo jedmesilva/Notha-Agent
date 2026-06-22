@@ -227,15 +227,23 @@ class Orchestrator:
             )
 
         # Load data in parallel — needed in all response paths
-        active_negs, seller_profile, history, phone_row = await _gather(
+        active_negs, seller_profile, history, phone_row, active_alerts, recent_searches, guardrail_ctx = await _gather(
             neg_repo.find_active_by_buyer(user_id),
             user_repo.get_seller_profile(user_id),
             conv_repo.get_history(user_id),
             PhoneInfoRepository(db).get(phone),
+            SavedSearchRepository(db).find_by_user(user_id),
+            analytics_repo.get_recent_searches(user_id, limit=3),
+            user_repo.build_guardrail_context(user_id),
         )
 
         # Rich context with real DB data — the LLM always works with current info
-        context = self._build_context(user, active_negs, seller_profile, phone=phone, phone_row=phone_row)
+        context = self._build_context(
+            user, active_negs, seller_profile, phone=phone, phone_row=phone_row,
+            active_alerts=active_alerts,
+            recent_searches=recent_searches,
+            guardrail_context=guardrail_ctx,
+        )
 
         # Pending business confirmations (e.g. confirm listing price)
         pending = PENDING_CONFIRMATIONS.get(phone)
@@ -261,6 +269,8 @@ class Orchestrator:
         _USER_DATA_TOOLS = {
             "update_name", "update_nickname", "update_tax_id",
             "update_pix_key", "update_address", "update_location",
+            "update_full_address", "update_profile",
+            "list_my_alerts", "cancel_alert", "cancel_alerts", "get_my_profile",
         }
 
         _pipeline_start = _time.monotonic()
@@ -632,12 +642,178 @@ class Orchestrator:
             db = self._db or get_db()
             if db:
                 search_repo = SavedSearchRepository(db)
-                alerts      = await search_repo.find_by_user(user["id"])
-                await search_repo.cancel_all_by_user(user["id"])
-                logger.info("Alerts cancelled (user_id=%s): %d alerts", user["id"], len(alerts))
-                result = f"{len(alerts)} search alert(s) cancelled for user_id={user['id']}."
+                count       = await search_repo.cancel_all_by_user(user["id"])
+                logger.info("All alerts cancelled (user_id=%s): %d alerts", user["id"], count)
+                result = f"{count} search alert(s) cancelled for user_id={user['id']}."
             else:
                 result = "DB unavailable — alerts not cancelled."
+            return result, None
+
+        if name == "list_my_alerts":
+            db = self._db or get_db()
+            if db:
+                search_repo = SavedSearchRepository(db)
+                alerts      = await search_repo.find_by_user(user["id"])
+                if not alerts:
+                    result = "No active alerts. User has no product monitoring set up."
+                else:
+                    lines = []
+                    for i, a in enumerate(alerts, 1):
+                        loc = ""
+                        if a.get("search_neighborhood"):
+                            loc = f" — {a['search_neighborhood']}"
+                        elif a.get("search_city"):
+                            loc = f" — {a['search_city']}"
+                        lines.append(f"{i}. {a['search_description']}{loc}")
+                    result = (
+                        f"User has {len(alerts)} active alert(s):\n" + "\n".join(lines) + "\n"
+                        "Present this list to the user naturally. "
+                        "Offer to cancel any specific one if they want."
+                    )
+            else:
+                result = "DB unavailable — cannot list alerts."
+            return result, None
+
+        if name == "cancel_alert":
+            description = args.get("description", "").strip()
+            db = self._db or get_db()
+            if db and description:
+                search_repo = SavedSearchRepository(db)
+                cancelled   = await search_repo.cancel_by_description(user["id"], description)
+                if cancelled:
+                    names = [a["search_description"] for a in cancelled]
+                    logger.info(
+                        "Alert(s) cancelled by description (user_id=%s): %s",
+                        user["id"], names,
+                    )
+                    result = (
+                        f"Cancelled {len(cancelled)} alert(s): {', '.join(names)}. "
+                        "Inform the user which alerts were cancelled."
+                    )
+                else:
+                    result = (
+                        f"No active alert found matching '{description}'. "
+                        "Inform the user and list their active alerts."
+                    )
+            else:
+                result = "Description missing or DB unavailable — no alert cancelled."
+            return result, None
+
+        if name == "get_my_profile":
+            profile = await user_repo.get_full_profile(user["id"])
+            if not profile:
+                result = "Profile not found in DB."
+                return result, None
+
+            parts = []
+            if profile.get("full_name"):
+                parts.append(f"Nome: {profile['full_name']}")
+            if profile.get("nickname"):
+                parts.append(f"Apelido: {profile['nickname']}")
+            if profile.get("tax_id"):
+                parts.append(f"CPF: {profile['tax_id']}")
+            if profile.get("date_of_birth"):
+                parts.append(f"Data de nascimento: {profile['date_of_birth']}")
+            if profile.get("gender"):
+                gender_label = {"M": "Masculino", "F": "Feminino"}.get(profile["gender"], profile["gender"])
+                parts.append(f"Sexo: {gender_label}")
+            if profile.get("preferred_language"):
+                parts.append(f"Idioma preferido: {profile['preferred_language']}")
+
+            # Endereço
+            addr_parts = []
+            if profile.get("street"):
+                addr_parts.append(profile["street"])
+            if profile.get("street_number"):
+                addr_parts.append(profile["street_number"])
+            if profile.get("neighborhood"):
+                addr_parts.append(profile["neighborhood"])
+            if profile.get("city"):
+                addr_parts.append(profile["city"])
+            if profile.get("state"):
+                addr_parts.append(profile["state"])
+            if profile.get("zip_code"):
+                addr_parts.append(f"CEP {profile['zip_code']}")
+            if profile.get("country"):
+                addr_parts.append(profile["country"])
+            if addr_parts:
+                parts.append(f"Endereço: {', '.join(addr_parts)}")
+
+            if profile.get("pix_key"):
+                parts.append(f"Chave Pix: {profile['pix_key']}")
+            if profile.get("pickup_address"):
+                parts.append(f"Endereço de retirada: {profile['pickup_address']}")
+
+            identity_label = {
+                "unverified":   "não verificada",
+                "under_review": "em análise",
+                "verified":     "verificada",
+                "rejected":     "rejeitada",
+            }.get(profile.get("identity_status", "unverified"), "não verificada")
+            parts.append(f"Identidade: {identity_label}")
+
+            result = (
+                "User profile data:\n" + "\n".join(parts) + "\n\n"
+                "Present this to the user naturally in their language. "
+                "Highlight what is missing if relevant."
+            )
+            return result, None
+
+        if name == "update_profile":
+            gender             = args.get("gender", "").strip()             or None
+            date_of_birth      = args.get("date_of_birth", "").strip()      or None
+            preferred_language = args.get("preferred_language", "").strip() or None
+            if gender or date_of_birth or preferred_language:
+                await user_repo.update_profile(
+                    user["id"],
+                    gender=gender,
+                    date_of_birth=date_of_birth,
+                    preferred_language=preferred_language,
+                )
+                logger.info(
+                    "Profile updated (user_id=%s): gender=%s dob=%s lang=%s",
+                    user["id"], gender, date_of_birth, preferred_language,
+                )
+                saved = []
+                if gender:
+                    label = {"M": "Masculino", "F": "Feminino"}.get(gender, gender)
+                    saved.append(f"gender='{label}'")
+                if date_of_birth:
+                    saved.append(f"date_of_birth='{date_of_birth}'")
+                if preferred_language:
+                    saved.append(f"preferred_language='{preferred_language}'")
+                result = f"Profile updated in DB: {', '.join(saved)}."
+            else:
+                result = "No profile fields provided — no change made."
+            return result, None
+
+        if name == "update_full_address":
+            street        = args.get("street", "").strip()        or None
+            street_number = args.get("street_number", "").strip() or None
+            neighborhood  = args.get("neighborhood", "").strip()  or None
+            city          = args.get("city", "").strip()          or None
+            state         = args.get("state", "").strip()         or None
+            country       = args.get("country", "").strip()       or None
+            zip_code      = args.get("zip_code", "").strip()      or None
+            if any([street, street_number, neighborhood, city, state, country, zip_code]):
+                await user_repo.update_full_address(
+                    user["id"],
+                    street=street,
+                    street_number=street_number,
+                    neighborhood=neighborhood,
+                    city=city,
+                    state=state,
+                    country=country,
+                    zip_code=zip_code,
+                )
+                logger.info("Full address updated (user_id=%s)", user["id"])
+                saved = [f"{k}='{v}'" for k, v in {
+                    "street": street, "number": street_number, "neighborhood": neighborhood,
+                    "city": city, "state": state, "country": country, "zip": zip_code,
+                }.items() if v]
+                result = f"Full address saved to DB: {', '.join(saved)}."
+            else:
+                result = "No address fields provided — no change made."
             return result, None
 
         if name == "list_product":
@@ -771,11 +947,22 @@ class Orchestrator:
         _memory_add(phone, "assistant", last_assistant)
         return last_assistant
 
-    def _build_context(self, user, active_negs: list, seller_profile=None, phone: str = "", phone_row=None) -> str:
-        """Builds context with real DB data for the LLM.
+    def _build_context(
+        self,
+        user,
+        active_negs: list,
+        seller_profile=None,
+        phone: str = "",
+        phone_row=None,
+        active_alerts: list | None = None,
+        recent_searches: list | None = None,
+        guardrail_context: str = "",
+    ) -> str:
+        """Constrói o contexto com dados reais do banco para o LLM.
 
-        Includes name, nickname, tax_id, identity verification, seller profile
-        and active negotiations — all from the DB, nothing invented.
+        Inclui: nome, apelido, CPF, identidade, perfil de vendedor,
+        negociações ativas, alertas ativos, histórico de buscas
+        e completude do perfil por operação.
         """
         parts = []
 
@@ -785,7 +972,7 @@ class Orchestrator:
         user_id         = user.get("id", "?")
         identity_status = user.get("identity_status") or "unverified"
 
-        # Legal name
+        # Nome legal
         if not full_name:
             parts.append("STATUS: user has no registered name — ask for full name")
         elif not _is_valid_name(full_name):
@@ -796,13 +983,13 @@ class Orchestrator:
         else:
             parts.append(f"name: {full_name}")
 
-        # Nickname (how to address the user)
+        # Apelido
         if nickname:
             parts.append(f"nickname: {nickname}")
         else:
             parts.append("nickname: not set")
 
-        # Tax ID and identity verification
+        # CPF e identidade
         parts.append(f"tax_id: {'registered (✓)' if tax_id else 'not registered'}")
 
         _IDENTITY_LABEL = {
@@ -814,27 +1001,46 @@ class Orchestrator:
         parts.append(f"identity: {_IDENTITY_LABEL.get(identity_status, identity_status)}")
         parts.append(f"user_id: {user_id}")
 
-        # User's home address (city/neighborhood — for deliveries)
+        # Perfil adicional (gênero, data de nascimento, idioma)
+        if user.get("gender"):
+            gender_label = {"M": "Masculino", "F": "Feminino"}.get(user["gender"], user["gender"])
+            parts.append(f"gender: {gender_label}")
+        if user.get("date_of_birth"):
+            parts.append(f"date_of_birth: {user['date_of_birth']}")
+        if user.get("preferred_language"):
+            parts.append(f"preferred_language: {user['preferred_language']}")
+
+        # Endereço residencial
         home_city         = user.get("city")         or ""
         home_neighborhood = user.get("neighborhood") or ""
-        if home_city or home_neighborhood:
-            loc_parts = []
-            if home_neighborhood:
-                loc_parts.append(f"neighborhood={home_neighborhood}")
-            if home_city:
-                loc_parts.append(f"city={home_city}")
-            parts.append(
-                f"lives_at: {', '.join(loc_parts)} "
-                "(home address — for deliveries; search region is asked at the time)"
-            )
-        else:
-            parts.append(
-                "lives_at: not provided (if needed as search reference, ask for city/neighborhood)"
-            )
+        home_street       = user.get("street")       or ""
+        home_state        = user.get("state")        or ""
+        home_zip          = user.get("zip_code")     or ""
 
-        # Seller profile
+        addr_parts = []
+        if home_street:
+            num = user.get("street_number") or ""
+            addr_parts.append(f"{home_street}{', ' + num if num else ''}")
+        if home_neighborhood:
+            addr_parts.append(home_neighborhood)
+        if home_city:
+            addr_parts.append(home_city)
+        if home_state:
+            addr_parts.append(home_state)
+        if home_zip:
+            addr_parts.append(f"CEP {home_zip}")
+
+        if addr_parts:
+            parts.append(f"lives_at: {', '.join(addr_parts)}")
+        elif home_city or home_neighborhood:
+            loc = ", ".join(filter(None, [home_neighborhood, home_city]))
+            parts.append(f"lives_at: {loc} (partial — street/state/ZIP not yet provided)")
+        else:
+            parts.append("lives_at: not provided (ask for city/neighborhood when needed)")
+
+        # Perfil de vendedor
         if seller_profile:
-            pix_key = seller_profile.get("pix_key")     or ""
+            pix_key = seller_profile.get("pix_key")      or ""
             address = seller_profile.get("pickup_address") or ""
             parts.append(f"pix_key: {pix_key if pix_key else 'not registered'}")
             if address:
@@ -842,7 +1048,7 @@ class Orchestrator:
         else:
             parts.append("seller_profile: not created")
 
-        # Active negotiations
+        # Negociações ativas
         if active_negs:
             neg = active_negs[0]
             parts.append(
@@ -852,8 +1058,36 @@ class Orchestrator:
         else:
             parts.append("active_negotiation: none")
 
-        # Phone number metadata — parsed once on first contact via phonenumbers
-        # library and stored in DB; loaded here from the already-fetched phone_row.
+        # Alertas de produto ativos
+        if active_alerts:
+            alert_labels = []
+            for a in active_alerts[:5]:
+                loc = a.get("search_neighborhood") or a.get("search_city") or ""
+                label = a["search_description"]
+                if loc:
+                    label += f" ({loc})"
+                alert_labels.append(label)
+            parts.append(f"active_alerts: {len(active_alerts)} alert(s): {'; '.join(alert_labels)}")
+        else:
+            parts.append("active_alerts: none")
+
+        # Histórico recente de buscas (últimas 3)
+        if recent_searches:
+            search_labels = []
+            for s in recent_searches[:3]:
+                label = s.get("query") or s.get("category") or "?"
+                loc = s.get("search_neighborhood") or s.get("search_city") or ""
+                if loc:
+                    label += f" em {loc}"
+                results = s.get("results_count", 0)
+                search_labels.append(f"'{label}' ({results} resultado(s))")
+            parts.append(f"recent_searches: {'; '.join(search_labels)}")
+
+        # Completude do perfil por operação (gerado via guardrails)
+        if guardrail_context:
+            parts.append(guardrail_context)
+
+        # Metadados do telefone
         if phone_row and phone_row.get("parsed_at"):
             if phone_row.get("country_name"):
                 parts.append(f"country: {phone_row['country_name']} ({phone_row['country_iso']})")
@@ -1367,6 +1601,7 @@ class Orchestrator:
                 media_id=media_id,
                 doc_type=doc_type,
                 user_repo=user_repo,
+                run_ocr=True,
             )
             logger.info(
                 "Identity document saved: user_id=%s type=%s doc_id=%s path=%s",
@@ -1380,18 +1615,72 @@ class Orchestrator:
                 [], "",
             )
 
+        # Auto-fill profile from OCR data extracted during document processing
+        extracted = result.get("extracted_data") or {}
+        ocr_fields_saved = []
+        if extracted:
+            try:
+                ocr_name      = (extracted.get("full_name") or "").strip()
+                ocr_tax_id    = re.sub(r"[\.\-\s]", "", extracted.get("tax_id") or "")
+                ocr_dob       = extracted.get("date_of_birth")
+                ocr_gender    = extracted.get("gender")
+
+                # Only save name if not already set in user profile
+                if ocr_name and _is_valid_name(ocr_name) and not user.get("full_name"):
+                    await user_repo.update(user_id, full_name=ocr_name)
+                    ocr_fields_saved.append(f"nome: {ocr_name}")
+
+                # Only save tax_id if not already registered
+                if ocr_tax_id and _looks_like_cpf(ocr_tax_id) and not user.get("tax_id"):
+                    existing = await user_repo.find_by_tax_id(ocr_tax_id)
+                    if not existing or existing["id"] == user_id:
+                        await user_repo.update(user_id, tax_id=ocr_tax_id)
+                        ocr_fields_saved.append(f"CPF: ***{ocr_tax_id[-3:]}")
+
+                # Save date of birth and gender regardless (not set before for most users)
+                if ocr_dob or ocr_gender:
+                    await user_repo.update_profile(
+                        user_id,
+                        gender=ocr_gender if ocr_gender and not user.get("gender") else None,
+                        date_of_birth=ocr_dob if ocr_dob and not user.get("date_of_birth") else None,
+                    )
+                    if ocr_dob and not user.get("date_of_birth"):
+                        ocr_fields_saved.append(f"data de nascimento: {ocr_dob}")
+                    if ocr_gender and not user.get("gender"):
+                        g_label = {"M": "masculino", "F": "feminino"}.get(ocr_gender, ocr_gender)
+                        ocr_fields_saved.append(f"sexo: {g_label}")
+
+                if ocr_fields_saved:
+                    logger.info(
+                        "OCR auto-filled profile for user_id=%s: %s",
+                        user_id, ", ".join(ocr_fields_saved),
+                    )
+            except Exception as e:
+                logger.warning("OCR auto-fill failed for user_id=%s: %s", user_id, e)
+
         _DOC_LABEL = {
             "national_id":     "national ID",
             "drivers_license": "driving licence",
             "passport":        "passport",
         }
-        doc_label = _DOC_LABEL.get(doc_type, "document")
+        doc_label   = _DOC_LABEL.get(doc_type, "document")
         name_prefix = f"{display_name}, " if display_name else ""
 
+        # Build context hint for confirm prompt
+        ocr_hint = ""
+        if ocr_fields_saved:
+            ocr_hint = (
+                f" The OCR extracted the following data from the document: {'; '.join(ocr_fields_saved)}. "
+                "Confirm this data naturally with the user (e.g. 'I found your name as X and CPF ending in Y — is that correct?'). "
+                "Do NOT ask for data that was already extracted."
+            )
+        else:
+            ocr_hint = " No data could be automatically extracted from the image."
+
         return await self._conv.speak(
-            f"Tell the user ({name_prefix}if known) that you received their {doc_label}. "
-            "Inform that you will review it and notify them when verification is complete. "
-            "Say it normally takes up to 1 business day.",
+            f"Tell the user ({name_prefix}if known) that you received their {doc_label} and it is under review. "
+            "Inform that you will notify them when verification is complete (up to 1 business day)."
+            + ocr_hint,
             [], "",
         )
 

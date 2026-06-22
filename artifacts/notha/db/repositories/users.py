@@ -3,7 +3,7 @@ from db.connection import DB
 
 
 class PhoneInfoRepository:
-    """Stores and retrieves parsed phone number data from user_phone_numbers."""
+    """Armazena e recupera dados de número de telefone parseados de user_phone_numbers."""
 
     def __init__(self, db: DB):
         self._db = db
@@ -14,7 +14,7 @@ class PhoneInfoRepository:
         )
 
     async def save(self, phone: str, info) -> None:
-        """Persist PhoneInfo fields into user_phone_numbers for this phone."""
+        """Persiste campos de PhoneInfo em user_phone_numbers para este telefone."""
         from datetime import datetime, timezone
         await self._db.execute(
             """
@@ -43,7 +43,7 @@ class PhoneInfoRepository:
         )
 
     async def needs_parsing(self, phone: str) -> bool:
-        """Returns True if this phone has never been parsed by phonenumbers."""
+        """Retorna True se este telefone nunca foi parseado pelo phonenumbers."""
         row = await self._db.fetch_one(
             "SELECT parsed_at FROM user_phone_numbers WHERE phone = $1", phone
         )
@@ -120,8 +120,107 @@ class UserRepository:
             user_id,
         )
 
+    async def update_full_address(
+        self,
+        user_id: int,
+        street: str | None = None,
+        street_number: str | None = None,
+        neighborhood: str | None = None,
+        city: str | None = None,
+        state: str | None = None,
+        country: str | None = None,
+        zip_code: str | None = None,
+    ) -> None:
+        """Atualiza o endereço completo do usuário."""
+        await self._db.execute(
+            """
+            UPDATE users SET
+                street        = COALESCE($1, street),
+                street_number = COALESCE($2, street_number),
+                neighborhood  = COALESCE($3, neighborhood),
+                city          = COALESCE($4, city),
+                state         = COALESCE($5, state),
+                country       = COALESCE($6, country),
+                zip_code      = COALESCE($7, zip_code),
+                updated_at    = now()
+            WHERE id = $8
+            """,
+            street,
+            street_number,
+            neighborhood,
+            city,
+            state,
+            country,
+            zip_code,
+            user_id,
+        )
+
+    async def update_profile(
+        self,
+        user_id: int,
+        gender: str | None = None,
+        date_of_birth: str | None = None,
+        preferred_language: str | None = None,
+        full_name: str | None = None,
+        tax_id: str | None = None,
+        nickname: str | None = None,
+    ) -> None:
+        """Atualiza campos de perfil pessoal do usuário."""
+        from datetime import date
+
+        dob = None
+        if date_of_birth:
+            try:
+                # Aceita formatos YYYY-MM-DD e DD/MM/YYYY
+                if "/" in date_of_birth:
+                    parts = date_of_birth.split("/")
+                    if len(parts) == 3:
+                        dob = date(int(parts[2]), int(parts[1]), int(parts[0]))
+                else:
+                    parts = date_of_birth.split("-")
+                    if len(parts) == 3:
+                        dob = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            except Exception:
+                pass
+
+        await self._db.execute(
+            """
+            UPDATE users SET
+                gender             = COALESCE($1, gender),
+                date_of_birth      = COALESCE($2, date_of_birth),
+                preferred_language = COALESCE($3, preferred_language),
+                full_name          = COALESCE($4, full_name),
+                tax_id             = COALESCE($5, tax_id),
+                nickname           = COALESCE($6, nickname),
+                updated_at         = now()
+            WHERE id = $7
+            """,
+            gender,
+            dob,
+            preferred_language,
+            full_name,
+            tax_id,
+            nickname,
+            user_id,
+        )
+
+    async def get_full_profile(self, user_id: int) -> dict:
+        """Retorna um dicionário completo do perfil do usuário para exibição."""
+        user = await self.find_by_id(user_id)
+        if not user:
+            return {}
+
+        seller = await self.get_seller_profile(user_id)
+        buyer  = await self.get_buyer_profile(user_id)
+
+        profile = dict(user)
+        profile["pix_key"]         = seller["pix_key"]         if seller else None
+        profile["pickup_address"]  = seller["pickup_address"]  if seller else None
+        profile["delivery_address"] = buyer["delivery_address"] if buyer else None
+        return profile
+
     async def update_identity_status(self, user_id: int, status: str) -> None:
-        """Update identity verification status.
+        """Atualiza o status de verificação de identidade.
 
         status: unverified | under_review | verified | rejected
         """
@@ -138,7 +237,7 @@ class UserRepository:
         doc_type: str = "unknown",
         whatsapp_media_id: str | None = None,
     ) -> asyncpg.Record:
-        """Register an identity document and set user status to under_review."""
+        """Registra um documento de identidade e define o status como under_review."""
         doc = await self._db.fetch_one(
             """
             INSERT INTO identity_documents
@@ -155,14 +254,14 @@ class UserRepository:
         return doc
 
     async def get_identity_documents(self, user_id: int) -> list[asyncpg.Record]:
-        """Return all documents submitted by the user, most recent first."""
+        """Retorna todos os documentos enviados pelo usuário, mais recentes primeiro."""
         return await self._db.fetch_all(
             "SELECT * FROM identity_documents WHERE user_id = $1 ORDER BY created_at DESC",
             user_id,
         )
 
     async def get_pending_document(self, user_id: int) -> asyncpg.Record | None:
-        """Return the most recent document still under review."""
+        """Retorna o documento mais recente ainda em análise."""
         return await self._db.fetch_one(
             """
             SELECT * FROM identity_documents
@@ -191,7 +290,7 @@ class UserRepository:
                 )
 
     async def find_or_create_by_phone(self, phone: str) -> asyncpg.Record:
-        """Find user by phone; create empty record if first contact."""
+        """Encontra usuário pelo telefone; cria registro vazio se for o primeiro contato."""
         existing = await self.find_by_phone(phone)
         if existing:
             return existing
@@ -285,26 +384,87 @@ class UserRepository:
             service_area,
         )
 
-    async def check_missing_fields(self, user_id: int, action: str) -> dict:
+    async def check_missing_fields(self, user_id: int, operation: str) -> dict:
+        """Verifica quais campos obrigatórios estão faltando para a operação especificada.
+
+        Usa o módulo guardrails para a definição dos requisitos.
+        Retorna dict com 'missing' (lista de campos) e 'reason'.
+        """
+        from guardrails import check_requirements, OPERATION_REQUIREMENTS
+
         user = await self.find_by_id(user_id)
         if not user:
             return {"missing": ["full_name", "tax_id"], "reason": "user_not_found"}
 
-        if not user["full_name"] or not user["tax_id"]:
-            missing = []
-            if not user["full_name"]:
-                missing.append("full_name")
-            if not user["tax_id"]:
-                missing.append("tax_id")
-            return {"missing": missing, "reason": "missing_identification"}
+        # Monta o perfil para verificação
+        seller  = await self.get_seller_profile(user_id)
+        profile = {
+            "full_name":         user.get("full_name") or "",
+            "nickname":          user.get("nickname")  or "",
+            "tax_id":            user.get("tax_id")    or "",
+            "city":              user.get("city")      or "",
+            "neighborhood":      user.get("neighborhood") or "",
+            "street":            user.get("street")    or "",
+            "state":             user.get("state")     or "",
+            "zip_code":          user.get("zip_code")  or "",
+            "gender":            user.get("gender")    or "",
+            "date_of_birth":     user.get("date_of_birth"),
+            "preferred_language": user.get("preferred_language") or "",
+            "identity_status":   user.get("identity_status") or "unverified",
+            "pix_key":           (seller["pix_key"]        if seller else "") or "",
+            "pickup_address":    (seller["pickup_address"] if seller else "") or "",
+            "phone_valid":       True,  # telefone sempre existe (é por onde vieram)
+        }
 
-        if action == "list_product":
-            seller = await self.get_seller_profile(user_id)
-            missing = []
-            for field in ["pickup_address", "available_hours", "pix_key"]:
-                if not seller or not seller[field]:
-                    missing.append(field)
+        missing = check_requirements(operation, profile)
+        if not missing:
+            return {"missing": [], "reason": None}
+
+        op_label = OPERATION_REQUIREMENTS.get(operation, {}).get("label", operation)
+        return {
+            "missing": missing,
+            "reason": f"incomplete_profile_for_{operation}",
+            "operation_label": op_label,
+        }
+
+    async def build_guardrail_context(self, user_id: int) -> str:
+        """Gera texto de contexto com a completude do perfil para operações comuns.
+
+        Inclui o que está faltando para cada operação — usado no prompt do agente.
+        """
+        from guardrails import check_requirements, OPERATION_REQUIREMENTS, FIELD_LABELS
+
+        user   = await self.find_by_id(user_id)
+        seller = await self.get_seller_profile(user_id)
+        if not user:
+            return "perfil: não encontrado"
+
+        profile = {
+            "full_name":        user.get("full_name")    or "",
+            "nickname":         user.get("nickname")     or "",
+            "tax_id":           user.get("tax_id")       or "",
+            "city":             user.get("city")         or "",
+            "neighborhood":     user.get("neighborhood") or "",
+            "street":           user.get("street")       or "",
+            "state":            user.get("state")        or "",
+            "zip_code":         user.get("zip_code")     or "",
+            "gender":           user.get("gender")       or "",
+            "date_of_birth":    user.get("date_of_birth"),
+            "identity_status":  user.get("identity_status") or "unverified",
+            "pix_key":          (seller["pix_key"]        if seller else "") or "",
+            "pickup_address":   (seller["pickup_address"] if seller else "") or "",
+            "phone_valid":      True,
+        }
+
+        lines = []
+        key_ops = ["search_product", "save_alert", "buy_product", "list_product", "receive_payment"]
+        for op in key_ops:
+            missing = check_requirements(op, profile)
+            label   = OPERATION_REQUIREMENTS[op]["label"]
             if missing:
-                return {"missing": missing, "reason": "incomplete_seller_profile"}
+                missing_names = [FIELD_LABELS.get(f, f) for f in missing]
+                lines.append(f"para {label}: faltam {', '.join(missing_names)}")
+            else:
+                lines.append(f"para {label}: ok")
 
-        return {"missing": [], "reason": None}
+        return "completude_perfil: " + " | ".join(lines)

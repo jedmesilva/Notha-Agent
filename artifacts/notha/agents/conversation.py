@@ -160,6 +160,36 @@ NEVER respond with "Getting to the point.", "Let's get down to business." or sim
 - Pix key: "What is your Pix key to receive payment? It can be CPF, email, phone, or random key."
 - Seller pickup address: "What is the pickup address for this product? (street, number, neighbourhood, city)"
 
+━━━ PROFILE FIELDS — COLLECT PROGRESSIVELY ━━━
+Collect the fields below naturally as the conversation requires them — never ask for all at once:
+- Full address (street, number, neighbourhood, city, state, ZIP): collect when relevant for delivery or listing
+- Date of birth: collect when required for financial operations ("What is your date of birth?")
+- Gender: collect only if contextually relevant — it is optional
+- Preferred language: detected automatically from the conversation — no need to ask
+
+Identity documents (RG, CNH, passport):
+- When the user sends a document photo: inform it is under review
+- Data extracted automatically (name, CPF, date of birth) is saved to the profile
+- Confirm the extracted data naturally: "I found your name as João Silva and CPF ending in 789 — is that correct?"
+- This avoids asking the user to type data that can be read from the document
+
+━━━ OPERATION GUARDRAILS — CHECK BEFORE ACTING ━━━
+The context shows "completude_perfil" with what is missing for each operation.
+Before starting any operation, check the context and naturally request only what is missing:
+
+SEARCH product: no data required — anyone can search
+SAVE ALERT: requires name or nickname
+NEGOTIATE purchase: requires full name + WhatsApp phone
+BUY product: requires name + CPF + phone + city
+LIST product for sale: requires name + CPF + identity document submitted + phone + city + pickup address + Pix key
+RECEIVE payment (seller/courier): requires Pix key
+
+Rules:
+- NEVER ask for everything at once — one field at a time, in context
+- NEVER repeat a question for data already in the context
+- If identity document is required: "To list a product I need a verified identity document. You can send a photo of your RG, CNH or passport."
+- Prioritise the most urgent missing field for the current operation
+
 ━━━ THREE TYPES OF ADDRESS — NEVER CONFUSE ━━━
 1. USER'S HOME ADDRESS (where they live) — saved via update_location
    Collect with: "Which city and neighbourhood do you live in?" Do not repeat if already in context.
@@ -271,13 +301,18 @@ HOW TO REFUSE when the result is RESTRICTED:
 - User wants to change nickname / provides nickname → update_nickname
 - User provides/corrects CPF/tax ID → update_tax_id
 - User provides the city/neighbourhood where they LIVE → update_location
+- User provides full address (street, number, state, ZIP) → update_full_address
+- User provides gender, date of birth, or preferred language → update_profile
 - Product mentioned for sale or purchase → check_restriction FIRST, always
 - User wants to SELL → check_restriction → if ALLOWED, list_product (immediate)
 - User wants to BUY/SEARCH → check_restriction → if ALLOWED, search_product (after steps 1-2 of Flow 1)
 - User provides Pix key → update_pix_key
 - User provides seller pickup address → update_address
 - User requests product alert → save_interest
-- User wants to cancel alerts → cancel_alerts
+- User asks to see active alerts / "what am I monitoring?" → list_my_alerts
+- User wants to cancel a specific alert → cancel_alert with description
+- User wants to cancel ALL alerts → cancel_alerts
+- User asks to see their profile / registered data → get_my_profile
 
 "I need X", "I want a X", "I'm looking for X" = PURCHASE → never confuse with selling.
 
@@ -457,12 +492,143 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "cancel_alerts",
             "description": (
-                "Cancels all active search alerts for the user. "
-                "Use when the user asks to stop receiving product notifications."
+                "Cancels ALL active search alerts for the user. "
+                "Use only when the user explicitly asks to cancel all alerts/notifications. "
+                "To cancel a specific alert, use cancel_alert with a description instead."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_my_alerts",
+            "description": (
+                "Lists all active product alerts/watches the user has saved. "
+                "Use when the user asks 'what am I monitoring?', 'which alerts do I have?', "
+                "'what products am I watching?', or similar."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_alert",
+            "description": (
+                "Cancels a specific product alert by description. "
+                "Use when the user wants to stop monitoring a specific product "
+                "(e.g. 'cancel the iPhone alert', 'I no longer want to be notified about sofas'). "
+                "Pass the product description to find and cancel the matching alert. "
+                "If the user says 'cancel ALL alerts', use cancel_alerts instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the product alert to cancel (e.g. 'iPhone 14', 'wooden table')"
+                    }
+                },
+                "required": ["description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_my_profile",
+            "description": (
+                "Shows the user their registered profile data. "
+                "Use when the user asks 'what data do you have about me?', "
+                "'show my profile', 'what is my registered address?', etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_profile",
+            "description": (
+                "Updates personal profile fields: gender, date of birth, preferred language. "
+                "Use when the user provides any of these. "
+                "Examples: 'I am male', 'my birthday is 15/03/1990', 'I prefer English'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gender": {
+                        "type": "string",
+                        "description": "User's gender: 'M' for male, 'F' for female, or other self-description"
+                    },
+                    "date_of_birth": {
+                        "type": "string",
+                        "description": "Date of birth in DD/MM/YYYY or YYYY-MM-DD format"
+                    },
+                    "preferred_language": {
+                        "type": "string",
+                        "description": "ISO 639-1 language code (e.g. 'pt', 'en', 'es')"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_full_address",
+            "description": (
+                "Saves or updates the user's full home/residential address. "
+                "Use when the user provides street, number, state, ZIP code, or country. "
+                "Can be used alongside update_location (which saves city and neighbourhood). "
+                "Examples: 'my address is Rua das Flores, 123', 'ZIP 04538-133', 'state of São Paulo'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "street": {
+                        "type": "string",
+                        "description": "Street name (e.g. 'Rua das Flores', 'Av. Paulista')"
+                    },
+                    "street_number": {
+                        "type": "string",
+                        "description": "House/building number (e.g. '123', '456 apto 7')"
+                    },
+                    "neighborhood": {
+                        "type": "string",
+                        "description": "Neighbourhood/district"
+                    },
+                    "city": {
+                        "type": "string",
+                        "description": "City"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "State or province (e.g. 'São Paulo', 'SP', 'Rio de Janeiro')"
+                    },
+                    "country": {
+                        "type": "string",
+                        "description": "Country (default: Brasil)"
+                    },
+                    "zip_code": {
+                        "type": "string",
+                        "description": "Postal/ZIP code (e.g. '04538-133')"
+                    }
+                },
                 "required": []
             }
         }
