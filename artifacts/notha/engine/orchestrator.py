@@ -7,11 +7,13 @@ the LLM decided. Principle: LLM decides, code persists.
 """
 import logging
 import re
+import time as _time
 from db.connection import DB, get_db
 from db.repositories import (
     UserRepository, ListingRepository, ListingFlowRepository,
     NegotiationRepository, TransactionRepository, DeliveryRepository,
     ConversationRepository, SavedSearchRepository, PhoneInfoRepository,
+    AnalyticsRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
@@ -153,6 +155,7 @@ class Orchestrator:
             return await self._no_db_fallback(phone, text)
 
         user_repo, listing_repo, neg_repo, tx_repo, delivery_repo, conv_repo = self._repos(db)
+        analytics_repo = AnalyticsRepository(db)
         engine    = NegotiationEngine(db)
         flow_repo = ListingFlowRepository(db)
 
@@ -224,6 +227,8 @@ class Orchestrator:
             "update_name", "update_nickname", "update_tax_id",
             "update_pix_key", "update_address", "update_location",
         }
+
+        _pipeline_start = _time.monotonic()
 
         # ── Phase 0: Understand ───────────────────────────────────────────────
         understanding = await self._conv.understand(
@@ -328,6 +333,10 @@ class Orchestrator:
                 tc, phone, text, user,
                 user_repo, listing_repo, neg_repo, engine, active_negs,
                 history=history, context=context,
+                analytics_repo=analytics_repo,
+                step_number=steps_executed,
+                pipeline_intent=intent,
+                pipeline_objective=objective,
             )
             steps_executed += 1
             all_tool_results[tool_name] = result_text
@@ -410,9 +419,24 @@ class Orchestrator:
         if not final_reply:
             final_reply = "Desculpe, ocorreu um erro interno. Tente novamente em instantes."
 
-        # Persist message and reply in DB
-        await conv_repo.add(user_id, "user", text)
-        await conv_repo.add(user_id, "assistant", final_reply)
+        # Persist conversation and pipeline event in DB
+        _pipeline_ms = int((_time.monotonic() - _pipeline_start) * 1000)
+        await _asyncio.gather(
+            conv_repo.add(user_id, "user", text),
+            conv_repo.add(user_id, "assistant", final_reply),
+            analytics_repo.log_pipeline_event(
+                phone=phone,
+                objective=objective,
+                intent=intent,
+                flow=understanding.get("flow"),
+                needs_tools=needs_tools,
+                steps_planned=len(steps),
+                steps_executed=steps_executed,
+                outcome=outcome,
+                duration_ms=_pipeline_ms,
+                user_id=user_id,
+            ),
+        )
         return final_reply
 
     async def _execute_tool(
@@ -422,6 +446,10 @@ class Orchestrator:
         active_negs: list,
         history: list[dict] | None = None,
         context: str = "",
+        analytics_repo: "AnalyticsRepository | None" = None,
+        step_number: int = 0,
+        pipeline_intent: str = "",
+        pipeline_objective: str = "",
     ) -> tuple[str, str | None]:
         """Deterministically executes the tool chosen by the LLM.
 
@@ -578,21 +606,75 @@ class Orchestrator:
             return "listing flow started", complex_reply
 
         if name == "search_product":
-            intent = {
-                "category":           args.get("category"),
-                "search_description": args.get("search_description"),
-                "search_city":        args.get("search_city", "").strip() or None,
+            search_intent = {
+                "category":            args.get("category"),
+                "search_description":  args.get("search_description"),
+                "search_city":         args.get("search_city", "").strip() or None,
                 "search_neighborhood": args.get("search_neighborhood", "").strip() or None,
             }
             complex_reply = await self._handle_search(
-                phone, text, user, listing_repo, intent,
+                phone, text, user, listing_repo, search_intent,
                 history=history or [], context=context,
+                analytics_repo=analytics_repo,
+                pipeline_intent=pipeline_intent,
+                pipeline_objective=pipeline_objective,
             )
             return "search executed", complex_reply
 
         if name in _BUILTIN_TOOL_MAP:
-            result = await _BUILTIN_TOOL_MAP[name].execute(**args)
-            logger.info("Built-in tool '%s' executed successfully", name)
+            _t0 = _time.monotonic()
+            success = True
+            error_msg = None
+            try:
+                result = await _BUILTIN_TOOL_MAP[name].execute(**args)
+            except Exception as _e:
+                success = False
+                error_msg = str(_e)
+                result = f"ERROR: {_e}"
+            _duration_ms = int((_time.monotonic() - _t0) * 1000)
+            logger.info("Built-in tool '%s' executed in %dms (success=%s)", name, _duration_ms, success)
+
+            # Log every builtin tool call
+            if analytics_repo:
+                _safe_args = {k: v for k, v in (args or {}).items() if k not in ("api_key",)}
+                await analytics_repo.log_tool(
+                    phone=phone,
+                    tool_name=name,
+                    args=_safe_args,
+                    result_summary=str(result)[:600],
+                    success=success,
+                    error_message=error_msg,
+                    duration_ms=_duration_ms,
+                    step_number=step_number,
+                    user_id=user.get("id") if user else None,
+                )
+
+            # Log restriction checks separately for compliance auditing
+            if name == "check_restriction" and analytics_repo:
+                _rcheck_result = "ALLOWED" if result.startswith("ALLOWED") else (
+                    "RESTRICTED" if "RESTRICTED" in result else
+                    "ERROR" if "ERROR" in result else "DB_UNAVAILABLE"
+                )
+                _rcheck_category = None
+                _rcheck_reason   = None
+                if _rcheck_result == "RESTRICTED":
+                    _lines = result.splitlines()
+                    for _line in _lines:
+                        if "category:" in _line.lower():
+                            _rcheck_category = _line.split(":", 1)[-1].strip()
+                        if "reason:" in _line.lower():
+                            _rcheck_reason = _line.split(":", 1)[-1].strip()
+                await analytics_repo.log_restriction_check(
+                    phone=phone,
+                    product_description=args.get("product_description", ""),
+                    result=_rcheck_result,
+                    restriction_category=_rcheck_category,
+                    restriction_reason=_rcheck_reason,
+                    state=args.get("state"),
+                    municipality=args.get("municipality"),
+                    intent=pipeline_intent or None,
+                    user_id=user.get("id") if user else None,
+                )
 
             # When check_restriction clears a product, the LLM must immediately
             # call the next tool (search_product or list_product) without sending
@@ -790,12 +872,16 @@ class Orchestrator:
     async def _handle_search(
         self, phone, text, user, listing_repo, intent,
         history: list[dict] | None = None, context: str = "",
+        analytics_repo: "AnalyticsRepository | None" = None,
+        pipeline_intent: str = "",
+        pipeline_objective: str = "",
     ) -> str:
-        history           = history or []
-        category          = intent.get("category")
-        search_desc       = intent.get("search_description") or category or "product"
-        city_filter       = intent.get("search_city")
+        history             = history or []
+        category            = intent.get("category")
+        search_desc         = intent.get("search_description") or category or "product"
+        city_filter         = intent.get("search_city")
         neighborhood_filter = intent.get("search_neighborhood")
+        user_id             = user.get("id") if user else None
 
         # Include the current user message so the guardrail has full context.
         # Without it, the guardrail sees NOTHA responding about a search result
@@ -803,12 +889,35 @@ class Orchestrator:
         # reply as incoherent, ultimately returning the safe-fallback message.
         history_with_current = history + [{"role": "user", "content": text}]
 
+        async def _log(found_listings, fb_level=None):
+            """Fire-and-forget search log — never blocks the response path."""
+            if analytics_repo:
+                try:
+                    listing_ids = [l["id"] for l in found_listings if l.get("id")]
+                    await analytics_repo.log_search(
+                        user_id=user_id,
+                        phone=phone,
+                        query=search_desc,
+                        category=category,
+                        search_city=city_filter,
+                        search_neighborhood=neighborhood_filter,
+                        results_count=len(found_listings),
+                        results_listing_ids=listing_ids,
+                        had_fallback=fb_level is not None,
+                        fallback_level=fb_level,
+                        objective=pipeline_objective or None,
+                        intent=pipeline_intent or None,
+                    )
+                except Exception as _e:
+                    logger.warning("Failed to log search: %s", _e)
+
         # Level 1: search with full filter (neighborhood + city)
         listings = await listing_repo.find_available(
             category=category, limit=5,
             city=city_filter, neighborhood=neighborhood_filter,
         )
         if listings:
+            await _log(listings)
             region_label = (
                 f"in the {neighborhood_filter} neighbourhood" if neighborhood_filter else
                 f"in {city_filter}" if city_filter else
@@ -822,6 +931,7 @@ class Orchestrator:
                 category=category, limit=5, city=city_filter,
             )
             if listings:
+                await _log(listings, fb_level="neighborhood")
                 prefix = f"Nothing in {neighborhood_filter}, but I found something in {city_filter}:"
                 return await self._format_search_results(
                     listings, f"in {city_filter}", history_with_current, context, prefixo=prefix
@@ -832,12 +942,14 @@ class Orchestrator:
             listings = await listing_repo.find_available(category=category, limit=5)
             original_region = neighborhood_filter or city_filter or "that region"
             if listings:
+                await _log(listings, fb_level="city")
                 prefix = f"Nothing found in {original_region}. But here is what is available in other regions:"
                 return await self._format_search_results(
                     listings, "in other regions", history_with_current, context, prefixo=prefix
                 )
 
-        # Nothing anywhere
+        # Nothing anywhere — log zero results
+        await _log([], fb_level="national" if (city_filter or neighborhood_filter) else None)
         original_region = neighborhood_filter or city_filter or "any region"
         return await self._conv.speak(
             f"No '{search_desc}' available right now in {original_region}. "

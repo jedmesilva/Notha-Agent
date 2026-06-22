@@ -6,6 +6,7 @@ from db.repositories.transactions import TransactionRepository
 from db.repositories.delivery import DeliveryRepository
 from db.repositories.conversations import ConversationRepository
 from db.repositories.saved_searches import SavedSearchRepository
+from db.repositories.analytics import AnalyticsRepository
 
 __all__ = [
     "UserRepository",
@@ -17,4 +18,5 @@ __all__ = [
     "DeliveryRepository",
     "ConversationRepository",
     "SavedSearchRepository",
+    "AnalyticsRepository",
 ]

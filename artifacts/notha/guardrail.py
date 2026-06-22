@@ -205,6 +205,9 @@ async def validate_reply(
     context: str,
     user_message: str = "",
     objective: str = "",
+    analytics_repo=None,
+    phone: str | None = None,
+    user_id: int | None = None,
 ) -> str:
     """Validates the generated response before sending to the user.
 
@@ -279,6 +282,15 @@ async def validate_reply(
 
     if final_result.get("approved", True):
         logger.info("Guardrail: resposta corrigida aprovada na segunda tentativa.")
+        if analytics_repo:
+            try:
+                await analytics_repo.log_guardrail_event(
+                    category=category, reason=reason,
+                    was_corrected=True, used_fallback=False,
+                    objective=objective or None, phone=phone, user_id=user_id,
+                )
+            except Exception:
+                pass
         return corrected_reply
 
     logger.error(
@@ -287,4 +299,13 @@ async def validate_reply(
         final_result.get("category"),
         final_result.get("reason"),
     )
+    if analytics_repo:
+        try:
+            await analytics_repo.log_guardrail_event(
+                category=category, reason=reason,
+                was_corrected=False, used_fallback=True,
+                objective=objective or None, phone=phone, user_id=user_id,
+            )
+        except Exception:
+            pass
     return _SAFE_FALLBACK
