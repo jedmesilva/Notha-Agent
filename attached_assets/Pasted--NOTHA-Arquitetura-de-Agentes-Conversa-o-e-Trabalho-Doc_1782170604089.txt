@@ -1,0 +1,466 @@
+# NOTHA — Arquitetura de Agentes, Conversação e Trabalho
+
+Documento de planejamento de arquitetura — agentes, fluxo de decisão, e domínios de responsabilidade. Não cobre stack técnica (mantida: Python/FastAPI, OpenAI, PostgreSQL/Supabase, Asaas, Railway) nem schema de banco em detalhe — foco é em **como o sistema pensa, decide e age**.
+
+---
+
+## 1. Princípio central
+
+> **Conversação é responsabilidade do LLM. Decisão sobre dinheiro é responsabilidade de código determinístico.**
+
+Esse princípio se desdobra numa régua prática, usada para classificar **qualquer** componente do sistema:
+
+> **A regra de decisão já é conhecida e enumerável hoje?**
+> Se sim → é **Serviço** (código determinístico), mesmo que tenha múltiplos estados ou pareça complexo.
+> Se não — se depende de interpretar linguagem livre, ou de buscar um caminho não pré-definido — é **Agente** (LLM).
+
+A maior parte do sistema é Serviço. Os Agentes genuínos são poucos e concentrados exatamente onde há ambiguidade real de linguagem ou de caminho de solução: conversa, precificação, negociação de valor, busca de entregador.
+
+Um corolário importante: **mesmo dentro de um Agente, ele nunca tem a chave do cofre.** LLM pode propor, argumentar, sugerir — toda ação que move dinheiro, persiste dado sensível ou finaliza um acordo passa por um portão de validação em código antes de acontecer de fato.
+
+---
+
+## 2. Causa raiz dos problemas que motivaram este replanejamento
+
+Antes de descrever a arquitetura nova, vale registrar o diagnóstico que a originou — ele define os requisitos não-negociáveis das seções seguintes.
+
+**Sintoma:** o agente "esquecia" o nome do usuário, ou capturava texto incorreto (ex: a própria saudação "Oi") como sendo a resposta a uma pergunta de cadastro.
+
+**Causa raiz:** não existia, em nenhum lugar do sistema, um registro explícito de **"o que foi perguntado, aguardando resposta"**. Sem esse estado, cada mensagem nova era interpretada "do zero" pelo LLM de planejamento, que tentava adivinhar — e às vezes adivinhava errado — se aquele texto era resposta a algo pendente.
+
+**Requisito não-negociável derivado:** todo fluxo de coleta de dado precisa de um **estado de turno explícito e persistido**, consultado **antes** de qualquer interpretação livre de uma mensagem nova. Isso aparece na Seção 4 como peça central da arquitetura.
+
+---
+
+## 3. Mapa geral de domínios
+
+```
+                          ORQUESTRADOR (roteador, sem LLM)
+                                    │
+              ┌─────────────────────┼─────────────────────┐
+              │                     │                      │
+     CONVERSATION AGENT      ESTADO DE TURNO          GUARD RAIL FINAL
+     (entender / responder)  (pendência, Serviço)     (Agente revisor)
+              │
+   ┌──────────┼───────────┬────────────────┬─────────────────┐
+   │          │           │                │                  │
+IDENTIDADE  CATÁLOGO   NEGOCIAÇÃO       LOGÍSTICA          PAGAMENTOS
+(Serviço)      │           │                │             (Serviço puro)
+               │      ┌─────┴─────┐    ┌─────┴─────┐
+        Listing Flow  Buyer/Seller  Courier Match   Delivery
+        (Agente)      Proxy (Agente) (Agente)       Tracking
+               │      Negotiation    Courier Registry (Serviço)
+        Pricing Agent  Engine        (Serviço)
+        (Agente loop)  (Serviço)
+               │
+        Restriction Service
+        (Serviço, transversal)
+```
+
+---
+
+## 4. Camada de Estado de Turno (a peça que faltava)
+
+Existe **antes** de qualquer outro componente entrar em ação. É consultada pelo Orquestrador no início de toda mensagem recebida.
+
+### O que ela responde
+
+> "Há algo específico que perguntamos na mensagem anterior, ainda sem resposta?"
+
+### Por que não é parte do perfil do usuário
+
+Perfil (nome, CPF, chave Pix) é dado **permanente**. Estado de turno é **temporário** — existe enquanto uma pergunta está em aberto, e é limpo assim que respondida ou quando a pendência é abandonada/expira.
+
+### Conteúdo do estado
+
+- Campo pendente (ex: `nome`, `cpf`, `chave_pix`, `confirmacao_retirada`)
+- Operação que motivou a pergunta (ex: `list_product`, `start_negotiation`)
+- Timestamp de quando a pergunta foi feita (para detectar abandono)
+
+### Regra de consumo
+
+Quando uma mensagem nova chega **e existe pendência registrada**, o Orquestrador informa essa pendência ao Conversation Agent como fato — não como sugestão. A primeira pergunta que o LLM responde, antes de qualquer outra interpretação, é: *"esta mensagem responde à pendência registrada?"*
+
+Se a resposta for claramente sim → salva e limpa a pendência.
+Se for claramente não (ex: pergunta sobre outro assunto) → mantém a pendência, trata a mensagem por seu próprio conteúdo, e **não força encaixe** ("Oi" nunca mais é candidato a nome só porque o nome está vazio — só seria candidato se a pendência ativa fosse exatamente `nome`, e mesmo assim com confiança avaliada).
+Se for ambíguo → confirma explicitamente antes de salvar ("Só confirmando, seu nome é X?").
+
+### Por que isso elimina a classe de bug observada
+
+Sem este estado, qualquer mensagem era candidata livre a ser "a resposta a alguma coisa". Com ele, só existe candidatura quando há uma pergunta real, registrada, em aberto — fechando exatamente a lacuna que causou o sintoma original.
+
+---
+
+## 5. Conversation Agent
+
+Único ponto de interface em linguagem natural com humanos. Duas funções internas, sempre as mesmas independente do domínio:
+
+- **Entender**: recebe texto livre + estado de turno + contexto do domínio ativo, devolve intenção estruturada
+- **Responder**: recebe um resultado já decidido (por Serviço ou por outro Agente), devolve texto natural
+
+**Nunca decide preço. Nunca decide pagamento. Nunca persiste dado diretamente** — sempre devolve estrutura para o Orquestrador/Serviço aplicar.
+
+### System prompt fixo, não negociável
+
+A identidade, escopo e tom do NOTHA são definidos uma vez, como texto versionado (arquivo separado do código), enviado em toda chamada — nunca "lembrado" ou reconstruído via histórico de conversa. Isso resolve a inconsistência de tom observada nos testes iniciais (saudação variando a cada mensagem).
+
+---
+
+## 6. Identidade & Perfil (Serviço, com pontas de Agente)
+
+### Modelo de identidade
+
+- **CPF como âncora estável** de identidade — não o telefone, que pode trocar (situação comum e já observada na prática).
+- **Telefone como canal atual**, com histórico de números antigos preservado, permitindo reconhecer e migrar conta quando o usuário troca de WhatsApp.
+
+### Coleta progressiva, por papel
+
+| Nível | Quando coletado | Dados |
+|---|---|---|
+| Identificação mínima | Qualquer interação | Nome (ou nome preferido), CPF |
+| Perfil vendedor | Ao listar produto | Endereço de retirada, horários, chave Pix |
+| Perfil comprador | Ao fechar compra com entrega | Endereço de entrega |
+| Perfil entregador | Ao aceitar fazer entrega | Chave Pix, região de atuação |
+
+### Nome legal vs. nome preferido
+
+Duas naturezas diferentes de dado, risco diferente:
+- **Nome preferido** ("como te chamar"): baixo risco, social, corrigível livremente, sem fricção.
+- **Nome legal**: liga a CPF/transações, sensível — correção a qualquer momento é permitida, mas se houver transação financeira ativa, escala para verificação documental antes de aceitar a mudança.
+
+### Validação de chave Pix
+
+Aproveita infraestrutura nacional já existente — o sistema bancário garante que uma chave Pix tipo CPF só pode pertencer ao titular real daquele CPF. O NOTHA consulta o nome do titular retornado pela API do Asaas e exige confirmação explícita do usuário antes de salvar, pegando erros de digitação e tornando visível qualquer tentativa de uso de chave de terceiro.
+
+### Verificação documental — reservada a casos excepcionais
+
+Nunca no fluxo normal de uso. Disparada apenas quando: (a) mudança de dado sensível com transação financeira ativa em andamento, (b) disputa de transação, (c) recuperação de conta quando verificação por CPF for considerada insuficiente, ou (d) exportação de dados pessoais (direito LGPD).
+
+---
+
+## 7. Catálogo & Listagem
+
+### Listing Flow Agent (Agente, objetivo fechado em sequência)
+
+Conduz o cadastro de produto em etapas conhecidas (descrição → categoria → fotos → preço). Não precisa de loop aberto — o caminho é fixo, só o conteúdo de cada resposta varia. Usa o mesmo mecanismo de Estado de Turno da Seção 4 para saber em que etapa está cada listing em cadastro.
+
+A checagem de restrição (Seção 10) acontece **imediatamente após a categoria ser extraída** — antes de pedir fotos ou qualquer outro dado, evitando fricção desnecessária em produtos que serão recusados.
+
+### Pricing/Appraisal Agent (Agente, loop aberto — ReAct)
+
+Objetivo aberto: "formar uma sugestão de preço confiável". Caminho não é fixo — depende de quais fontes de evidência estão disponíveis e o que cada uma revela.
+
+**Fontes consultadas via tools, dentro do loop:**
+- Preço de mercado (busca web)
+- Histórico interno de vendas similares (consulta SQL)
+- Demanda observada (fila de interesse histórica)
+- Avaliação visual das fotos (visão computacional)
+
+**Critério de parada do loop:** confiança suficiente alcançada (pelo menos preço de mercado OU histórico interno, mais avaliação visual se houver fotos) — não é necessário esgotar todas as tools disponíveis.
+
+**Saída:** sempre uma sugestão, nunca uma decisão final — o vendedor sempre confirma ou ajusta antes do preço ser gravado como `preco_minimo` real do listing.
+
+### Catalog Service (Serviço puro)
+
+Busca, listagem, gestão de status (`disponível | em_negociação | vendido | cancelado`), fila de interessados (FIFO), trava de concorrência (`FOR UPDATE`) ao iniciar negociação.
+
+---
+
+## 8. Negociação
+
+### Buyer Proxy Agent / Seller Proxy Agent (Agentes, loop aberto)
+
+Cada lado declara um limite (mínimo/máximo + ideal) **uma única vez**, em privado. Os proxies então argumentam entre si, em rodadas internas, usando dados reais do produto (histórico, avaliação, mercado) para defender o melhor valor possível para seu lado representado.
+
+**Guard rail obrigatório, em código, sem excecão:** nenhuma proposta de proxy passa adiante sem validação contra o limite declarado pelo humano que ele representa. O LLM pode argumentar e ceder terreno de forma inteligente, mas nunca pode propor ou aceitar fora do limite autorizado.
+
+**Limite de rodadas internas:** se os proxies não convergirem dentro de um número máximo de rodadas, cai em fallback de interseção matemática simples (ponto médio dos dois intervalos), garantindo que a negociação sempre tenha um desfecho, mesmo sem rodadas argumentativas adicionais.
+
+### Confirmação humana (objetivo fechado, sem loop)
+
+Quando os proxies convergem, o valor candidato é submetido **sequencialmente** aos humanos: primeiro ao vendedor, depois ao comprador. Se qualquer um recusar, o valor recusado é registrado como sinal e uma nova rodada de proxies é acionada, agora sabendo que aquele número específico não foi aceito por um lado humano.
+
+**Limite de tentativas humanas totais** evita ciclo eterno de proposta → recusa → nova proposta sem nunca encerrar.
+
+### Negotiation Engine (Serviço, determinístico)
+
+Máquina de estados da negociação (`ativa → aceita → aguardando_pagamento → paga`, com ramos de `recusada / expirada / expirada_por_timeout / sem_acordo`). Decide timeouts de rodada, decide quando uma negociação volta para a fila, decide quando acionar o domínio de Pagamentos. Nunca usa LLM para decisão financeira.
+
+### Contextual Evaluator (Agente pontual, escopo mínimo)
+
+Ativado apenas em casos-limite do modo de negociação direta (não-proxy), quando uma oferta vem abaixo do mínimo mas acompanhada de contexto não-numérico relevante (ex: "pago na hora", "retiro hoje"). Avalia se esse contexto justifica um ajuste — mas o ajuste sugerido sempre passa por um teto fixo em código antes de ser aplicado.
+
+---
+
+## 9. Logística
+
+### Logistics Decision Agent (Agente, objetivo fechado)
+
+Pergunta simples, sem loop: "retirar ou contratar entrega do NOTHA?". Resultado direciona para um dos dois ramos abaixo.
+
+### Fluxo de retirada (Serviço, com agendamento)
+
+Comprador informa data/horário de retirada → `Delivery Tracking` registra agendamento e prazo → na confirmação mútua (vendedor confirma entrega, comprador confirma recebimento), aciona liberação de pagamento.
+
+**Se o prazo agendado vencer sem confirmação:** o sistema pergunta se o comprador quer converter para entrega NOTHA. Se aceitar, gera cobrança adicional só do frete. Se recusar ou não responder, o **produto é relistado** (volta ao catálogo imediatamente, desacoplado do destino do dinheiro), enquanto o **valor pago permanece retido**, com prazo final de segurança antes de estorno automático para a origem.
+
+### Courier Matching Agent (Agente, loop aberto)
+
+Mesma estrutura que Buyer/Seller Proxy: busca entregadores disponíveis na região, negocia valor do frete dentro de limites declarados (pelo comprador/vendedor de um lado, pelo entregador do outro), com o mesmo guard rail de validação em código.
+
+### Courier Registry (Serviço puro)
+
+Cadastro, disponibilidade e região de atuação de entregadores — busca e filtro, sem LLM, equivalente em natureza ao Catalog Service.
+
+### Delivery Tracking (Serviço, determinístico)
+
+Estados de confirmação de entrega/retirada, prazos, conversões, relistagem, gatilho de liberação financeira. Toda a lógica de "quando o dinheiro pode ser liberado" vive aqui, nunca decidida por um Agente.
+
+---
+
+## 10. Restriction Service (Serviço, transversal — atravessa Listagem, Busca e Negociação)
+
+### Três categorias de restrição, mesma estrutura de dados
+
+| Tipo | Exemplo | Quem decide mudança | Pode mudar? |
+|---|---|---|---|
+| `ilegal` | Armas, drogas | Revisão jurídica / mudança de lei | Sim, raramente |
+| `fora_de_escopo` | Imóveis, veículos | Decisão de produto / roadmap | Sim, quando módulo dedicado for construído |
+| Ambiguidade caso a caso | Descrição suspeita em categoria permitida | — | Não é categoria fixa, é avaliação pontual |
+
+Cada categoria registrada inclui `tipo`, `motivo`, e data de última revisão — nunca tratada como imutável, apenas como atualizável por processos diferentes conforme o tipo.
+
+### Como a categoria é identificada
+
+Não há formulário rígido de categoria. O Conversation Agent extrai a categoria provável a partir da descrição livre do que a pessoa quer vender, na mesma chamada em que já identifica a intenção geral ("quero vender algo") — sem chamada extra dedicada. A checagem de restrição roda imediatamente após essa extração.
+
+**Confiança baixa na categoria extraída** → pede esclarecimento antes de bloquear ou liberar, nunca decide no escuro.
+
+### Tom de resposta diferenciado por tipo
+
+- `ilegal` → recusa direta, sem abertura: *"Não posso ajudar com isso. [motivo]"*
+- `fora_de_escopo` → recusa com porta aberta ao futuro: *"Por enquanto o NOTHA não trabalha com isso. [motivo] Pode ser que isso mude."*
+
+### Os três pontos de checagem (defesa em profundidade)
+
+1. **Listagem** — antes de aceitar o cadastro, logo após identificar a categoria
+2. **Busca** — produtos de categoria restrita nunca são exibidos em resultados, independente de como entraram no catálogo
+3. **Negociação/compra** — checagem redundante e intencional antes de qualquer dinheiro envolvido, cobrindo casos em que a regra mudou depois da listagem original ter sido aceita
+
+### Content Safety Agent (Agente, ativado seletivamente)
+
+Não roda em toda listagem — só quando heurísticas determinísticas leves (palavras-chave, padrões na descrição) sinalizam algo que merece segunda checagem, mesmo em categoria nominalmente permitida. Avalia sinais de categorização incorreta proposital, falsificação não declarada, ou indício de origem ilegal.
+
+**Nunca bloqueia automaticamente** — sinaliza, e o listing entra em estado `em_revisao_manual`, fora do catálogo público até confirmação humana da operação do NOTHA. Evita tanto falso positivo (bloquear conteúdo legítimo) quanto falso negativo (confiar demais numa única passada de LLM).
+
+---
+
+## 11. Pagamentos (100% Serviço — nenhum Agente)
+
+Justificativa: toda decisão deste domínio já é, hoje, enumerável em regra fixa — quem pagar, quanto, quando, e como acompanhar status não exigem julgamento no momento da execução, porque o julgamento real (quanto vale o produto, qual valor foi acordado) já aconteceu **antes**, na Negociação, e chega a este domínio como fato consumado.
+
+**Responsabilidades:**
+- Criar cobrança Pix para o comprador (valor produto + entrega, se aplicável, em cobrança única)
+- Escutar webhook de confirmação de pagamento
+- Manter retenção controlada pelo próprio backend (modelo sem subconta/KYC de terceiros — apenas a conta principal da MAISOR CAPITAL tem KYC no Asaas; vendedor, comprador e entregador recebem via chave Pix de qualquer banco)
+- Disparar transferência ao vendedor e/ou entregador apenas após confirmação mútua de entrega (gatilho vindo do Delivery Tracking)
+- Disparar estorno automático para a origem quando prazo final de resolução se esgotar sem confirmação
+- Reenviar lembrete de cobrança pendente após prazo configurável (regra de tempo, não julgamento)
+
+**Conciliação obrigatória:** soma de tudo retido deve ser auditável e comparável ao saldo real na conta Asaas, com alerta automático em caso de divergência.
+
+---
+
+## 12. Guard Rails (atravessam todos os domínios)
+
+### Camada de escopo
+
+System prompt fixo define os limites do que o NOTHA conversa sobre. Mensagens que tentam redefinir o comportamento do agente (prompt injection) são tratadas como texto comum do usuário, nunca como instrução.
+
+### Camada financeira
+
+Nenhuma decisão de valor sai de um Agente sem passar por validação contra limite declarado por humano, em código. Esta é a camada de maior prioridade — falha aqui custa dinheiro real.
+
+### Camada de alucinação factual
+
+Dados que vêm do banco (nome, CPF, status de negociação) são sempre **injetados explicitamente** no contexto do LLM como fato — nunca inferidos do histórico de conversa em texto livre. Esta é a correção direta da causa raiz descrita na Seção 2.
+
+### Camada de schema
+
+Toda saída estruturada de qualquer Agente é validada contra schema antes de ser usada. Saída malformada nunca é "consertada" silenciosamente — gera novo pedido de esclarecimento ou aciona fallback.
+
+### Camada de circuit breaker
+
+Contadores de tentativas (por campo pendente, por rodada de negociação, por iteração de loop aberto) evitam ciclos infinitos. Esgotado o limite, o sistema sempre tem um desfecho definido (escalar para revisão humana, aplicar fallback determinístico, ou encerrar com mensagem clara) — nunca trava em silêncio.
+
+### Scope/Safety Reviewer Agent
+
+Roda **depois** que qualquer resposta já foi montada por outro Agente, como última verificação antes do envio ao WhatsApp: está dentro do escopo do NOTHA? É coerente com os dados reais do usuário, conforme registrados no banco? Se não passar, a resposta é substituída por uma alternativa segura/genérica antes de chegar ao usuário.
+
+---
+
+## 13. Mecanismo de Tools (como os Agentes de loop aberto agem de fato)
+
+Esta seção formaliza **como**, na prática, um Agente de loop aberto (Pricing/Appraisal Agent, Buyer/Seller Proxy, Courier Matching Agent) executa o ciclo "pensar → agir → observar → repetir" descrito nas Seções 7-9. É a camada de implementação que conecta o raciocínio do LLM a código determinístico real.
+
+### 13.1 Declaração de tool — schema, não instinto
+
+O LLM não tem conhecimento implícito de funções do sistema. Cada tool é declarada como um schema estruturado (formato function calling da OpenAI), com nome, descrição e parâmetros esperados. Esse schema é enviado junto da mensagem em toda chamada à API.
+
+```python
+TOOLS_SCHEMA_PRICING_AGENT = [
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_preco_mercado",
+            "description": (
+                "Busca o preço de mercado de um produto novo/similar na web. "
+                "Use quando precisar de uma referência de teto de preço para "
+                "calibrar uma sugestão de valor."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "produto": {"type": "string", "description": "Descrição do produto a pesquisar"}
+                },
+                "required": ["produto"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_historico_similar",
+            "description": (
+                "Busca preços finais de negociações já fechadas no NOTHA para produtos "
+                "da mesma categoria. Fonte mais confiável que preço de mercado externo, "
+                "pois reflete comportamento real de venda na plataforma."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "categoria": {"type": "string"},
+                    "atributos": {"type": "object", "description": "Marca, modelo, estado, etc."}
+                },
+                "required": ["categoria"]
+            }
+        }
+    }
+]
+```
+
+**O campo `description` é a peça que mais importa.** É um manual de instruções por tool, embutido no próprio schema — o LLM lê essas descrições a cada decisão de próximo passo, e usa o texto pra julgar se aquela tool resolve o que falta agora. Descrição vaga leva a uso incorreto; descrição específica ("use quando...") reduz ambiguidade.
+
+### 13.2 O LLM nunca executa a tool — ele só pede a execução
+
+Numa chamada, o LLM devolve **ou** texto de resposta normal, **ou** uma instrução estruturada (`tool_calls`) pedindo a execução de uma função específica com argumentos específicos. A execução real é sempre feita pelo código do NOTHA, nunca pelo LLM.
+
+```python
+resposta = await openai_client.chat.completions.create(
+    model="gpt-4o",
+    messages=historico_mensagens,
+    tools=TOOLS_SCHEMA_PRICING_AGENT,
+    tool_choice="auto"
+)
+
+escolha = resposta.choices[0].message
+
+if escolha.tool_calls:
+    chamada = escolha.tool_calls[0]
+    nome_tool = chamada.function.name
+    argumentos = json.loads(chamada.function.arguments)
+else:
+    texto_resposta_final = escolha.content
+```
+
+### 13.3 Execução determinística e retorno ao loop (a "Observation" do ReAct)
+
+```python
+TOOLS_EXECUTORS = {
+    "buscar_preco_mercado": buscar_preco_mercado,
+    "buscar_historico_similar": buscar_historico_similar,
+    "avaliar_imagens": avaliar_imagens,
+    "buscar_interesse_anterior": buscar_interesse_anterior,
+}
+
+if escolha.tool_calls:
+    resultado_real = await TOOLS_EXECUTORS[nome_tool](**argumentos)
+
+    historico_mensagens.append({"role": "assistant", "tool_calls": escolha.tool_calls})
+    historico_mensagens.append({
+        "role": "tool",
+        "tool_call_id": chamada.id,
+        "content": json.dumps(resultado_real)
+    })
+
+    # nova chamada ao LLM, agora com a observação real incluída -- continua o loop
+```
+
+`resultado_real` é sempre dado de verdade, vindo de execução de função (busca SQL, chamada de API externa, análise de visão) — nunca um valor que o LLM "lembrou" ou inferiu. Isso é a mesma garantia da Camada de Alucinação Factual (Seção 12): o que entra no histórico como fato é sempre produto de execução determinística, não de suposição do modelo.
+
+O ciclo (chamar LLM → ele pede tool → executa → devolve resultado → chama LLM de novo) se repete até a resposta vir sem `tool_calls`, sinalizando que o Agente está pronto para finalizar — esse é o loop aberto descrito nas Seções 7 a 9, implementado de forma concreta.
+
+### 13.4 Controlando quando e quais tools usar
+
+**`tool_choice`** permite forçar comportamento além do padrão "LLM decide livremente":
+
+```python
+tool_choice="auto"       # padrão -- LLM decide se usa tool ou responde direto
+tool_choice="required"   # força o uso de alguma tool, não permite resposta direta
+tool_choice={"type": "function", "function": {"name": "buscar_preco_mercado"}}  # força uma tool específica
+```
+
+Útil para impor ordem em pontos críticos — por exemplo, forçar `buscar_preco_mercado` como primeira chamada obrigatória do Pricing Agent, liberando `tool_choice="auto"` apenas nas rodadas seguintes.
+
+**Escopo de tools por Agente** — cada Agente recebe apenas as tools relevantes ao seu domínio, nunca o catálogo completo do sistema:
+
+```python
+AGENTE_TOOLS_MAP = {
+    "pricing_agent": [
+        "buscar_preco_mercado", "buscar_historico_similar",
+        "avaliar_imagens", "buscar_interesse_anterior",
+    ],
+    "courier_matching_agent": [
+        "buscar_entregadores_disponiveis", "calcular_distancia_entrega",
+    ],
+    "listing_flow_agent": [
+        "check_restriction",
+    ],
+}
+```
+
+Isso não é apenas organização — é uma restrição técnica real. Se `buscar_preco_mercado` nunca é incluída no schema enviado ao Listing Flow Agent, ele estruturalmente não tem como chamá-la, independente do que o raciocínio do LLM "considere" fazer. É a mesma lógica de separação de domínios da Seção 3, aplicada como limite de capacidade, não só de instrução.
+
+### 13.5 Critério de parada (sempre explícito no system prompt do Agente)
+
+O schema de tools diz **o que** cada uma faz. O system prompt do Agente (versionado, conforme Seção 5) diz **quando parar de buscar e finalizar** — por exemplo, o critério de confiança suficiente do Pricing Agent (Seção 7) é definido ali, não inferido pelo LLM a cada execução. Combinado com o limite de iterações da Camada de Circuit Breaker (Seção 12), garante que todo loop aberto sempre converge para um resultado, mesmo no caso de não atingir confiança ideal.
+
+---
+
+## 14. Resumo — tabela de classificação Agente vs. Serviço
+
+| Componente | Classificação | Domínio |
+|---|---|---|
+| Orquestrador | Serviço | Transversal |
+| Estado de Turno | Serviço | Transversal |
+| Conversation Agent (entender/responder) | Agente | Transversal |
+| Scope/Safety Reviewer | Agente (pontual, pós-resposta) | Transversal |
+| Identidade & Perfil (persistência) | Serviço | Identidade |
+| Validação de titularidade Pix | Serviço (consome API externa) | Identidade |
+| Listing Flow Agent | Agente (fechado, sequencial) | Catálogo |
+| Pricing/Appraisal Agent | Agente (loop aberto) | Catálogo |
+| Catalog Service | Serviço | Catálogo |
+| Buyer/Seller Proxy Agent | Agente (loop aberto) | Negociação |
+| Contextual Evaluator | Agente (pontual, com teto fixo) | Negociação |
+| Negotiation Engine | Serviço | Negociação |
+| Logistics Decision Agent | Agente (fechado) | Logística |
+| Courier Matching Agent | Agente (loop aberto) | Logística |
+| Courier Registry | Serviço | Logística |
+| Delivery Tracking | Serviço | Logística |
+| Restriction Service | Serviço | Transversal (Catálogo/Busca/Negociação) |
+| Content Safety Agent | Agente (seletivo, nunca decide sozinho) | Transversal |
+| Payment Service | Serviço (100%, nenhum Agente) | Pagamentos |
+
+---
+
+*Documento de planejamento — reflete decisões de arquitetura tomadas em sessão de replanejamento completo, incluindo o mecanismo de tools (Seção 13) que conecta o raciocínio dos Agentes de loop aberto a execução determinística real. Não substitui a especificação técnica detalhada anterior (NOTHA_SPEC.md) quanto a schema de banco e pseudo-código; complementa com a camada de raciocínio sobre agentes que faltava formalizar.*
