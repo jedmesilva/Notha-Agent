@@ -1,4 +1,4 @@
-from db.repositories.users import UserRepository
+from db.repositories.users import UserRepository, PhoneInfoRepository
 from db.repositories.listings import ListingRepository
 from db.repositories.listing_flows import ListingFlowRepository
 from db.repositories.negotiations import NegotiationRepository
@@ -9,6 +9,7 @@ from db.repositories.saved_searches import SavedSearchRepository
 
 __all__ = [
     "UserRepository",
+    "PhoneInfoRepository",
     "ListingRepository",
     "ListingFlowRepository",
     "NegotiationRepository",

@@ -22,11 +22,21 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_identity_status ON users(identity_status);
 
 CREATE TABLE IF NOT EXISTS user_phone_numbers (
-    id         SERIAL PRIMARY KEY,
-    user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    phone      VARCHAR(20) UNIQUE NOT NULL,
-    active     BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT now()
+    id           SERIAL PRIMARY KEY,
+    user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone        VARCHAR(20) UNIQUE NOT NULL,
+    active       BOOLEAN DEFAULT TRUE,
+    -- Parsed by phonenumbers (Google libphonenumber) on first contact
+    country_code SMALLINT,                -- e.g. 55
+    country_iso  VARCHAR(2),              -- ISO 3166-1 alpha-2, e.g. 'BR'
+    country_name VARCHAR(100),            -- in Portuguese, e.g. 'Brasil'
+    region       VARCHAR(150),            -- state/province, e.g. 'São Paulo'
+    carrier      VARCHAR(100),            -- mobile operator, e.g. 'Vivo'
+    timezone     VARCHAR(60),             -- IANA, e.g. 'America/Sao_Paulo'
+    number_type  VARCHAR(30),             -- 'MOBILE', 'FIXED_LINE', etc.
+    is_valid     BOOLEAN,
+    parsed_at    TIMESTAMPTZ,
+    created_at   TIMESTAMP DEFAULT now()
 );
 
 -- One active number per user

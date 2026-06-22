@@ -2,6 +2,54 @@ import asyncpg
 from db.connection import DB
 
 
+class PhoneInfoRepository:
+    """Stores and retrieves parsed phone number data from user_phone_numbers."""
+
+    def __init__(self, db: DB):
+        self._db = db
+
+    async def get(self, phone: str) -> asyncpg.Record | None:
+        return await self._db.fetch_one(
+            "SELECT * FROM user_phone_numbers WHERE phone = $1", phone
+        )
+
+    async def save(self, phone: str, info) -> None:
+        """Persist PhoneInfo fields into user_phone_numbers for this phone."""
+        from datetime import datetime, timezone
+        await self._db.execute(
+            """
+            UPDATE user_phone_numbers SET
+                country_code = $1,
+                country_iso  = $2,
+                country_name = $3,
+                region       = $4,
+                carrier      = $5,
+                timezone     = $6,
+                number_type  = $7,
+                is_valid     = $8,
+                parsed_at    = $9
+            WHERE phone = $10
+            """,
+            info.country_code or None,
+            info.country_iso or None,
+            info.country_name or None,
+            info.region or None,
+            info.carrier or None,
+            info.timezone or None,
+            info.number_type or None,
+            info.is_valid,
+            datetime.now(timezone.utc),
+            phone,
+        )
+
+    async def needs_parsing(self, phone: str) -> bool:
+        """Returns True if this phone has never been parsed by phonenumbers."""
+        row = await self._db.fetch_one(
+            "SELECT parsed_at FROM user_phone_numbers WHERE phone = $1", phone
+        )
+        return row is None or row["parsed_at"] is None
+
+
 class UserRepository:
     def __init__(self, db: DB):
         self._db = db

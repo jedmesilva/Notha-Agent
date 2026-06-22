@@ -11,7 +11,7 @@ from db.connection import DB, get_db
 from db.repositories import (
     UserRepository, ListingRepository, ListingFlowRepository,
     NegotiationRepository, TransactionRepository, DeliveryRepository,
-    ConversationRepository, SavedSearchRepository,
+    ConversationRepository, SavedSearchRepository, PhoneInfoRepository,
 )
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from agents.listing_flow import ListingFlowAgent, _parse_jsonb
@@ -19,7 +19,7 @@ from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
 from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
-from phone_timezone import infer_timezone
+from phone_info import parse_phone, get_timezone
 
 _BUILTIN_TOOL_MAP = {
     web_search.name:        web_search,
@@ -158,6 +158,20 @@ class Orchestrator:
         user    = await user_repo.find_or_create_by_phone(phone)
         user_id = user["id"]
 
+        # Parse phone number info on first contact (runs once, result persisted in DB)
+        phone_info_repo = PhoneInfoRepository(db)
+        if await phone_info_repo.needs_parsing(phone):
+            try:
+                info = parse_phone(phone)
+                await phone_info_repo.save(phone, info)
+                logger.info(
+                    "Phone info saved for user_id=%s: iso=%s country=%s region=%s tz=%s carrier=%s",
+                    user_id, info.country_iso, info.country_name,
+                    info.region, info.timezone, info.carrier,
+                )
+            except Exception as e:
+                logger.warning("Could not save phone info for %s: %s", phone, e)
+
         # Check if there is an active product listing flow for this phone
         active_flow = await flow_repo.get_active(phone)
         if active_flow:
@@ -174,14 +188,15 @@ class Orchestrator:
             )
 
         # Load data in parallel — needed in all response paths
-        active_negs, seller_profile, history = await _gather(
+        active_negs, seller_profile, history, phone_row = await _gather(
             neg_repo.find_active_by_buyer(user_id),
             user_repo.get_seller_profile(user_id),
             conv_repo.get_history(user_id),
+            PhoneInfoRepository(db).get(phone),
         )
 
         # Rich context with real DB data — the LLM always works with current info
-        context = self._build_context(user, active_negs, seller_profile, phone=phone)
+        context = self._build_context(user, active_negs, seller_profile, phone=phone, phone_row=phone_row)
 
         # Pending business confirmations (e.g. confirm listing price)
         pending = PENDING_CONFIRMATIONS.get(phone)
@@ -278,7 +293,7 @@ class Orchestrator:
             if user_data_changed:
                 user = await user_repo.find_by_id(user_id) or user
                 seller_profile = await user_repo.get_seller_profile(user_id)
-                context = self._build_context(user, active_negs, seller_profile, phone=phone)
+                context = self._build_context(user, active_negs, seller_profile, phone=phone, phone_row=phone_row)
                 user_data_changed = False
 
             # Feed results back to LLM with tools available — lets it chain calls
@@ -538,7 +553,7 @@ class Orchestrator:
         _memory_add(phone, "assistant", last_assistant)
         return last_assistant
 
-    def _build_context(self, user, active_negs: list, seller_profile=None, phone: str = "") -> str:
+    def _build_context(self, user, active_negs: list, seller_profile=None, phone: str = "", phone_row=None) -> str:
         """Builds context with real DB data for the LLM.
 
         Includes name, nickname, tax_id, identity verification, seller profile
@@ -619,11 +634,20 @@ class Orchestrator:
         else:
             parts.append("active_negotiation: none")
 
-        # Inferred timezone: registered city > DDI+area code > DDI
-        city_for_tz = home_city or ""
-        tz = infer_timezone(phone, cidade=city_for_tz)
-        parts.append(f"timezone: {tz}")
+        # Phone number metadata — parsed once on first contact via phonenumbers
+        # library and stored in DB; loaded here from the already-fetched phone_row.
+        if phone_row and phone_row.get("parsed_at"):
+            if phone_row.get("country_name"):
+                parts.append(f"country: {phone_row['country_name']} ({phone_row['country_iso']})")
+            if phone_row.get("region"):
+                parts.append(f"phone_region: {phone_row['region']}")
+            if phone_row.get("carrier"):
+                parts.append(f"carrier: {phone_row['carrier']}")
+            tz = phone_row.get("timezone") or get_timezone(phone, city=home_city or None)
+        else:
+            tz = get_timezone(phone, city=home_city or None)
 
+        parts.append(f"timezone: {tz}")
         return " | ".join(parts)
 
     async def _handle_list_product(

@@ -32,6 +32,35 @@ def _phone_lock(phone: str) -> asyncio.Lock:
     return _PHONE_LOCKS[phone]
 
 
+async def _migrate_phone_info_columns() -> None:
+    """Adds phone-info columns to user_phone_numbers if they don't exist yet.
+
+    Safe to run on every startup — each statement uses IF NOT EXISTS / DO NOTHING.
+    Required because the table already exists in production; ALTER TABLE is used
+    instead of CREATE TABLE so existing rows are preserved.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    columns = [
+        ("country_code", "SMALLINT"),
+        ("country_iso",  "VARCHAR(2)"),
+        ("country_name", "VARCHAR(100)"),
+        ("region",       "VARCHAR(150)"),
+        ("carrier",      "VARCHAR(100)"),
+        ("timezone",     "VARCHAR(60)"),
+        ("number_type",  "VARCHAR(30)"),
+        ("is_valid",     "BOOLEAN"),
+        ("parsed_at",    "TIMESTAMPTZ"),
+    ]
+    async with pool.acquire() as conn:
+        for col, col_type in columns:
+            await conn.execute(
+                f"ALTER TABLE user_phone_numbers ADD COLUMN IF NOT EXISTS {col} {col_type}"
+            )
+    logger.info("Phone info columns ready in user_phone_numbers.")
+
+
 async def _init_webhook_dedup_table() -> None:
     """Creates the webhook dedup table if it doesn't exist.
 
@@ -104,6 +133,7 @@ async def lifespan(app: FastAPI):
     global orchestrator
 
     await init_pool()
+    await _migrate_phone_info_columns()
     await _init_webhook_dedup_table()
 
     orchestrator = Orchestrator()
