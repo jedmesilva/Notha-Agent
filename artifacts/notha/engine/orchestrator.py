@@ -218,18 +218,16 @@ class Orchestrator:
             tools=NOTHA_TOOLS,
         )
 
-        # Send a single "please wait" message upfront when slow tools are involved.
-        # The interim text comes from the assistant's Phase-1 reply (e.g. "I'll search now…").
+        # Send a short "please wait" message upfront when slow tools are involved.
+        # Always use the fixed fallback text — never the LLM's Phase-1 content.
+        # The LLM's Phase-1 text alongside a tool call is a "thinking" response
+        # that must NOT be forwarded to the user: the tool's actual result is
+        # what gets sent as the final reply, so forwarding the Phase-1 text
+        # would cause the user to receive two messages for a single input.
         if send_fn and tool_calls:
             slow_tools = [tc for tc in tool_calls if tc["name"] in self._SLOW_TOOLS]
             if slow_tools:
-                interim_text = next(
-                    (m.get("content") for m in reversed(messages)
-                     if m["role"] == "assistant" and m.get("content")),
-                    None,
-                )
-                if not interim_text:
-                    interim_text = self._WAIT_MSG_FALLBACK.get(slow_tools[0]["name"])
+                interim_text = self._WAIT_MSG_FALLBACK.get(slow_tools[0]["name"])
                 if interim_text:
                     try:
                         await send_fn(phone, interim_text)
@@ -709,6 +707,12 @@ class Orchestrator:
         city_filter       = intent.get("search_city")
         neighborhood_filter = intent.get("search_neighborhood")
 
+        # Include the current user message so the guardrail has full context.
+        # Without it, the guardrail sees NOTHA responding about a search result
+        # without ever seeing the user ask for one — and incorrectly rejects the
+        # reply as incoherent, ultimately returning the safe-fallback message.
+        history_with_current = history + [{"role": "user", "content": text}]
+
         # Level 1: search with full filter (neighborhood + city)
         listings = await listing_repo.find_available(
             category=category, limit=5,
@@ -720,7 +724,7 @@ class Orchestrator:
                 f"in {city_filter}" if city_filter else
                 "available"
             )
-            return await self._format_search_results(listings, region_label, history, context)
+            return await self._format_search_results(listings, region_label, history_with_current, context)
 
         # Level 2: try just the city
         if neighborhood_filter and city_filter:
@@ -730,7 +734,7 @@ class Orchestrator:
             if listings:
                 prefix = f"Nothing in {neighborhood_filter}, but I found something in {city_filter}:"
                 return await self._format_search_results(
-                    listings, f"in {city_filter}", history, context, prefixo=prefix
+                    listings, f"in {city_filter}", history_with_current, context, prefixo=prefix
                 )
 
         # Level 3: try all of Brazil
@@ -740,7 +744,7 @@ class Orchestrator:
             if listings:
                 prefix = f"Nothing found in {original_region}. But here is what is available in other regions:"
                 return await self._format_search_results(
-                    listings, "in other regions", history, context, prefixo=prefix
+                    listings, "in other regions", history_with_current, context, prefixo=prefix
                 )
 
         # Nothing anywhere
@@ -748,7 +752,7 @@ class Orchestrator:
         return await self._conv.speak(
             f"No '{search_desc}' available right now in {original_region}. "
             "Inform the user and ask if they want to save an alert to be notified when one appears.",
-            history, context,
+            history_with_current, context,
         )
 
     async def _notify_interested_users(self, listing: dict, db: DB) -> None:
