@@ -8,7 +8,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from db.connection import init_pool, close_pool, get_pool
-from engine.orchestrator import Orchestrator
+from engine.orchestrator import Orchestrator, localize
 from engine.jobs import start_all_jobs
 from whatsapp import send_message, extract_messages, download_media_bytes
 from transcribe import transcribe_audio
@@ -156,7 +156,8 @@ async def process_message(phone: str, text: str) -> None:
         if text.lower() in ("/reset", "/limpar", "/clear"):
             await orchestrator.reset(phone)
             try:
-                await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
+                msg = await localize("Conversation reset! How can I help you?", phone)
+                await send_message(phone, msg)
             except Exception as e:
                 logger.error(f"Error sending reset to {phone}: {e}")
             return
@@ -168,7 +169,8 @@ async def process_message(phone: str, text: str) -> None:
         except Exception as e:
             logger.error(f"Error processing message from {phone}: {e}")
             try:
-                await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
+                msg = await localize("Sorry, an error occurred. Please try again in a moment.", phone)
+                await send_message(phone, msg)
             except Exception:
                 pass
 
@@ -177,7 +179,8 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
     """Downloads audio from WhatsApp, transcribes via Whisper and processes as text."""
     async with _phone_lock(phone):
         try:
-            await send_message(phone, "🎙️ Recebi seu áudio, transcrevendo...")
+            msg = await localize("🎙️ Audio received, transcribing...", phone)
+            await send_message(phone, msg)
         except Exception:
             pass
 
@@ -185,7 +188,8 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
             audio_bytes, detected_mime = await download_media_bytes(media_id)
             if not audio_bytes:
                 logger.error(f"Failed to download audio from {phone} (media_id={media_id})")
-                await send_message(phone, "Não consegui processar seu áudio. Pode tentar enviar como texto?")
+                msg = await localize("I couldn't process your audio. Could you try sending it as text?", phone)
+                await send_message(phone, msg)
                 return
 
             effective_mime = detected_mime or mime_type
@@ -193,7 +197,8 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
 
             if not transcribed:
                 logger.warning(f"Empty transcription for audio from {phone}")
-                await send_message(phone, "Não consegui entender o áudio. Pode tentar enviar como texto?")
+                msg = await localize("I couldn't understand the audio. Could you try sending it as text?", phone)
+                await send_message(phone, msg)
                 return
 
             logger.info(f"Audio transcribed from {phone}: {transcribed[:80]}...")
@@ -205,7 +210,8 @@ async def process_audio_message(phone: str, media_id: str, mime_type: str) -> No
         except Exception as e:
             logger.error(f"Error processing audio from {phone}: {e}")
             try:
-                await send_message(phone, "Ocorreu um erro ao processar seu áudio. Tente enviar como texto.")
+                msg = await localize("An error occurred processing your audio. Please try sending it as text.", phone)
+                await send_message(phone, msg)
             except Exception:
                 pass
 
@@ -231,10 +237,11 @@ async def process_media(phone: str, media_id: str, mime_type: str, caption: str)
         except Exception as e:
             logger.error(f"Error processing media from {phone}: {e}")
             try:
-                await send_message(
+                msg = await localize(
+                    "I received your image but had a technical issue processing it. Please try sending it again in a moment.",
                     phone,
-                    "Recebi sua imagem, mas tive um problema técnico ao processá-la. Tenta enviar de novo em instantes.",
                 )
+                await send_message(phone, msg)
             except Exception:
                 pass
 
@@ -251,7 +258,7 @@ async def verify_webhook(request: Request) -> PlainTextResponse:
         return PlainTextResponse(content=challenge)
 
     logger.warning("Webhook verification failed.")
-    raise HTTPException(status_code=403, detail="Token de verificação inválido")
+    raise HTTPException(status_code=403, detail="Invalid verification token")
 
 
 @app.post("/webhook")

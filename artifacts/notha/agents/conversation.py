@@ -585,6 +585,7 @@ Read the user message and full conversation history, then return ONLY valid JSON
   "flow": "product_search|listing|negotiation|payment|delivery|onboarding|greeting|chitchat|out_of_scope|other",
   "needs_tools": true|false,
   "confidence": 0.0-1.0,
+  "language": "<ISO 639-1 code of the user's language, e.g. 'pt', 'en', 'es', 'fr', 'de'>",
   "notes": "<any nuance worth noting for the planner, or empty string>"
 }}
 
@@ -593,6 +594,7 @@ Rules:
 - intent="decline" when the user refuses or says no to something the agent just offered or proposed
   (e.g. agent asked "want to save an alert?" and user replies "Não", "No", "Não quero", "nah", etc.)
   Set needs_tools=false for decline — no tool call needed, just acknowledge the refusal.
+- language: detect from the user's LATEST message. Use prior history if the latest message is ambiguous (e.g. a single emoji).
 - Be concise in objective, e.g. "Find iPhone 14 in São Paulo" or "List used sofa for sale"
 - Return ONLY valid JSON, no extra text"""
 

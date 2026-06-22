@@ -43,6 +43,41 @@ PENDING_CONFIRMATIONS: dict[str, dict] = {}
 PROCESSED_MESSAGE_IDS: set[str] = set()
 MAX_PROCESSED_IDS = 1000
 
+# Per-phone language store (ISO 639-1 code, e.g. "pt", "en", "es").
+# Populated from understand() on every message and used by localize() to
+# translate hardcoded system strings before they reach the user.
+_USER_LANGUAGE: dict[str, str] = {}
+
+
+async def localize(text: str, phone: str) -> str:
+    """Translates an English template string into the user's detected language.
+
+    Returns the original text unchanged if:
+    - The user's language is unknown (not yet detected).
+    - The target language is English (no translation needed).
+    - The LLM call fails for any reason (safe fallback to original).
+    """
+    lang = _USER_LANGUAGE.get(phone)
+    if not lang or lang == "en":
+        return text
+    try:
+        from llm import get_provider
+        resp = await get_provider().complete(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Translate the following message naturally into the language "
+                    f"with ISO 639-1 code '{lang}'. Preserve emojis and punctuation. "
+                    f"Return ONLY the translation, nothing else:\n\n{text}"
+                ),
+            }],
+            temperature=0.1,
+            max_tokens=300,
+        )
+        return resp.text.strip() or text
+    except Exception:
+        return text
+
 
 def _looks_like_cpf(text: str) -> bool:
     cleaned = re.sub(r"[\.\-\s]", "", text)
@@ -239,6 +274,11 @@ class Orchestrator:
         objective   = understanding.get("objective", text)
         intent      = understanding.get("intent", "other")
         needs_tools = understanding.get("needs_tools", True)
+
+        # Persist detected language so localize() can translate hardcoded strings
+        detected_lang = understanding.get("language", "")
+        if detected_lang:
+            _USER_LANGUAGE[phone] = detected_lang
 
         # Active negotiations: intercept confirm/reject/counteroffer first
         if active_negs and intent in ("confirm", "reject", "counteroffer"):

@@ -22,8 +22,8 @@ import logging
 logger = logging.getLogger("notha.guardrail")
 
 _SAFE_FALLBACK = (
-    "Tive um problema ao formular minha resposta. "
-    "Pode repetir o que precisa?"
+    "I had a technical issue formulating my response. "
+    "Could you repeat what you need?"
 )
 
 # ── NOTHA scope description (reused in both prompts) ─────────────────────────
@@ -71,6 +71,13 @@ that objective — not perfectly complete, just not contradictory.
 
 Reject (approved: false) if ANY of these unambiguous violations apply:
 
+0. LANGUAGE_MISMATCH
+   The reply is in a different language from the user's messages in the conversation history.
+   Detect the user's language from their messages in the conversation. If the reply is clearly
+   in a different language, reject it.
+   Exceptions: proper nouns, brand names, product names, and single-word technical terms
+   may appear in any language. Reject only when the body of the reply is in the wrong language.
+
 1. INCOHERENCE
    The reply makes no sense when read against the full conversation thread.
    • Abbreviations, slang, emojis, and single-word replies MUST be interpreted
@@ -116,7 +123,7 @@ Approved:
 {{"approved": true}}
 
 Rejected:
-{{"approved": false, "category": "incoherence|out_of_scope|data_leak|forbidden_term|nonsense", "reason": "<one concise sentence explaining the violation>"}}
+{{"approved": false, "category": "language_mismatch|incoherence|out_of_scope|data_leak|forbidden_term|nonsense", "reason": "<one concise sentence explaining the violation>"}}
 """
 
 _CORRECTION_PROMPT = """The response you generated was rejected by the quality system.
