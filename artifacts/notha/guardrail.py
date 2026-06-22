@@ -21,8 +21,8 @@ import logging
 logger = logging.getLogger("notha.guardrail")
 
 _SAFE_FALLBACK = (
-    "Sorry, I had a problem formulating my response. "
-    "Could you repeat what you need?"
+    "Tive um problema ao formular minha resposta. "
+    "Pode repetir o que precisa?"
 )
 
 _GUARDRAIL_PROMPT = """You are a quality auditor for NOTHA, a WhatsApp-based buy-and-sell system.

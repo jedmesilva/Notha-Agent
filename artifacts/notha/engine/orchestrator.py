@@ -18,15 +18,16 @@ from agents.listing_flow import ListingFlowAgent, _parse_jsonb
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
-from tools.builtin import web_search, currency, math, units, datetime_tool
+from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
 from phone_timezone import infer_timezone
 
 _BUILTIN_TOOL_MAP = {
-    web_search.name: web_search,
-    currency.name:   currency,
-    math.name:       math,
-    units.name:      units,
-    datetime_tool.name: datetime_tool,
+    web_search.name:        web_search,
+    currency.name:          currency,
+    math.name:              math,
+    units.name:             units,
+    datetime_tool.name:     datetime_tool,
+    restriction_check.name: restriction_check,
 }
 
 logger = logging.getLogger("notha.orchestrator")
