@@ -567,9 +567,12 @@ class Orchestrator:
             args      = step.get("args", {}) or {}
             user_msg  = step.get("user_message")
 
-            # Send pre-step message to user (only for slow/visible steps)
+            # Send pre-step message to user — ONLY for slow/visible tools and only ONCE.
+            # Data-collection tools (update_*, etc.) must never send a pre-step message:
+            # the request to the user comes in the synthesis phase, not before each step.
+            # Sending multiple pre-step messages creates a message spam loop.
             pre_step_msg_sent = False
-            if send_fn and user_msg:
+            if send_fn and user_msg and not pipeline_msg_sent and tool_name in self._SLOW_TOOLS:
                 try:
                     await send_fn(phone, user_msg)
                     pre_step_msg_sent = True

@@ -35,12 +35,13 @@ OPERATION_REQUIREMENTS: dict[str, dict] = {
         "label": "anunciar um produto para venda",
         "required": [
             "full_name", "tax_id", "identity_submitted",
-            "phone_valid", "city", "pickup_address", "pix_key",
+            "phone_valid", "pix_key",
         ],
-        "preferred": ["street", "state", "zip_code"],
+        "preferred": ["city"],
         "note": (
-            "Documento de identidade, endereço e chave Pix são obrigatórios "
-            "para garantir a segurança das transações."
+            "Documento de identidade e chave Pix são obrigatórios. "
+            "Endereço de retirada é coletado por produto durante o fluxo de cadastro — "
+            "NÃO é um campo do perfil."
         ),
     },
     "receive_payment": {

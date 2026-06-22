@@ -457,14 +457,34 @@ class UserRepository:
         }
 
         lines = []
-        key_ops = ["search_product", "save_alert", "buy_product", "list_product", "receive_payment"]
+        # list_product is intentionally excluded: the listing flow guides the user
+        # through its own data collection — the agent must NOT pre-collect listing
+        # fields before calling list_product. Showing them here causes the agent to
+        # dump multiple field requests at once, violating the "one field at a time" rule.
+        key_ops = ["search_product", "save_alert", "buy_product", "receive_payment"]
         for op in key_ops:
             missing = check_requirements(op, profile)
             label   = OPERATION_REQUIREMENTS[op]["label"]
             if missing:
-                missing_names = [FIELD_LABELS.get(f, f) for f in missing]
-                lines.append(f"para {label}: faltam {', '.join(missing_names)}")
+                # Show only the FIRST missing field — agent must ask one at a time.
+                # Showing all missing fields at once causes the agent to ask for everything.
+                first_missing = FIELD_LABELS.get(missing[0], missing[0])
+                extras = len(missing) - 1
+                suffix = f" (+ {extras} more)" if extras > 0 else ""
+                lines.append(f"para {label}: falta {first_missing}{suffix} — peça um de cada vez")
             else:
                 lines.append(f"para {label}: ok")
+
+        # For list_product: only show critical blockers (identity + pix_key)
+        list_missing = check_requirements("list_product", profile)
+        if list_missing:
+            blockers = [FIELD_LABELS.get(f, f) for f in list_missing]
+            lines.append(
+                f"para anunciar: pendências de perfil ({len(list_missing)}) — "
+                f"o fluxo de cadastro coleta os dados; só mencione se o usuário não conseguir prosseguir. "
+                f"Bloqueadores: {', '.join(blockers)}"
+            )
+        else:
+            lines.append("para anunciar: perfil ok")
 
         return "completude_perfil: " + " | ".join(lines)
