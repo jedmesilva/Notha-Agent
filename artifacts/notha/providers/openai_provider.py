@@ -22,7 +22,7 @@ class OpenAIProvider(LLMProvider):
                 "AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY variables."
             )
 
-        self._default_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self._default_model = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
     async def complete(
         self,

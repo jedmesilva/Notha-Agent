@@ -30,7 +30,7 @@ def get_provider(provider: str | None = None) -> LLMProvider:
             from providers.openai_provider import OpenAIProvider
             _instances[name] = OpenAIProvider()
             logger.info("LLM provider initialized: OpenAI (model=%s)",
-                        os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
+                        os.environ.get("OPENAI_MODEL", "gpt-4o"))
 
         elif name == "anthropic":
             from providers.anthropic_provider import AnthropicProvider

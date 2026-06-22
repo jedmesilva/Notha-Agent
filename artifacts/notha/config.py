@@ -14,7 +14,7 @@ ASAAS_API_KEY: str = os.environ.get("ASAAS_API_KEY", "")
 ASAAS_BASE_URL: str = os.environ.get("ASAAS_BASE_URL", "https://sandbox.asaas.com/api/v3")
 
 LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "openai")
-OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o")
 OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 
