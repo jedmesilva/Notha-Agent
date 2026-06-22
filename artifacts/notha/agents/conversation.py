@@ -715,6 +715,9 @@ Produce the final reply to the user. Write as NOTHA, naturally and concisely.
 ━━━ TOOL RESULTS COLLECTED ━━━
 {tool_results}
 
+━━━ LANGUAGE ━━━
+{language_instruction}
+
 ━━━ INSTRUCTIONS ━━━
 {synthesis_instruction}
 
@@ -875,6 +878,7 @@ class ConversationAgent:
         context: str,
         synthesis_instruction: str = "",
         user_message: str = "",
+        user_language: str = "",
     ) -> str:
         """Phase 3 — Synthesize collected results into a final natural reply.
 
@@ -882,11 +886,21 @@ class ConversationAgent:
         synthesis_instruction: extra guidance for the LLM (e.g. listing results text)
         user_message: the current user message (not yet in history); used to
                       correctly determine greeting state and guardrail evaluation.
+        user_language: ISO 639-1 code detected from the user's messages. When
+                       provided the LLM is instructed to reply in that language.
         """
         history_fmt = _fmt_history(history, max_messages=20)
         results_fmt = "\n".join(
             f"[{k}]: {v[:800]}" for k, v in tool_results.items()
         ) if tool_results else "(no tools were executed)"
+
+        if user_language:
+            language_instruction = (
+                f"You MUST write your reply in the language with ISO 639-1 code '{user_language}'. "
+                f"Do NOT use any other language, even if the tool results or context are in a different language."
+            )
+        else:
+            language_instruction = "Match the language the user is writing in."
 
         prompt = _SYNTHESIZE_PROMPT.format(
             context=context or "no context",
@@ -894,6 +908,7 @@ class ConversationAgent:
             objective=objective,
             outcome=outcome,
             tool_results=results_fmt,
+            language_instruction=language_instruction,
             synthesis_instruction=synthesis_instruction or "Generate the appropriate response.",
         )
 
@@ -921,7 +936,7 @@ class ConversationAgent:
             )
         except Exception as e:
             logger.error("synthesize() error: %s", e)
-            return "Desculpe, tive um problema técnico. Tente novamente em instantes."
+            return ""
 
     # ─── Legacy helpers (kept for listing flow, negotiation, speak, etc.) ──────
 

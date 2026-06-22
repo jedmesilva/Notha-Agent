@@ -71,13 +71,6 @@ that objective — not perfectly complete, just not contradictory.
 
 Reject (approved: false) if ANY of these unambiguous violations apply:
 
-0. LANGUAGE_MISMATCH
-   The reply is in a different language from the user's messages in the conversation history.
-   Detect the user's language from their messages in the conversation. If the reply is clearly
-   in a different language, reject it.
-   Exceptions: proper nouns, brand names, product names, and single-word technical terms
-   may appear in any language. Reject only when the body of the reply is in the wrong language.
-
 1. INCOHERENCE
    The reply makes no sense when read against the full conversation thread.
    • Abbreviations, slang, emojis, and single-word replies MUST be interpreted
@@ -123,7 +116,7 @@ Approved:
 {{"approved": true}}
 
 Rejected:
-{{"approved": false, "category": "language_mismatch|incoherence|out_of_scope|data_leak|forbidden_term|nonsense", "reason": "<one concise sentence explaining the violation>"}}
+{{"approved": false, "category": "incoherence|out_of_scope|data_leak|forbidden_term|nonsense", "reason": "<one concise sentence explaining the violation>"}}
 """
 
 _CORRECTION_PROMPT = """The response you generated was rejected by the quality system.
@@ -175,7 +168,11 @@ async def _call_guardrail_llm(messages: list[dict]) -> dict:
 
 
 async def _call_correction_llm(messages: list[dict]) -> str:
-    """Asks the LLM to correct the rejected response."""
+    """Asks the LLM to correct the rejected response.
+
+    Returns an empty string on failure so the caller can fall through
+    to the localized safe fallback rather than sending an English string.
+    """
     from llm import get_provider
     try:
         resp = await get_provider().complete(
@@ -183,10 +180,10 @@ async def _call_correction_llm(messages: list[dict]) -> str:
             temperature=0.4,
             max_tokens=500,
         )
-        return resp.text or _SAFE_FALLBACK
+        return resp.text or ""
     except Exception as e:
         logger.error("Guardrail correction LLM error: %s", e)
-        return _SAFE_FALLBACK
+        return ""
 
 
 def _format_history(history: list[dict], max_messages: int = 30) -> str:
@@ -232,7 +229,8 @@ async def validate_reply(
     """
     if not reply or not reply.strip():
         logger.warning("Guardrail: empty reply received — using fallback.")
-        return _SAFE_FALLBACK
+        from engine.orchestrator import localize
+        return await localize(_SAFE_FALLBACK, phone or "")
 
     # Build a complete history for the guardrail that always ends with the
     # user's latest message, even if the caller already appended it.
@@ -277,6 +275,12 @@ async def validate_reply(
     )
     corrected_reply = await _call_correction_llm([{"role": "user", "content": correction_prompt}])
 
+    # If correction produced nothing, skip Phase 3 and go straight to fallback
+    if not corrected_reply or not corrected_reply.strip():
+        logger.error("Guardrail: correction returned empty — using localized fallback.")
+        from engine.orchestrator import localize
+        return await localize(_SAFE_FALLBACK, phone or "")
+
     # ── Phase 3: Re-evaluate the corrected reply ─────────────────────────────
     re_evaluation_prompt = _GUARDRAIL_PROMPT.format(
         scope=_NOTHA_SCOPE,
@@ -315,4 +319,5 @@ async def validate_reply(
             )
         except Exception:
             pass
-    return _SAFE_FALLBACK
+    from engine.orchestrator import localize
+    return await localize(_SAFE_FALLBACK, phone or "")

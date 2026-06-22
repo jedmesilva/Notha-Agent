@@ -452,6 +452,7 @@ class Orchestrator:
                 context=context,
                 synthesis_instruction=synthesis_instruction,
                 user_message=text,
+                user_language=_USER_LANGUAGE.get(phone, ""),
             )
 
             # If synthesis itself failed, try the plain chat fallback
