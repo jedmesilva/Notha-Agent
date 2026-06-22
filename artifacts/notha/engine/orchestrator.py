@@ -23,6 +23,141 @@ from engine.negotiation import NegotiationEngine
 from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
 from phone_info import parse_phone, get_timezone
 
+
+def _heuristic_steps(text: str) -> list[dict]:
+    """Deterministic fallback planner for common user-data messages.
+
+    Called when the LLM planner returns 0 steps but needs_tools=True.
+    Uses simple regex matching to detect explicit user-provided data and
+    returns the appropriate tool steps without an LLM call.
+
+    Covers: name, gender, date-of-birth, street address, alerts, profile view.
+    Does NOT cover product searches (those rely on the LLM planner working correctly).
+    """
+    t = text.strip()
+    tl = t.lower()
+    steps: list[dict] = []
+
+    # ── Name ──────────────────────────────────────────────────────────────────
+    name_match = re.search(
+        r"(?:me\s+chamo|meu\s+nome\s+[eé]\s*[:\-]?|my\s+name\s+is|i(?:'|')?m\s+|mi\s+nombre\s+es)\s+([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ][a-záéíóúâêîôûãõàèìòùç]+(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÈÌÒÙÇ][a-záéíóúâêîôûãõàèìòùç]+){1,4})",
+        t, re.IGNORECASE | re.UNICODE,
+    )
+    if name_match:
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "update_name",
+            "args": {"name": name_match.group(1).strip()},
+            "reason": "heuristic: user stated their name",
+            "user_message": None,
+        })
+
+    # ── Gender + DOB (combined into one update_profile call) ──────────────────
+    profile_args: dict = {}
+
+    gender_male = re.search(
+        r"\b(sou\s+homem|soy\s+hombre|i(?:'m|\s+am)\s+male|masculino)\b", tl
+    )
+    gender_female = re.search(
+        r"\b(sou\s+mulher|soy\s+mujer|i(?:'m|\s+am)\s+female|feminino)\b", tl
+    )
+    if gender_male:
+        profile_args["gender"] = "M"
+    elif gender_female:
+        profile_args["gender"] = "F"
+
+    dob_match = re.search(
+        r"(?:nasci\s+em|data\s+de\s+nascimento|minha\s+data\s+[eé]|birthday\s+is|born\s+on|nacido\s+el)\s*[:\-]?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})",
+        tl,
+    )
+    if dob_match:
+        raw = dob_match.group(1).replace("-", "/").replace(".", "/")
+        parts = raw.split("/")
+        if len(parts) == 3 and len(parts[2]) == 2:
+            parts[2] = "19" + parts[2] if int(parts[2]) > 24 else "20" + parts[2]
+        profile_args["date_of_birth"] = "/".join(parts)
+
+    if profile_args:
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "update_profile",
+            "args": profile_args,
+            "reason": "heuristic: user provided profile data",
+            "user_message": None,
+        })
+
+    # ── Street address ─────────────────────────────────────────────────────────
+    has_street = re.search(r"\b(rua|avenida|av\.|alameda|travessa|estrada|rodovia|praça|street|road|avenue)\b", tl)
+    has_number = re.search(r"\b(?:n[°º]?\.?\s*|número\s*)(\d+)\b", tl)
+    has_cep = re.search(r"(?:cep|zip|postal)\s*[:\-]?\s*(\d{4,8}[-\s]?\d{0,3})", tl)
+    has_state_abbr = re.search(
+        r"\b(ac|al|ap|am|ba|ce|df|es|go|ma|mt|ms|mg|pa|pb|pr|pe|pi|rj|rn|ro|rr|rs|sc|sp|se|to)\b",
+        tl,
+    )
+
+    if has_street or has_cep:
+        addr_args: dict = {}
+        if has_street:
+            street_m = re.search(
+                r"(rua|avenida|av\.|alameda|travessa|estrada|rodovia|praça|street|road|avenue)\s+([\w\s]+?)(?:\s*,|\s+\d|\s*$)",
+                tl, re.IGNORECASE,
+            )
+            if street_m:
+                addr_args["street"] = street_m.group(0).split(",")[0].strip()
+        if has_number:
+            addr_args["street_number"] = has_number.group(1)
+        if has_cep:
+            addr_args["zip_code"] = re.sub(r"[\s\-]", "", has_cep.group(1))
+        if has_state_abbr:
+            addr_args["state"] = has_state_abbr.group(1).upper()
+        if addr_args:
+            steps.append({
+                "step": len(steps) + 1,
+                "tool": "update_full_address",
+                "args": addr_args,
+                "reason": "heuristic: user provided street address",
+                "user_message": None,
+            })
+
+    # ── View profile ───────────────────────────────────────────────────────────
+    if re.search(r"\b(ver\s+(meu\s+)?perfil|meus\s+dados|my\s+profile|show\s+profile|ver\s+meus\s+dados)\b", tl):
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "get_my_profile",
+            "args": {},
+            "reason": "heuristic: user wants to see their profile",
+            "user_message": None,
+        })
+
+    # ── List alerts ────────────────────────────────────────────────────────────
+    if re.search(r"\b(meus\s+alertas|ver\s+alertas|listar\s+alertas|my\s+alerts|what\s+am\s+i\s+monitoring|show\s+alerts)\b", tl):
+        steps.append({
+            "step": len(steps) + 1,
+            "tool": "list_my_alerts",
+            "args": {},
+            "reason": "heuristic: user wants to see their alerts",
+            "user_message": None,
+        })
+
+    # ── Cancel specific alert ──────────────────────────────────────────────────
+    cancel_match = re.search(
+        r"cancelar?\s+(?:alerta\s+(?:de\s+|para\s+)?|alert\s+(?:for\s+)?)?(.+?)(?:\s*$|\s*\.)",
+        tl,
+    )
+    if cancel_match and re.search(r"\bcancelar?\b", tl):
+        desc = cancel_match.group(1).strip()
+        if desc and len(desc) > 2:
+            steps.append({
+                "step": len(steps) + 1,
+                "tool": "cancel_alert",
+                "args": {"description": desc},
+                "reason": "heuristic: user wants to cancel a specific alert",
+                "user_message": None,
+            })
+
+    return steps
+
+
 _BUILTIN_TOOL_MAP = {
     web_search.name:        web_search,
     currency.name:          currency,
@@ -313,7 +448,7 @@ class Orchestrator:
             required = fn.get("parameters", {}).get("required", [])
             _TOOL_CATALOG.append({
                 "name": fn["name"],
-                "description": fn.get("description", "")[:120],
+                "description": fn.get("description", "")[:220],
                 "parameters": {
                     k: {"type": v.get("type", "string"), "required": k in required}
                     for k, v in params.items()
@@ -326,7 +461,7 @@ class Orchestrator:
             required = getattr(_tool_obj, "parameters", {}).get("required", [])
             _TOOL_CATALOG.append({
                 "name": _tool_obj.name,
-                "description": getattr(_tool_obj, "description", "")[:120],
+                "description": getattr(_tool_obj, "description", "")[:220],
                 "parameters": {
                     k: {"type": v.get("type", "string"), "required": k in required}
                     for k, v in params.items()
@@ -341,6 +476,33 @@ class Orchestrator:
             tool_catalog=_TOOL_CATALOG,
             needs_tools=needs_tools,
         )
+
+        # Heuristic merge: always run heuristic for user-data patterns.
+        # Heuristic results take priority over LLM-planned user-data tools
+        # (prevents wrong tool choice like update_location for street addresses).
+        # Non-user-data steps from the LLM plan are preserved.
+        _USER_DATA_TOOL_NAMES = {
+            "update_name", "update_nickname", "update_profile",
+            "update_full_address", "update_address", "update_location",
+            "update_pix_key", "update_tax_id",
+        }
+        _VIEW_TOOL_NAMES = {
+            "list_my_alerts", "cancel_alert", "cancel_alerts", "get_my_profile",
+        }
+        heuristic = _heuristic_steps(text)
+        if heuristic:
+            heuristic_tools = {s["tool"] for s in heuristic}
+            # Keep LLM steps for non-user-data and non-view tools
+            llm_non_data = [s for s in steps if s.get("tool") not in _USER_DATA_TOOL_NAMES | _VIEW_TOOL_NAMES]
+            # Also keep LLM view-tool steps not covered by heuristic
+            llm_view = [s for s in steps if s.get("tool") in _VIEW_TOOL_NAMES and s.get("tool") not in heuristic_tools]
+            steps = heuristic + llm_non_data + llm_view
+            logger.info(
+                "plan() → heuristic merge: %d step(s): %s",
+                len(steps), [s.get("tool") for s in steps],
+            )
+        elif needs_tools and not steps:
+            logger.info("plan() → 0 steps, no heuristic matches either")
 
         logger.info(
             "Pipeline: objective=%r intent=%s needs_tools=%s steps=%d",

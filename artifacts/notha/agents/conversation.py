@@ -592,10 +592,11 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "update_full_address",
             "description": (
-                "Saves or updates the user's full home/residential address. "
-                "Use when the user provides street, number, state, ZIP code, or country. "
-                "Can be used alongside update_location (which saves city and neighbourhood). "
-                "Examples: 'my address is Rua das Flores, 123', 'ZIP 04538-133', 'state of São Paulo'."
+                "Saves or updates the user's full residential address (street, number, neighbourhood, city, state, ZIP, country). "
+                "Use whenever the user provides a STREET NAME or STREET NUMBER or ZIP CODE or STATE — even if only one field. "
+                "Also use when the user provides a complete address all at once. "
+                "Prefer this over update_location when any field other than city/neighbourhood is present. "
+                "Examples: 'Rua das Flores 123, Centro, São Paulo SP 01310-100', 'my street is Av. Paulista', 'ZIP 04538-133'."
             ),
             "parameters": {
                 "type": "object",
@@ -638,9 +639,10 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "update_location",
             "description": (
-                "Saves the user's city and/or neighbourhood for region-based searches. "
-                "Use when the user says where they live or their city/neighbourhood. "
-                "Examples: 'I live in São Paulo, Pinheiros', 'I'm from Campinas', 'my neighbourhood is Copacabana'."
+                "Saves the user's CITY and/or NEIGHBOURHOOD only — nothing else. "
+                "Use ONLY when the user mentions city or neighbourhood WITHOUT a street address. "
+                "If the user provides a street name, street number, state, or ZIP code, use update_full_address instead. "
+                "Examples: 'I live in São Paulo', 'my neighbourhood is Copacabana'."
             ),
             "parameters": {
                 "type": "object",
@@ -756,12 +758,26 @@ Read the user message and full conversation history, then return ONLY valid JSON
 }}
 
 Rules:
-- needs_tools=false only for pure greetings, clearly out-of-scope messages, or decline responses
+- needs_tools=false ONLY for: pure greetings with no data, clearly out-of-scope messages, or decline responses.
+- needs_tools=true for ANY message that contains or implies:
+  * a product name, search, or interest ("I want a sofa", "looking for iPhone")
+  * personal data: name, CPF, address, street, ZIP, city, state, gender, date of birth, language preference
+  * Pix key, pickup address, or payment info
+  * a request to see alerts, profile, or cancel something
+  * intent to sell (even just mentioning a product for sale)
 - intent="decline" when the user refuses or says no to something the agent just offered or proposed
   (e.g. agent asked "want to save an alert?" and user replies "Não", "No", "Não quero", "nah", etc.)
   Set needs_tools=false for decline — no tool call needed, just acknowledge the refusal.
 - language: detect from the user's LATEST message. Use prior history if the latest message is ambiguous (e.g. a single emoji).
 - Be concise in objective, e.g. "Find iPhone 14 in São Paulo" or "List used sofa for sale"
+
+Examples of needs_tools=true:
+- "Sou homem, nasci em 15/03/1990" → needs_tools=true (profile data: gender + date_of_birth)
+- "Meu endereço é Rua das Flores 123, SP" → needs_tools=true (address data)
+- "Me chamo João" → needs_tools=true (name data)
+- "Minha chave Pix é 111.222.333-44" → needs_tools=true (pix key)
+- "Quero ver meus alertas" → needs_tools=true (list alerts)
+
 - Return ONLY valid JSON, no extra text"""
 
 _PLAN_PROMPT = """You are the planner for NOTHA, a WhatsApp marketplace for physical products.
@@ -791,21 +807,22 @@ The user's objective has been identified. Your job is to produce a precise execu
    - For internal checks (check_restriction, update_*, get_datetime) set it to null.
    - Generate the message in the user's language (detect from history), naturally, for WhatsApp.
    - Example for search_product: "🔍 Buscando iPhone 14 disponível pra você, um momento..."
-3. args MUST be a valid JSON object with all required parameters for that tool.
-   Always populate required params — never leave them empty or null.
+3. args values MUST be real values extracted verbatim from the user's message.
+   If a required value is NOT explicitly in the user's message, OMIT that tool from the plan.
+   NEVER pass questions, instructions, or placeholders as args values.
 4. reason is internal only — the user never sees it.
-5. Include only the tools that are actually needed. Keep the plan minimal.
-6. If needs_tools is false (greeting, out_of_scope), return an empty steps array.
+5. Include only the tools actually needed. Keep the plan minimal.
+6. If needs_tools is false, return an empty steps array.
 
 ━━━ RETURN FORMAT ━━━
 {{
   "steps": [
     {{
       "step": 1,
-      "tool": "<tool_name>",
-      "args": {{"<required_param>": "<value>"}},
-      "reason": "<why this tool is needed>",
-      "user_message": "<message to send before executing, or null>"
+      "tool": "check_restriction",
+      "args": {{"product_description": "iPhone 14 Pro"}},
+      "reason": "user wants to buy iPhone — must check restrictions first",
+      "user_message": null
     }}
   ]
 }}
@@ -971,7 +988,7 @@ class ConversationAgent:
                     params_str += f"required: {', '.join(req_params)}"
                 if opt_params:
                     params_str += f"{' | ' if params_str else ''}optional: {', '.join(opt_params)}"
-                desc = t.get("description", "")[:100]
+                desc = t.get("description", "")[:300]
                 catalog_lines.append(f"- {t['name']} [{params_str}] — {desc}")
             catalog_fmt = "\n".join(catalog_lines)
         else:
