@@ -6,47 +6,47 @@ logger = logging.getLogger("notha.currency")
 _API_URL = "https://open.er-api.com/v6/latest"
 
 _CURRENCY_NAMES: dict[str, str] = {
-    "AED": "Dirham dos EAU",
-    "ARS": "Peso argentino",
-    "AUD": "Dólar australiano",
-    "BGN": "Lev búlgaro",
-    "BRL": "Real brasileiro",
-    "CAD": "Dólar canadense",
-    "CHF": "Franco suíço",
-    "CLP": "Peso chileno",
-    "CNY": "Yuan chinês",
-    "COP": "Peso colombiano",
-    "CZK": "Coroa checa",
-    "DKK": "Coroa dinamarquesa",
-    "EGP": "Libra egípcia",
+    "AED": "UAE Dirham",
+    "ARS": "Argentine Peso",
+    "AUD": "Australian Dollar",
+    "BGN": "Bulgarian Lev",
+    "BRL": "Brazilian Real",
+    "CAD": "Canadian Dollar",
+    "CHF": "Swiss Franc",
+    "CLP": "Chilean Peso",
+    "CNY": "Chinese Yuan",
+    "COP": "Colombian Peso",
+    "CZK": "Czech Koruna",
+    "DKK": "Danish Krone",
+    "EGP": "Egyptian Pound",
     "EUR": "Euro",
-    "GBP": "Libra esterlina",
-    "HKD": "Dólar de Hong Kong",
-    "HUF": "Florim húngaro",
-    "IDR": "Rupia indonésia",
-    "ILS": "Shekel israelense",
-    "INR": "Rupia indiana",
-    "JPY": "Iene japonês",
-    "KRW": "Won sul-coreano",
-    "MXN": "Peso mexicano",
-    "MYR": "Ringgit malaio",
-    "NOK": "Coroa norueguesa",
-    "NZD": "Dólar neozelandês",
-    "PEN": "Sol peruano",
-    "PHP": "Peso filipino",
-    "PLN": "Zloty polonês",
-    "RON": "Leu romeno",
-    "RUB": "Rublo russo",
-    "SAR": "Riyal saudita",
-    "SEK": "Coroa sueca",
-    "SGD": "Dólar de Singapura",
-    "THB": "Baht tailandês",
-    "TRY": "Lira turca",
-    "TWD": "Dólar taiwanês",
-    "UAH": "Hryvnia ucraniana",
-    "USD": "Dólar americano",
-    "UYU": "Peso uruguaio",
-    "ZAR": "Rand sul-africano",
+    "GBP": "British Pound",
+    "HKD": "Hong Kong Dollar",
+    "HUF": "Hungarian Forint",
+    "IDR": "Indonesian Rupiah",
+    "ILS": "Israeli Shekel",
+    "INR": "Indian Rupee",
+    "JPY": "Japanese Yen",
+    "KRW": "South Korean Won",
+    "MXN": "Mexican Peso",
+    "MYR": "Malaysian Ringgit",
+    "NOK": "Norwegian Krone",
+    "NZD": "New Zealand Dollar",
+    "PEN": "Peruvian Sol",
+    "PHP": "Philippine Peso",
+    "PLN": "Polish Zloty",
+    "RON": "Romanian Leu",
+    "RUB": "Russian Ruble",
+    "SAR": "Saudi Riyal",
+    "SEK": "Swedish Krona",
+    "SGD": "Singapore Dollar",
+    "THB": "Thai Baht",
+    "TRY": "Turkish Lira",
+    "TWD": "Taiwan Dollar",
+    "UAH": "Ukrainian Hryvnia",
+    "USD": "US Dollar",
+    "UYU": "Uruguayan Peso",
+    "ZAR": "South African Rand",
 }
 
 
@@ -63,28 +63,28 @@ def _fmt(value: float) -> str:
 
 
 class CurrencyTool(Tool):
-    name = "converter_moeda"
+    name = "convert_currency"
     description = (
-        "Converte valores entre moedas com câmbio atualizado (open.er-api.com, ~160 moedas). "
-        "Use para perguntas como 'quanto é X dólares em reais hoje?' ou 'qual é a cotação do euro?'. "
-        "Moedas suportadas: USD, BRL, EUR, GBP, JPY, CAD, AUD, CHF, CNY, ARS, MXN, CLP e muito mais."
+        "Converts amounts between currencies using live exchange rates (open.er-api.com, ~160 currencies). "
+        "Use for questions like 'how much is X dollars in reais today?' or 'what is the euro rate?'. "
+        "Supported: USD, BRL, EUR, GBP, JPY, CAD, AUD, CHF, CNY, ARS, MXN, CLP and many more."
     )
     parameters = {
         "type": "object",
         "properties": {
             "amount": {
                 "type": "number",
-                "description": "Valor a converter.",
+                "description": "Amount to convert.",
             },
             "from_currency": {
                 "type": "string",
-                "description": "Moeda de origem (código ISO 4217). Ex: 'USD', 'EUR', 'BRL'.",
+                "description": "Source currency (ISO 4217 code). E.g.: 'USD', 'EUR', 'BRL'.",
             },
             "to_currency": {
                 "type": "string",
                 "description": (
-                    "Moeda(s) de destino. Ex: 'BRL', 'EUR'. "
-                    "Para múltiplas, separe por vírgula: 'BRL,EUR,GBP'."
+                    "Target currency or currencies. E.g.: 'BRL', 'EUR'. "
+                    "For multiple, separate with comma: 'BRL,EUR,GBP'."
                 ),
             },
         },
@@ -95,7 +95,7 @@ class CurrencyTool(Tool):
         try:
             import httpx
         except ImportError:
-            return "Biblioteca httpx não disponível."
+            return "httpx library not available."
 
         from_code = from_currency.strip().upper()
         to_codes = [c.strip().upper() for c in to_currency.split(",") if c.strip()]
@@ -108,31 +108,31 @@ class CurrencyTool(Tool):
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.TimeoutException:
-            return "Não foi possível obter a cotação: tempo limite excedido. Tente novamente."
+            return "Could not retrieve exchange rate: request timed out. Please try again."
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (400, 404, 422):
                 return (
-                    f"Moeda '{from_code}' não reconhecida. "
-                    f"Use códigos ISO 4217 (ex: USD, BRL, EUR, GBP)."
+                    f"Currency '{from_code}' not recognised. "
+                    f"Use ISO 4217 codes (e.g. USD, BRL, EUR, GBP)."
                 )
-            return f"Erro ao consultar câmbio: {e}"
+            return f"Exchange rate API error: {e}"
         except Exception as e:
-            return f"Erro inesperado ao consultar câmbio: {e}"
+            return f"Unexpected error fetching exchange rate: {e}"
 
         if data.get("result") != "success":
-            return f"API retornou erro: {data.get('error-type', 'desconhecido')}."
+            return f"API returned error: {data.get('error-type', 'unknown')}."
 
         all_rates: dict = data.get("rates", {})
-        updated = data.get("time_last_update_utc", "data desconhecida")
+        updated = data.get("time_last_update_utc", "unknown date")
 
         invalid = [c for c in to_codes if c not in all_rates]
         if invalid:
             return (
-                f"Moeda(s) não reconhecida(s): {', '.join(invalid)}. "
-                f"Use códigos ISO 4217 válidos (ex: USD, BRL, EUR)."
+                f"Unrecognised currency code(s): {', '.join(invalid)}. "
+                f"Use valid ISO 4217 codes (e.g. USD, BRL, EUR)."
             )
 
-        lines = [f"Câmbio atualizado em: {updated}\n"]
+        lines = [f"Exchange rates updated: {updated}\n"]
         for code in to_codes:
             rate = all_rates[code]
             converted = amount * rate

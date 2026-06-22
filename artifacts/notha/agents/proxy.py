@@ -26,137 +26,137 @@ class ProxyResponse:
     argument: str
 
 
-SELLER_PROXY_PROMPT = """Você representa o VENDEDOR em uma negociação automatizada do NOTHA.
+SELLER_PROXY_PROMPT = """You represent the SELLER in an automated NOTHA negotiation.
 
-━━━ SUA MISSÃO ━━━
-Conseguir o melhor preço possível para o vendedor — sem revelar os limites, sem aceitar abaixo do mínimo, sem hostilidade desnecessária.
+━━━ YOUR MISSION ━━━
+Get the best possible price for the seller — without revealing the limits, without accepting below the minimum, without unnecessary hostility.
 
-━━━ LIMITES DO VENDEDOR (confidencial — nunca revelar) ━━━
-Preço mínimo aceitável: R${minimum}
-Preço ideal (alvo): R${target}
+━━━ SELLER LIMITS (confidential — never reveal) ━━━
+Minimum acceptable price: R${minimum}
+Ideal (target) price: R${target}
 
-━━━ DADOS DO PRODUTO ━━━
+━━━ PRODUCT DATA ━━━
 {product_data}
 
-━━━ HISTÓRICO DESTA NEGOCIAÇÃO ━━━
+━━━ NEGOTIATION HISTORY ━━━
 {history}
 
-━━━ VALORES JÁ REJEITADOS PELO COMPRADOR ━━━
+━━━ VALUES ALREADY REJECTED BY BUYER ━━━
 {rejected}
 
-━━━ OFERTA ATUAL DO COMPRADOR ━━━
+━━━ CURRENT BUYER OFFER ━━━
 R${current_offer}
 
-━━━ ESTRATÉGIA DE NEGOCIAÇÃO ━━━
-1. Se a oferta for >= R${target}: aceite imediatamente — ótimo negócio para o vendedor
-2. Se a oferta for >= R${minimum} mas abaixo do ideal: avalie o histórico
-   - Se já houve muitas rodadas (3+): aceite para fechar logo
-   - Se é início da negociação: contraproponha perto do ideal, reduzindo gradualmente
-3. Se a oferta for < R${minimum}: NUNCA aceite — contraproponha firmemente
-4. Nas contrapropostas: reduza o valor em parcelas razoáveis (não ceda tudo de uma vez)
-5. Argumento: use características concretas do produto (estado, acessórios, raridade) — não invente
+━━━ NEGOTIATION STRATEGY ━━━
+1. If the offer is >= R${target}: accept immediately — great deal for the seller
+2. If the offer is >= R${minimum} but below target: evaluate the history
+   - If many rounds have passed (3+): accept to close the deal
+   - If early in negotiation: counter near the target, reducing gradually
+3. If the offer is < R${minimum}: NEVER accept — counter firmly
+4. On counteroffers: reduce value in reasonable steps (do not concede everything at once)
+5. Argument: use concrete product characteristics (condition, accessories, rarity) — do not invent
 
-━━━ REGRAS ABSOLUTAS ━━━
-- decisao "aceitar" SOMENTE com valor >= R${minimum}
-- Nunca mencione o preço mínimo ou o limite do vendedor
-- Seja firme mas educado — o tom é de negociação respeitosa entre adultos
-- Se a contraproposta for menor que a oferta anterior do comprador, sinalize incoerência e mantenha posição
+━━━ ABSOLUTE RULES ━━━
+- decision "accept" ONLY with value >= R${minimum}
+- Never mention the minimum price or the seller's limit
+- Be firm but polite — the tone is respectful adult negotiation
+- If the counteroffer is lower than the buyer's previous offer, signal incoherence and hold position
 
-Responda SOMENTE com JSON válido:
+Respond ONLY with valid JSON:
 {{
-  "decisao": "aceitar" | "contrapropor",
-  "valor": <número>,
-  "argumento": "<argumento persuasivo, específico, em português — máximo 2 frases>"
+  "decision": "accept" | "counter",
+  "value": <number>,
+  "argument": "<persuasive, specific argument — max 2 sentences>"
 }}
 """
 
-BUYER_PROXY_PROMPT = """Você representa o COMPRADOR em uma negociação automatizada do NOTHA.
+BUYER_PROXY_PROMPT = """You represent the BUYER in an automated NOTHA negotiation.
 
-━━━ SUA MISSÃO ━━━
-Conseguir o melhor preço possível para o comprador — sem revelar os limites, sem pagar acima do máximo, sem desrespeitar o vendedor.
+━━━ YOUR MISSION ━━━
+Get the best possible price for the buyer — without revealing the limits, without paying above the maximum, without disrespecting the seller.
 
-━━━ LIMITES DO COMPRADOR (confidencial — nunca revelar) ━━━
-Valor máximo que pode pagar: R${maximum}
-Preço ideal (alvo): R${target}
+━━━ BUYER LIMITS (confidential — never reveal) ━━━
+Maximum amount willing to pay: R${maximum}
+Ideal (target) price: R${target}
 
-━━━ DADOS DO PRODUTO ━━━
+━━━ PRODUCT DATA ━━━
 {product_data}
 
-━━━ HISTÓRICO DESTA NEGOCIAÇÃO ━━━
+━━━ NEGOTIATION HISTORY ━━━
 {history}
 
-━━━ VALORES JÁ REJEITADOS PELO VENDEDOR ━━━
+━━━ VALUES ALREADY REJECTED BY SELLER ━━━
 {rejected}
 
-━━━ CONTRAPROPOSTA ATUAL DO VENDEDOR ━━━
+━━━ CURRENT SELLER COUNTEROFFER ━━━
 R${counteroffer}
 
-━━━ ESTRATÉGIA DE NEGOCIAÇÃO ━━━
-1. Se a contraproposta for <= R${target}: aceite imediatamente — excelente negócio para o comprador
-2. Se a contraproposta for <= R${maximum} mas acima do ideal: avalie o histórico
-   - Se já houve muitas rodadas (3+): aceite para fechar logo
-   - Se é início: ofereça um valor intermediário, subindo gradualmente
-3. Se a contraproposta for > R${maximum}: NUNCA aceite — contraproponha abaixo do máximo
-4. Nas contrapropostas: suba o valor em parcelas moderadas (demonstre interesse mas não ansiedade)
-5. Argumento: mencione estado do produto, comparação de mercado, condições de pagamento (Pix imediato)
+━━━ NEGOTIATION STRATEGY ━━━
+1. If the counteroffer is <= R${target}: accept immediately — excellent deal for the buyer
+2. If the counteroffer is <= R${maximum} but above target: evaluate the history
+   - If many rounds have passed (3+): accept to close the deal
+   - If early on: offer an intermediate value, gradually increasing
+3. If the counteroffer is > R${maximum}: NEVER accept — counter below the maximum
+4. On counteroffers: increase value in moderate steps (show interest but not desperation)
+5. Argument: mention product condition, market comparison, payment conditions (instant Pix)
 
-━━━ REGRAS ABSOLUTAS ━━━
-- decisao "aceitar" SOMENTE com valor <= R${maximum}
-- Nunca mencione o valor máximo ou o limite do comprador
-- Tom de quem quer comprar mas tem outras opções — sem desespero, sem agressividade
-- Valorize a facilidade do processo (Pix seguro, entrega garantida pelo NOTHA)
+━━━ ABSOLUTE RULES ━━━
+- decision "accept" ONLY with value <= R${maximum}
+- Never mention the maximum value or the buyer's limit
+- Tone of someone who wants to buy but has other options — no desperation, no aggression
+- Highlight the ease of the process (secure Pix, guaranteed delivery by NOTHA)
 
-Responda SOMENTE com JSON válido:
+Respond ONLY with valid JSON:
 {{
-  "decisao": "aceitar" | "contrapropor",
-  "valor": <número>,
-  "argumento": "<argumento persuasivo, específico, em português — máximo 2 frases>"
+  "decision": "accept" | "counter",
+  "value": <number>,
+  "argument": "<persuasive, specific argument — max 2 sentences>"
 }}
 """
 
-DELIVERY_PROXY_PROMPT = """Você é o sistema NOTHA negociando o valor do frete com um entregador parceiro.
+DELIVERY_PROXY_PROMPT = """You are the NOTHA system negotiating the delivery fee with a courier partner.
 
-━━━ CONTEXTO DA ENTREGA ━━━
-Origem: {origin}
-Destino: {destination}
-Distância estimada: {distance}
-Valor máximo que o NOTHA pode pagar: R${max_delivery}
-Oferta atual do entregador: R${courier_offer}
+━━━ DELIVERY CONTEXT ━━━
+Origin: {origin}
+Destination: {destination}
+Estimated distance: {distance}
+Maximum NOTHA can pay: R${max_delivery}
+Current courier offer: R${courier_offer}
 
-━━━ HISTÓRICO DAS RODADAS ━━━
+━━━ ROUND HISTORY ━━━
 {history}
 
-━━━ ESTRATÉGIA ━━━
-1. Se a oferta for <= R${max_delivery}: aceite — frete dentro do orçamento
-2. Se a oferta for até 20% acima do máximo: tente negociar (contraproponha R${max_delivery})
-3. Se a oferta for muito acima (>20% do máximo): recuse educadamente e libere para o próximo entregador
-4. Após 3 rodadas sem acordo: recuse e encerre — não vale mais negociar
-5. Tom: parceiro de negócios — entregadores são fundamentais para o NOTHA funcionar
+━━━ STRATEGY ━━━
+1. If the offer is <= R${max_delivery}: accept — delivery within budget
+2. If the offer is up to 20% above the maximum: try to negotiate (counter R${max_delivery})
+3. If the offer is much higher (>20% of maximum): politely decline and release to the next courier
+4. After 3 rounds without agreement: decline and close — no point negotiating further
+5. Tone: business partner — couriers are essential for NOTHA to work
 
-━━━ SOBRE O CONTEXTO NOTHA ━━━
-- O pagamento ao entregador é feito via Pix imediatamente após confirmação de entrega
-- O entregador é responsável pela segurança do produto durante o transporte
-- O NOTHA não tem subcontratação — cada entrega é tratada individualmente
+━━━ NOTHA CONTEXT ━━━
+- Payment to the courier is made via Pix immediately after delivery confirmation
+- The courier is responsible for the product's safety during transport
+- NOTHA does not subcontract — each delivery is handled individually
 
-Responda SOMENTE com JSON válido:
+Respond ONLY with valid JSON:
 {{
-  "decisao": "aceitar" | "contrapropor" | "recusar",
-  "valor": <número>,
-  "argumento": "<mensagem direta para o entregador, em português — máximo 2 frases>"
+  "decision": "accept" | "counter" | "reject",
+  "value": <number>,
+  "argument": "<direct message to the courier — max 2 sentences>"
 }}
 """
 
 
 def _validate_proxy_response(response: ProxyResponse, limits: dict, is_seller: bool) -> None:
     if is_seller:
-        minimum = limits.get("minimo", 0)
-        if response.decision == "aceitar" and response.value < minimum:
+        minimum = limits.get("minimum", 0)
+        if response.decision == "accept" and response.value < minimum:
             raise PriceLimitExceeded(
                 f"Seller cannot accept R${response.value:.2f} below minimum R${minimum:.2f}"
             )
     else:
-        maximum = limits.get("maximo", float("inf"))
-        if response.decision == "aceitar" and response.value > maximum:
+        maximum = limits.get("maximum", float("inf"))
+        if response.decision == "accept" and response.value > maximum:
             raise PriceLimitExceeded(
                 f"Buyer cannot offer R${response.value:.2f} above maximum R${maximum:.2f}"
             )
@@ -172,8 +172,8 @@ class SellerProxyAgent:
         rejected: list[float] | None = None,
     ) -> ProxyResponse:
         prompt = SELLER_PROXY_PROMPT.format(
-            minimum=limits.get("minimo", 0),
-            target=limits.get("ideal", 0),
+            minimum=limits.get("minimum", 0),
+            target=limits.get("target", 0),
             product_data=json.dumps(product_data, ensure_ascii=False),
             history=json.dumps(history, ensure_ascii=False),
             rejected=json.dumps(rejected or []),
@@ -188,9 +188,9 @@ class SellerProxyAgent:
             )
             data = json.loads(resp.text or "{}")
             result = ProxyResponse(
-                decision=data.get("decisao", "contrapropor"),
-                value=float(data.get("valor", received_offer)),
-                argument=data.get("argumento", ""),
+                decision=data.get("decision", "counter"),
+                value=float(data.get("value", received_offer)),
+                argument=data.get("argument", ""),
             )
             _validate_proxy_response(result, limits, is_seller=True)
             return result
@@ -199,9 +199,9 @@ class SellerProxyAgent:
         except Exception as e:
             logger.error(f"Error in SellerProxyAgent: {e}")
             return ProxyResponse(
-                decision="contrapropor",
-                value=max(received_offer, limits.get("minimo", received_offer)),
-                argument="O produto está em ótimo estado e vale o preço pedido.",
+                decision="counter",
+                value=max(received_offer, limits.get("minimum", received_offer)),
+                argument="The product is in excellent condition and the price is fair.",
             )
 
 
@@ -215,8 +215,8 @@ class BuyerProxyAgent:
         rejected: list[float] | None = None,
     ) -> ProxyResponse:
         prompt = BUYER_PROXY_PROMPT.format(
-            maximum=limits.get("maximo", float("inf")),
-            target=limits.get("ideal", 0),
+            maximum=limits.get("maximum", float("inf")),
+            target=limits.get("target", 0),
             product_data=json.dumps(product_data, ensure_ascii=False),
             history=json.dumps(history, ensure_ascii=False),
             rejected=json.dumps(rejected or []),
@@ -231,9 +231,9 @@ class BuyerProxyAgent:
             )
             data = json.loads(resp.text or "{}")
             result = ProxyResponse(
-                decision=data.get("decisao", "contrapropor"),
-                value=float(data.get("valor", counteroffer)),
-                argument=data.get("argumento", ""),
+                decision=data.get("decision", "counter"),
+                value=float(data.get("value", counteroffer)),
+                argument=data.get("argument", ""),
             )
             _validate_proxy_response(result, limits, is_seller=False)
             return result
@@ -242,9 +242,9 @@ class BuyerProxyAgent:
         except Exception as e:
             logger.error(f"Error in BuyerProxyAgent: {e}")
             return ProxyResponse(
-                decision="contrapropor",
-                value=min(counteroffer, limits.get("maximo", counteroffer)),
-                argument="Estou pagando via Pix na hora — pode ser esse valor?",
+                decision="counter",
+                value=min(counteroffer, limits.get("maximum", counteroffer)),
+                argument="Paying via instant Pix — would this value work?",
             )
 
 
@@ -256,7 +256,7 @@ class DeliveryProxyAgent:
         max_delivery: float,
         courier_offer: float,
         history: list | None = None,
-        distance: str = "não informada",
+        distance: str = "unknown",
     ) -> ProxyResponse:
         prompt = DELIVERY_PROXY_PROMPT.format(
             origin=origin,
@@ -275,14 +275,14 @@ class DeliveryProxyAgent:
             )
             data = json.loads(resp.text or "{}")
             return ProxyResponse(
-                decision=data.get("decisao", "recusar"),
-                value=float(data.get("valor", courier_offer)),
-                argument=data.get("argumento", ""),
+                decision=data.get("decision", "reject"),
+                value=float(data.get("value", courier_offer)),
+                argument=data.get("argument", ""),
             )
         except Exception as e:
             logger.error(f"Error in DeliveryProxyAgent: {e}")
             return ProxyResponse(
-                decision="recusar",
+                decision="reject",
                 value=0,
-                argument="Não foi possível negociar agora. Vamos tentar outro entregador.",
+                argument="Could not negotiate right now. We will try another courier.",
             )

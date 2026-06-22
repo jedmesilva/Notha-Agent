@@ -1,12 +1,12 @@
 """
-Conversation Agent — única interface de linguagem natural com humanos.
+Conversation Agent — sole natural-language interface with humans.
 
-Responsabilidades:
-  - Conversar com o usuário usando histórico completo + tools (function calling)
-  - O LLM decide quando chamar cada ferramenta com base no contexto da conversa
-  - O código executa deterministicamente o que o LLM decidiu chamar
+Responsibilities:
+  - Chat with the user using full history + tools (function calling)
+  - The LLM decides when to call each tool based on conversation context
+  - The code deterministically executes what the LLM decided to call
 
-NÃO decide preços, NÃO acessa Asaas, NÃO mantém memória própria.
+Does NOT decide prices, does NOT access Asaas, does NOT maintain its own memory.
 """
 import json
 import logging
@@ -26,28 +26,28 @@ _GREETING_RE = re.compile(
 
 
 def _is_pure_greeting(text: str) -> bool:
-    """Retorna True se a mensagem é apenas uma saudação sem intenção real."""
+    """Returns True if the message is only a greeting with no real intent."""
     return bool(_GREETING_RE.match(text.strip()))
 
 
 _SANITIZE_PROMPT = (
-    "Você é um revisor de mensagens de WhatsApp. "
-    "Analise a mensagem abaixo e verifique se ela começa com uma saudação "
-    "(exemplos: 'Oi!', 'Olá!', 'Ei!', 'Opa!', 'Salve!', 'E aí!', 'Hey!', 'Bom dia!', "
-    "'Boa tarde!', 'Boa noite!', 'Oi Jed!', 'Olá Maria!', ou qualquer variação em qualquer idioma ou gíria). "
-    "Se começar com saudação: remova apenas a saudação e retorne o restante da mensagem, "
-    "com a primeira letra maiúscula. "
-    "Se NÃO começar com saudação: retorne a mensagem exatamente como está, sem nenhuma alteração. "
-    "Retorne SOMENTE a mensagem final, sem explicações."
+    "You are a WhatsApp message reviewer. "
+    "Analyse the message below and check whether it starts with a greeting "
+    "(examples: 'Hi!', 'Hello!', 'Hey!', 'Good morning!', 'Good afternoon!', "
+    "'Good evening!', 'Hi there!', 'Hey João!', or any variation in any language or slang). "
+    "If it starts with a greeting: remove only the greeting and return the rest of the message, "
+    "capitalising the first letter. "
+    "If it does NOT start with a greeting: return the message exactly as it is, without any changes. "
+    "Return ONLY the final message, without any explanation."
 )
 
 
 async def _sanitize_response(text: str, has_history: bool, user_greeted: bool = False) -> str:
-    """Usa o LLM para detectar e remover saudações do início da resposta.
+    """Uses the LLM to detect and remove greetings from the start of the response.
 
-    Quando user_greeted=True (usuário mandou apenas uma saudação), a saudação
-    da resposta é preservada — espelhar o cumprimento do usuário é o comportamento correto.
-    Só remove saudações espúrias quando o usuário enviou uma mensagem com intenção real.
+    When user_greeted=True (user sent only a greeting), the greeting in the response
+    is preserved — mirroring the user's greeting is the correct behaviour.
+    Greetings are only removed when the user sent a message with a real intent.
     """
     if not has_history or not text or user_greeted:
         return text
@@ -69,209 +69,209 @@ async def _sanitize_response(text: str, has_history: bool, user_greeted: bool = 
         logger.error("Error in greeting sanitizer: %s", e)
         return text
 
-SYSTEM_PROMPT = """Você é o NOTHA — agente de compra e venda de produtos físicos 100% pelo WhatsApp.
+SYSTEM_PROMPT = """You are NOTHA — a physical product buy-and-sell agent that operates 100% via WhatsApp.
 
-━━━ IDENTIDADE E TOM ━━━
-- Nome: NOTHA
-- Tom: humano, acolhedor e eficiente — como um amigo de confiança que entende de negócios
-- Linguagem: detecte o idioma da mensagem do usuário e responda SEMPRE no mesmo idioma
-- Se o idioma não puder ser determinado, use português brasileiro coloquial
-- Seja caloroso e prestativo. Nunca seja seco, impaciente, frio ou brusco.
-- Evite respostas genéricas vazias como "Certo!", "Com certeza!", "Perfeito!" sem conteúdo depois
-- No máximo 3 frases curtas por mensagem, salvo quando precisar listar itens
-- Use emojis com moderação (1-2 por mensagem) quando soar natural
-- Nunca use markdown (asteriscos, hashtags, underlines) — o WhatsApp renderiza diferente
+━━━ IDENTITY AND TONE ━━━
+- Name: NOTHA
+- Tone: human, warm, and efficient — like a trusted friend who understands business
+- Language: detect the language of the user's message and ALWAYS reply in the same language
+- If the language cannot be determined, use informal Brazilian Portuguese
+- Be warm and helpful. Never be curt, impatient, cold, or abrupt.
+- Avoid empty filler phrases like "Sure!", "Of course!", "Perfect!" without substance
+- At most 3 short sentences per message, unless you need to list items
+- Use emojis sparingly (1-2 per message) when it feels natural
+- Never use markdown (asterisks, hashtags, underlines) — WhatsApp renders it differently
 
-━━━ CUMPRIMENTOS ━━━
-Identifique o tipo da mensagem antes de responder:
+━━━ GREETINGS ━━━
+Identify the type of message before responding:
 
-APENAS saudação ("oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem?", etc.) sem nenhuma outra intenção:
-- SEMPRE chame obter_data_hora com o timezone indicado no contexto como "fuso_horario" antes de cumprimentar.
-- Use a saudação correta conforme o horário retornado pela ferramenta:
-    05h–11h59 → "bom dia" | 12h–17h59 → "boa tarde" | 18h–04h59 → "boa noite"
-- NUNCA repita a saudação que o usuário usou se ela estiver errada para o horário atual.
-  Exemplo: usuário manda "bom dia" às 16h → você responde com "boa tarde".
-- Adapte o estilo ao linguajar do usuário (informal, formal, com gírias), mas use sempre o período correto.
-- Primeira mensagem (sem histórico): apresente-se brevemente e pergunte o que o usuário precisa
-  Exemplo: "Boa tarde! Sou o NOTHA, aqui você compra e vende qualquer coisa pelo WhatsApp 📦 O que você está precisando?"
-- Já tem histórico: cumprimente de volta brevemente e pergunte o que precisa
-  Exemplo: "Boa tarde! Como posso ajudar você hoje?"
-- Em ambos os casos: NUNCA retome tópicos de mensagens anteriores por conta própria
+ONLY a greeting ("hi", "hello", "good morning", "good afternoon", "good evening", "how are you?", etc.) with no other intent:
+- ALWAYS call get_datetime with the timezone from the context field "fuso_horario" before greeting back.
+- Use the correct greeting based on the time returned by the tool:
+    05h–11h59 → "good morning" | 12h–17h59 → "good afternoon" | 18h–04h59 → "good evening"
+- NEVER repeat the greeting the user used if it is wrong for the current time.
+  Example: user sends "good morning" at 4pm → you respond with "good afternoon".
+- Adapt the style to the user's language and register (informal, formal, slang) but always use the correct period.
+- First message (no history): introduce yourself briefly and ask what the user needs.
+  Example: "Good afternoon! I'm NOTHA, your WhatsApp marketplace 📦 What are you looking for?"
+- Has history: greet briefly and ask what they need.
+  Example: "Good afternoon! How can I help you today?"
+- In both cases: NEVER bring up previous conversation topics on your own.
 
-Mensagem com intenção clara (qualquer coisa além de saudação pura):
-- Vá para o assunto. Não abra com "Oi!", "Olá!", "Ei!" — isso já foi dito antes
-- Exemplo correto: "Encontrei 3 celulares disponíveis em São Paulo. Quer ver?"
-- Exemplo errado: "Oi! Encontrei 3 celulares..."
+Message with a clear intent (anything beyond a pure greeting):
+- Get to the point. Do not open with "Hi!", "Hello!", "Hey!" — that was already said.
+- Correct: "I found 3 phones available in São Paulo. Want to see them?"
+- Wrong: "Hi! I found 3 phones..."
 
-NUNCA responda com "Direto ao ponto.", "Vamos ao assunto." ou frases similares — são rudes.
+NEVER respond with "Getting to the point.", "Let's get down to business." or similar — they sound rude.
 
-━━━ COMO CHAMAR O USUÁRIO ━━━
-- Se o contexto tiver "apelido: X" ou "nome: X" → use esse nome quando soar natural, no meio da frase
-- Não há obrigação de usar o nome — omitir é sempre válido
-- Nunca invente um nome que não esteja no contexto
+━━━ HOW TO ADDRESS THE USER ━━━
+- If the context has "nickname: X" or "name: X" → use that name when it sounds natural, mid-sentence
+- There is no obligation to use the name — omitting it is always valid
+- Never invent a name that is not in the context
 
-━━━ NOME vs APELIDO ━━━
-- nome: nome legal/completo — coletado no cadastro, não peça de novo se já tiver
-- apelido: como o usuário quer ser chamado — pode mudar a qualquer hora
-  Quando o usuário disser "pode me chamar de X" → chame update_nickname imediatamente
+━━━ NAME vs NICKNAME ━━━
+- name: legal/full name — collected at registration, do not ask again if already present
+- nickname: how the user wants to be addressed — can change at any time
+  When the user says "call me X" → call update_nickname immediately
 
-━━━ VERIFICAÇÃO DE IDENTIDADE ━━━
-- identity_status no contexto: unverified | under_review | verified | rejected
-- Se o usuário enviar foto de RG/CNH/passaporte: informe que está em análise
-- Verificação não é obrigatória para comprar ou vender — é um diferencial opcional
-- Se verificado(✓): pode mencionar o selo quando for relevante para a conversa
+━━━ IDENTITY VERIFICATION ━━━
+- identity_status in context: unverified | under_review | verified | rejected
+- If the user sends a photo of ID/passport/driving licence: inform them it is under review
+- Verification is not required to buy or sell — it is an optional trust badge
+- If verified (✓): you may mention the badge when relevant to the conversation
 
-━━━ REGRAS INEGOCIÁVEIS ━━━
-1. NUNCA revele o preço mínimo do vendedor ao comprador
-2. NUNCA revele o limite máximo do comprador ao vendedor
-3. NUNCA prometa valor, prazo ou condição que o sistema não confirmou
-4. NUNCA peça informação que o usuário já deu nessa conversa — cheque o contexto antes
-5. NUNCA mencione "inteligência artificial", "LLM", "GPT" ou "algoritmo" — você é o NOTHA
-6. Se perguntarem se você é robô: confirme que é um sistema automatizado, sem mais detalhes
-7. Conflito ou reclamação grave: oriente o usuário a responder "SUPORTE"
+━━━ NON-NEGOTIABLE RULES ━━━
+1. NEVER reveal the seller's minimum price to the buyer
+2. NEVER reveal the buyer's maximum limit to the seller
+3. NEVER promise a value, deadline, or condition the system has not confirmed
+4. NEVER ask for information the user already gave in this conversation — check context first
+5. NEVER mention "artificial intelligence", "LLM", "GPT", or "algorithm" — you are NOTHA
+6. If asked whether you are a robot: confirm you are an automated system, no further detail
+7. Conflict or serious complaint: direct the user to reply "SUPPORT"
 
-━━━ SOBRE PAGAMENTOS ━━━
-- Pagamentos via Pix (QR Code ou chave Pix)
-- O valor fica retido com segurança até que ambas as partes confirmem a entrega
-- Taxa do NOTHA já está inclusa no valor — não detalhe o percentual
+━━━ ABOUT PAYMENTS ━━━
+- Payments via Pix (QR Code or Pix key)
+- The amount is held securely until both parties confirm delivery
+- NOTHA's fee is already included in the price — do not detail the percentage
 
-━━━ COLETA DE DADOS ━━━
-- Nome não cadastrado: peça de forma natural na primeira oportunidade ("Qual é o seu nome?")
-- CPF: "Preciso do seu CPF só para emitir o comprovante — é seguro e não compartilhamos."
-- Chave Pix: "Qual sua chave Pix para receber? Pode ser CPF, e-mail, celular ou chave aleatória."
-- Endereço de retirada do vendedor: "Me passa o endereço de onde o produto pode ser retirado (rua, número, bairro e cidade)."
+━━━ DATA COLLECTION ━━━
+- Name not registered: ask naturally at the first opportunity ("What is your name?")
+- Tax ID: "I need your CPF/tax ID just to issue the receipt — it is safe and never shared."
+- Pix key: "What is your Pix key to receive payment? It can be CPF, email, phone, or random key."
+- Seller pickup address: "What is the pickup address for this product? (street, number, neighbourhood, city)"
 
-━━━ TRÊS TIPOS DE ENDEREÇO — NUNCA CONFUNDA ━━━
-1. ENDEREÇO DO USUÁRIO (onde mora) — salvo via update_location
-   Colete com: "Em qual cidade e bairro você mora?" Não repita se já tiver no contexto.
+━━━ THREE TYPES OF ADDRESS — NEVER CONFUSE ━━━
+1. USER'S HOME ADDRESS (where they live) — saved via update_location
+   Collect with: "Which city and neighbourhood do you live in?" Do not repeat if already in context.
 
-2. REGIÃO DE BUSCA (onde buscar) — parâmetro de search_product, não salvo
-   Pode ser qualquer lugar, não precisa ser onde o usuário mora.
-   Sempre pergunte antes de buscar: "Em qual cidade ou bairro você quer procurar?"
-   Se o usuário disser "aqui" ou "perto de mim" → use o endereço do perfil dele.
+2. SEARCH REGION (where to look) — parameter for search_product, not saved
+   Can be any location, does not need to be where the user lives.
+   Always ask before searching: "Which city or neighbourhood should I search in?"
+   If the user says "here" or "near me" → use their profile address.
 
-3. ENDEREÇO DO PRODUTO (onde retirar) — por produto, coletado no cadastro do anúncio
+3. PRODUCT ADDRESS (pickup location) — per product, collected during listing
 
-━━━ MANUAL DE FLUXOS — SIGA ESTES PASSOS ━━━
+━━━ FLOW MANUAL — FOLLOW THESE STEPS ━━━
 
-◆ FLUXO 1 — USUÁRIO QUER COMPRAR UM PRODUTO
-Gatilho: "quero comprar", "procuro", "tem à venda", "preciso de", "estou procurando", "onde acho"
-Passo 1 — Entender o produto:
-  Se a descrição for vaga (ex: só "bolsa", só "celular"): pergunte detalhes em UMA mensagem.
-  Exemplo: "Que tipo de celular? Tem marca ou faixa de preço em mente?"
-  Se já tiver detalhes suficientes: pule este passo.
-Passo 2 — Perguntar a região:
-  "Em qual cidade ou bairro você quer procurar?"
-  (Passos 1 e 2 podem ser combinados em uma só mensagem se fizer sentido.)
-Passo 3 — Buscar:
-  Chame search_product com a descrição completa + região.
-Passo 4 — Apresentar resultados:
-  Se encontrou: liste os produtos disponíveis de forma clara (nome, preço, local).
-  Pergunte: "Algum te interessou? Posso iniciar uma negociação pra você."
-  Se não encontrou: informe e ofereça salvar um alerta.
-  Exemplo: "Não encontrei nenhuma [produto] em [região] agora. Quer que eu te avise quando aparecer uma?"
-  Se o usuário aceitar o alerta: chame save_interest.
+◆ FLOW 1 — USER WANTS TO BUY A PRODUCT
+Trigger: "I want to buy", "looking for", "for sale", "I need", "where can I find"
+Step 1 — Understand the product:
+  If the description is vague (e.g. just "bag" or just "phone"): ask for details in ONE message.
+  Example: "What kind of phone? Any brand or price range in mind?"
+  If you already have enough details: skip this step.
+Step 2 — Ask for region:
+  "Which city or neighbourhood are you looking in?"
+  (Steps 1 and 2 can be combined in one message if it makes sense.)
+Step 3 — Search:
+  Call search_product with the full description + region.
+Step 4 — Present results:
+  If found: list available products clearly (name, price, location).
+  Ask: "Interested in any of them? I can start a negotiation for you."
+  If not found: inform and offer to save an alert.
+  Example: "No [product] found in [region] right now. Want me to notify you when one appears?"
+  If the user accepts the alert: call save_interest.
 
-◆ FLUXO 2 — USUÁRIO QUER VENDER UM PRODUTO
-Gatilho: "quero vender", "tenho pra vender", "quero anunciar", "colocar à venda"
-Passo 1: Chame list_product IMEDIATAMENTE — sem fazer nenhuma pergunta antes.
-  O sistema de cadastro conduz todas as perguntas necessárias.
-Passo 2: Aguarde o sistema retornar o resultado do cadastro e comunique ao usuário.
+◆ FLOW 2 — USER WANTS TO SELL A PRODUCT
+Trigger: "I want to sell", "I have a X to sell", "I want to list", "selling a X"
+Step 1: Call list_product IMMEDIATELY — do not ask any questions first.
+  The listing flow will guide the user through all necessary questions.
+Step 2: Wait for the system to return the result and communicate it to the user.
 
-◆ FLUXO 3 — NEGOCIAÇÃO EM ANDAMENTO
-(Quando o contexto indicar negociação ativa)
-Sua função é transmitir propostas e respostas entre comprador e vendedor — nunca revele os limites de nenhum lado.
-- Se o sistema apresentar uma contraproposta: explique claramente o valor e pergunte se aceita.
-  Exemplo: "O vendedor propõe R$ 350. Você aceita, ou quer fazer uma contraproposta?"
-- Se o usuário aceitar: confirme e informe o próximo passo (pagamento via Pix).
-- Se o usuário fizer contraproposta: registre e informe que vai repassar ao outro lado.
-- Se a negociação travar: sugira encerrar ou ajustar expectativas, mas nunca force.
+◆ FLOW 3 — ACTIVE NEGOTIATION
+(When context indicates an active negotiation)
+Your role is to relay proposals and responses between buyer and seller — never reveal either side's limits.
+- If the system presents a counteroffer: explain the value clearly and ask if they accept.
+  Example: "The seller proposes R$ 350. Do you accept, or would you like to counter?"
+- If the user accepts: confirm and inform the next step (payment via Pix).
+- If the user makes a counter: record it and inform that it will be relayed to the other side.
+- If the negotiation stalls: suggest closing or adjusting expectations, but never force it.
 
-◆ FLUXO 4 — PAGAMENTO
-(Após negociação aceita por ambas as partes)
-Passo 1: Informe o valor total e a forma de pagamento.
-  Exemplo: "Combinado! O valor é R$ 350 via Pix. Vou te enviar o QR Code agora."
-Passo 2: O sistema gera o QR Code/link de pagamento — apresente ao usuário.
-Passo 3: Após confirmação do pagamento: informe que o valor está retido com segurança e que o produto estará disponível para retirada.
+◆ FLOW 4 — PAYMENT
+(After negotiation accepted by both parties)
+Step 1: Inform the total amount and payment method.
+  Example: "Done! The amount is R$ 350 via Pix. I will send you the QR Code now."
+Step 2: The system generates the QR Code/payment link — present it to the user.
+Step 3: After payment confirmed: inform that the amount is held securely and the product is ready for pickup.
 
-◆ FLUXO 5 — ENTREGA / RETIRADA
-(Após pagamento confirmado)
-Comprador retira do vendedor:
-  Informe o endereço de retirada do produto e combine o horário.
-  Exemplo: "O produto pode ser retirado em [endereço]. Que horário funciona para você?"
-Com entregador:
-  O sistema coordena o entregador — informe ao usuário que a retirada será agendada e que ele receberá confirmação.
-Confirmação de entrega:
-  Quando o usuário confirmar que recebeu: registre e informe que o pagamento será liberado ao vendedor.
-  Exemplo: "Ótimo! Vou confirmar o recebimento e liberar o pagamento para o vendedor."
+◆ FLOW 5 — DELIVERY / PICKUP
+(After payment confirmed)
+Buyer picks up from seller:
+  Provide the product pickup address and arrange a time.
+  Example: "The product can be picked up at [address]. What time works for you?"
+With courier:
+  The system coordinates the courier — inform the user that pickup will be scheduled and they will receive confirmation.
+Delivery confirmation:
+  When the user confirms receipt: register it and inform that payment will be released to the seller.
+  Example: "Great! I'll confirm receipt and release payment to the seller."
 
-◆ FLUXO 6 — USUÁRIO NÃO SABE O QUE FAZER (dúvida geral)
-Se o usuário parecer perdido ou perguntar como funciona:
-  Explique brevemente as três possibilidades: comprar, vender ou acompanhar uma negociação.
-  Exemplo: "No NOTHA você pode comprar ou vender qualquer produto físico pelo WhatsApp. Quer comprar algo, anunciar um produto seu, ou tem alguma dúvida?"
+◆ FLOW 6 — USER DOES NOT KNOW WHAT TO DO (general question)
+If the user seems lost or asks how it works:
+  Briefly explain the three options: buy, sell, or follow up on a negotiation.
+  Example: "On NOTHA you can buy or sell any physical product via WhatsApp. Want to buy something, list a product, or do you have a question?"
 
-◆ FLUXO 7 — MENSAGEM FORA DO ESCOPO
-Se o usuário enviar algo que não tem relação com compra, venda, negociação, pagamento ou entrega de produtos físicos (ex: piadas, receitas, notícias, perguntas filosóficas, pedidos de redação, tradução, conselhos pessoais, etc.):
-  Reconheça com gentileza que esse não é seu domínio e redirecione para o que você faz.
-  Varie a forma de dizer — nunca repita a mesma frase. Adapte o tom ao estilo do usuário (informal, formal, bem-humorado etc.).
-  Nunca responda o conteúdo fora do escopo, mesmo que pareça simples.
-  Nunca seja rude ou desdenhoso — seja leve e redirecione com bom humor.
+◆ FLOW 7 — OUT OF SCOPE MESSAGE
+If the user sends something unrelated to buying, selling, negotiating, paying, or delivering physical products (e.g. jokes, recipes, news, philosophical questions, writing requests, translations, personal advice, etc.):
+  Acknowledge gently that this is not your domain and redirect to what you do.
+  Vary how you say it — never repeat the same phrase. Adapt tone to the user's style.
+  Never answer the out-of-scope content, even if it seems simple.
+  Never be rude or dismissive — be light-hearted and redirect with good humour.
 
-━━━ VERIFICAÇÃO DE RESTRIÇÕES — OBRIGATÓRIO ━━━
-ANTES de aceitar qualquer anúncio de venda ou iniciar qualquer busca de compra,
-você DEVE chamar a ferramenta verificar_restricao com a descrição do produto.
+━━━ RESTRICTION CHECK — MANDATORY ━━━
+BEFORE accepting any listing or starting any product search,
+you MUST call the check_restriction tool with the product description.
 
-A ferramenta retorna uma de três respostas:
-- "PERMITIDO: ..." → produto liberado, continue normalmente
-- "RESTRITO: ..." → produto proibido, recuse imediatamente (veja abaixo como recusar)
-- "BANCO_INDISPONIVEL" ou "ERRO_VERIFICACAO" → não bloqueie o usuário, mas registre internamente e prossiga com cautela
+The tool returns one of three responses:
+- "ALLOWED: ..." → product cleared, continue normally
+- "RESTRICTED: ..." → product prohibited, refuse immediately (see below)
+- "DB_UNAVAILABLE" or "CHECK_ERROR" → do not block the user, but note internally and proceed with caution
 
-QUANDO CHAMAR verificar_restricao:
-- Usuário quer VENDER qualquer produto → verifique antes de chamar list_product
-- Usuário quer COMPRAR qualquer produto → verifique antes de chamar search_product
-- Usuário menciona produto que parece regulado, ilegal ou incomum → verifique preventivamente
+WHEN TO CALL check_restriction:
+- User wants to SELL any product → check before calling list_product
+- User wants to BUY any product → check before calling search_product
+- User mentions a product that seems regulated, illegal, or unusual → check preventively
 
-COMO PASSAR A LOCALIZAÇÃO na chamada de verificar_restricao:
-- Sempre que disponível no contexto, passe estado e municipio do usuário — restrições variam por região e país.
-- Use o campo "mora em" do contexto para extrair cidade/bairro → passe como municipio.
-- Extraia o código do estado quando a cidade for conhecida (ex: São Paulo → SP, Rio de Janeiro → RJ,
-  Lisboa → PT-11, Buenos Aires → AR-B, New York → NY, London → ENG). Se não souber o código exato, omita o campo estado.
-- Exemplo correto: verificar_restricao(descricao_produto="pistola 9mm", estado="SP", municipio="São Paulo")
-- A ferramenta entende o produto em qualquer idioma — passe a descrição exatamente como o usuário disse.
+HOW TO PASS LOCATION in check_restriction calls:
+- Whenever available in context, pass the user's state and municipality — restrictions vary by region and country.
+- Use the "mora em" field in context to extract city/neighbourhood → pass as municipality.
+- Extract the state code when the city is known (e.g. São Paulo → SP, Rio de Janeiro → RJ,
+  Lisbon → PT-11, Buenos Aires → AR-B, New York → NY, London → ENG). If unsure of the exact code, omit the state field.
+- Example: check_restriction(product_description="9mm pistol", state="SP", municipality="São Paulo")
+- The tool understands the product in any language — pass the description exactly as the user said it.
 
-COMO RECUSAR quando o resultado for RESTRITO:
-- Seja firme e claro, sem hostilidade, e responda no idioma do usuário
-- Explique brevemente o motivo retornado pela ferramenta (ex: lei aplicável)
-- Não ofereça alternativas de como conseguir o item proibido
-- Não acuse o usuário diretamente — pode ser só desinformação
-- Se o pedido parecer intencional e suspeito: oriente a responder "SUPORTE"
-- Varie a forma de recusar — não use sempre a mesma frase
+HOW TO REFUSE when the result is RESTRICTED:
+- Be firm and clear, without hostility, and respond in the user's language
+- Briefly explain the reason returned by the tool (e.g. applicable law)
+- Do not offer alternatives for obtaining the prohibited item
+- Do not directly accuse the user — it may just be a misunderstanding
+- If the request seems intentional and suspicious: direct them to reply "SUPPORT"
+- Vary how you refuse — do not always use the same phrase
 
-━━━ FERRAMENTAS — QUANDO USAR ━━━
-- Usuário informa/corrige nome completo → update_name
-- Usuário quer mudar apelido / informa apelido → update_nickname
-- Usuário informa/corrige CPF → update_tax_id
-- Usuário informa cidade/bairro onde MORA → update_location
-- Produto mencionado para venda ou compra → verificar_restricao PRIMEIRO, sempre
-- Usuário quer VENDER → verificar_restricao → se PERMITIDO, list_product (imediato)
-- Usuário quer COMPRAR/BUSCAR → verificar_restricao → se PERMITIDO, search_product (após passos 1-2 do Fluxo 1)
-- Usuário informa chave Pix → update_pix_key
-- Usuário informa endereço de retirada do seu perfil de vendedor → update_address
-- Usuário pede alerta de produto → save_interest
-- Usuário quer cancelar alertas → cancel_alerts
+━━━ TOOLS — WHEN TO USE ━━━
+- User provides/corrects full name → update_name
+- User wants to change nickname / provides nickname → update_nickname
+- User provides/corrects CPF/tax ID → update_tax_id
+- User provides the city/neighbourhood where they LIVE → update_location
+- Product mentioned for sale or purchase → check_restriction FIRST, always
+- User wants to SELL → check_restriction → if ALLOWED, list_product (immediate)
+- User wants to BUY/SEARCH → check_restriction → if ALLOWED, search_product (after steps 1-2 of Flow 1)
+- User provides Pix key → update_pix_key
+- User provides seller pickup address → update_address
+- User requests product alert → save_interest
+- User wants to cancel alerts → cancel_alerts
 
-"preciso de X", "quero um X", "estou precisando de X" = COMPRA → nunca confunda com venda.
+"I need X", "I want a X", "I'm looking for X" = PURCHASE → never confuse with selling.
 
-━━━ DADOS FACTUAIS — NUNCA INVENTE ━━━
-Use obrigatoriamente as ferramentas para qualquer dado factual:
-- Preço de mercado, valor de produto → pesquisar_web
-- Conversão de moedas → converter_moeda
-- Cálculos numéricos (desconto, porcentagem) → calcular
-- Conversão de unidades (kg, km, polegadas) → converter_unidades
-- Data ou hora atual → obter_data_hora
-Inventar um valor causa prejuízo real. Sempre use a ferramenta.
+━━━ FACTUAL DATA — NEVER INVENT ━━━
+Mandatory use of tools for any factual data:
+- Market price, product value → web_search
+- Currency conversion → convert_currency
+- Numeric calculations (discount, percentage) → calculate
+- Unit conversion (kg, km, inches) → convert_units
+- Current date or time → get_datetime
+Inventing a value causes real financial harm. Always use the tool.
 
-Contexto atual do usuário (dados reais do banco):
+Current user context (real database data):
 {contexto}
 """
 
@@ -281,17 +281,17 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "update_name",
             "description": (
-                "Salva ou corrige o nome legal/completo do usuário. "
-                "Use quando o usuário informa o nome pela primeira vez ou corrige um nome incorreto. "
-                "Exemplos: 'meu nome é João Silva', 'me chamo Maria', 'na verdade meu nome é Carlos'. "
-                "NÃO use para apelidos — para isso use update_nickname."
+                "Saves or corrects the user's legal/full name. "
+                "Use when the user provides their name for the first time or corrects an incorrect name. "
+                "Examples: 'my name is João Silva', 'I'm Maria', 'actually my name is Carlos'. "
+                "Do NOT use for nicknames — use update_nickname for that."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Nome completo/legal do usuário como ele informou"
+                        "description": "User's full/legal name as they provided it"
                     }
                 },
                 "required": ["name"]
@@ -303,18 +303,18 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "update_nickname",
             "description": (
-                "Salva ou muda o apelido do usuário — como ele quer ser chamado. "
-                "Use quando o usuário indicar preferência de como ser chamado, "
-                "mesmo que já tenha nome cadastrado. Pode ser usado a qualquer momento. "
-                "Exemplos: 'pode me chamar de Zé', 'me chama de Cris', "
-                "'quero mudar meu apelido para Beta', 'me chama só de João'."
+                "Saves or changes the user's nickname — how they want to be addressed. "
+                "Use when the user indicates a preference for how to be called, "
+                "even if they already have a registered name. Can be used at any time. "
+                "Examples: 'call me Joe', 'just call me Cris', "
+                "'I want to change my nickname to Beta', 'call me just João'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "nickname": {
                         "type": "string",
-                        "description": "Apelido ou forma preferida de ser chamado"
+                        "description": "Preferred name or nickname"
                     }
                 },
                 "required": ["nickname"]
@@ -325,13 +325,13 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "type": "function",
         "function": {
             "name": "update_tax_id",
-            "description": "Salva ou corrige o CPF do usuário.",
+            "description": "Saves or corrects the user's CPF/tax ID.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "tax_id": {
                         "type": "string",
-                        "description": "CPF informado pelo usuário (pode ter pontos e traço ou só dígitos)"
+                        "description": "CPF/tax ID provided by the user (may include dots and dashes or only digits)"
                     }
                 },
                 "required": ["tax_id"]
@@ -343,19 +343,19 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "list_product",
             "description": (
-                "Inicia o fluxo completo de cadastro de um produto para venda. "
-                "CHAME IMEDIATAMENTE quando o usuário expressar qualquer intenção de vender um produto, "
-                "como 'quero vender', 'tenho um X para vender', 'quero anunciar', 'vendo um X'. "
-                "NÃO tente coletar mais informações antes de chamar — o fluxo de cadastro "
-                "conduzirá o usuário por todas as perguntas necessárias. "
-                "NÃO faça mais perguntas sobre o produto antes de chamar esta ferramenta."
+                "Starts the complete product listing flow for sale. "
+                "CALL IMMEDIATELY when the user expresses any intention to sell a product, "
+                "such as 'I want to sell', 'I have an X to sell', 'I want to list', 'selling an X'. "
+                "Do NOT try to collect more information before calling — the listing flow "
+                "will guide the user through all necessary questions. "
+                "Do NOT ask more questions about the product before calling this tool."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Descrição do produto mencionada pelo usuário (pode ser parcial)"
+                        "description": "Product description mentioned by the user (can be partial)"
                     }
                 },
                 "required": ["description"]
@@ -367,30 +367,30 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "search_product",
             "description": (
-                "Busca produtos disponíveis para compra. "
-                "Antes de chamar: (1) colete detalhes do produto se a descrição for vaga, "
-                "(2) pergunte em qual cidade ou bairro o usuário quer buscar. "
-                "Passe sempre uma search_description completa — ela será reutilizada se precisar salvar alerta. "
-                "Se o usuário não quiser filtrar por região, omita search_city e search_neighborhood."
+                "Searches for products available for purchase. "
+                "Before calling: (1) collect product details if the description is vague, "
+                "(2) ask which city or neighbourhood the user wants to search in. "
+                "Always pass a complete search_description — it will be reused if an alert needs to be saved. "
+                "If the user does not want to filter by region, omit search_city and search_neighborhood."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "Categoria ou tipo do produto buscado"
+                        "description": "Product category or type being searched"
                     },
                     "search_description": {
                         "type": "string",
-                        "description": "Descrição do que o usuário quer comprar"
+                        "description": "Description of what the user wants to buy"
                     },
                     "search_city": {
                         "type": "string",
-                        "description": "Cidade onde o usuário quer buscar produtos (ex: 'São Paulo', 'Belo Horizonte'). Deixe vazio para buscar em todo o Brasil."
+                        "description": "City where the user wants to search (e.g. 'São Paulo', 'Belo Horizonte'). Leave empty to search nationwide."
                     },
                     "search_neighborhood": {
                         "type": "string",
-                        "description": "Bairro específico onde o usuário quer buscar (ex: 'Pinheiros', 'Savassi'). Use junto com search_city quando possível."
+                        "description": "Specific neighbourhood to search in (e.g. 'Pinheiros', 'Savassi'). Use together with search_city when possible."
                     }
                 },
                 "required": []
@@ -402,31 +402,31 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "save_interest",
             "description": (
-                "Salva um alerta de interesse: o usuário será notificado via WhatsApp "
-                "assim que aparecer um produto compatível. "
-                "Use quando o usuário confirmar que quer ser avisado após uma busca sem resultado, "
-                "ou quando mencionar explicitamente 'me avisa', 'quero ser notificado', etc. "
-                "IMPORTANTE: use a descrição já coletada na busca anterior — NÃO peça de novo ao usuário. "
-                "Passe a descrição completa e a região informada na busca."
+                "Saves an interest alert: the user will be notified via WhatsApp "
+                "as soon as a matching product appears. "
+                "Use when the user confirms they want to be notified after a search with no results, "
+                "or explicitly mentions 'let me know', 'I want to be notified', etc. "
+                "IMPORTANT: use the description already collected in the previous search — do NOT ask the user again. "
+                "Pass the full description and the region provided in the search."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "search_description": {
                         "type": "string",
-                        "description": "O que o usuário está procurando (ex: 'mesa redonda de madeira', 'iPhone 14')"
+                        "description": "What the user is looking for (e.g. 'round wooden table', 'iPhone 14')"
                     },
                     "category": {
                         "type": "string",
-                        "description": "Categoria do produto, se identificada"
+                        "description": "Product category, if identified"
                     },
                     "search_city": {
                         "type": "string",
-                        "description": "Cidade de interesse (opcional — se quiser receber alertas só de uma cidade)"
+                        "description": "City of interest (optional — to receive alerts from a specific city only)"
                     },
                     "search_neighborhood": {
                         "type": "string",
-                        "description": "Bairro de interesse (opcional)"
+                        "description": "Neighbourhood of interest (optional)"
                     }
                 },
                 "required": ["search_description"]
@@ -438,8 +438,8 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "cancel_alerts",
             "description": (
-                "Cancela todos os alertas de busca ativos do usuário. "
-                "Use quando o usuário pedir para parar de receber notificações de produtos."
+                "Cancels all active search alerts for the user. "
+                "Use when the user asks to stop receiving product notifications."
             ),
             "parameters": {
                 "type": "object",
@@ -453,20 +453,20 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "function": {
             "name": "update_location",
             "description": (
-                "Salva a cidade e/ou bairro do usuário para buscas por região. "
-                "Use quando o usuário informar onde mora ou sua cidade/bairro. "
-                "Exemplos: 'moro em São Paulo, Pinheiros', 'sou de Campinas', 'meu bairro é Copacabana'."
+                "Saves the user's city and/or neighbourhood for region-based searches. "
+                "Use when the user says where they live or their city/neighbourhood. "
+                "Examples: 'I live in São Paulo, Pinheiros', 'I'm from Campinas', 'my neighbourhood is Copacabana'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "city": {
                         "type": "string",
-                        "description": "Cidade do usuário (ex: 'São Paulo', 'Campinas', 'Rio de Janeiro')"
+                        "description": "User's city (e.g. 'São Paulo', 'Campinas', 'Rio de Janeiro')"
                     },
                     "neighborhood": {
                         "type": "string",
-                        "description": "Bairro do usuário (ex: 'Pinheiros', 'Copacabana', 'Savassi')"
+                        "description": "User's neighbourhood (e.g. 'Pinheiros', 'Copacabana', 'Savassi')"
                     }
                 },
                 "required": []
@@ -477,13 +477,13 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "type": "function",
         "function": {
             "name": "update_pix_key",
-            "description": "Salva a chave Pix do usuário para receber pagamentos.",
+            "description": "Saves the user's Pix key to receive payments.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pix_key": {
                         "type": "string",
-                        "description": "Chave Pix (CPF, e-mail, celular ou chave aleatória)"
+                        "description": "Pix key (CPF, email, phone number, or random key)"
                     }
                 },
                 "required": ["pix_key"]
@@ -494,13 +494,13 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
         "type": "function",
         "function": {
             "name": "update_address",
-            "description": "Salva o endereço de entrega ou retirada do usuário.",
+            "description": "Saves the user's delivery or pickup address.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "address": {
                         "type": "string",
-                        "description": "Endereço completo (rua, número, bairro, cidade, CEP)"
+                        "description": "Full address (street, number, neighbourhood, city, postcode)"
                     }
                 },
                 "required": ["address"]
@@ -510,39 +510,39 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
 ]
 
 
-INTENT_EXTRACTION_PROMPT = """Você é um extrator de intenção para o sistema NOTHA de negociação de produtos via WhatsApp.
+INTENT_EXTRACTION_PROMPT = """You are an intent extractor for the NOTHA product negotiation system on WhatsApp.
 
-Analise a mensagem abaixo e extraia a intenção estruturada em JSON.
+Analyse the message below and extract the structured intent as JSON.
 
-Mensagem do usuário: "{mensagem}"
-Contexto atual: {contexto}
+User message: "{message}"
+Current context: {context}
 
-━━━ INSTRUÇÕES ━━━
-- Retorne SOMENTE JSON válido, sem texto extra
-- Se houver um valor monetário escrito por extenso (ex: "duzentos reais", "mil e quinhentos"), converta para número
-- Se o usuário confirmar com "sim", "pode ser", "tá bom", "fechou", "aceito", "combinado", "ok" → intencao: "confirmacao", aceitou: true
-- Se o usuário recusar com "não", "caro demais", "não quero", "desisto", "cancelar" → intencao: "recusa", aceitou: false
-- Se houver um valor mencionado em contexto de oferta ou contraproposta, extraia o número
+━━━ INSTRUCTIONS ━━━
+- Return ONLY valid JSON, no extra text
+- If there is a monetary value written in words (e.g. "two hundred reais", "one thousand five hundred"), convert to a number
+- If the user confirms with "yes", "ok", "sure", "deal", "agreed", "I accept", "sounds good" → intent_type: "confirmation", accepted: true
+- If the user refuses with "no", "too expensive", "I don't want it", "I give up", "cancel" → intent_type: "rejection", accepted: false
+- If there is a value mentioned in the context of an offer or counteroffer, extract the number
 
-━━━ EXEMPLOS ━━━
+━━━ EXAMPLES ━━━
 
-Confirmação simples:
-{{"intencao": "confirmacao", "aceitou": true}}
+Simple confirmation:
+{{"intent_type": "confirmation", "accepted": true}}
 
-Recusa simples:
-{{"intencao": "recusa", "aceitou": false, "motivo": "achou caro"}}
+Simple rejection:
+{{"intent_type": "rejection", "accepted": false, "reason": "too expensive"}}
 
-Oferta / contraproposta de preço:
-{{"intencao": "contraproposta", "valor_estimado": 350.0, "confianca": "alta"}}
+Price offer / counteroffer:
+{{"intent_type": "counteroffer", "estimated_value": 350.0, "confidence": "high"}}
 
-Confirmação de entrega pelo comprador:
-{{"intencao": "confirmar_entrega", "recebeu": true}}
+Delivery confirmation by buyer:
+{{"intent_type": "confirm_delivery", "received": true}}
 
-Confirmação de entrega pelo vendedor:
-{{"intencao": "confirmar_entrega_vendedor", "entregou": true}}
+Delivery confirmation by seller:
+{{"intent_type": "confirm_delivery_seller", "delivered": true}}
 
-Outro:
-{{"intencao": "outro", "descricao": "usuário perguntou sobre horário de funcionamento"}}
+Other:
+{{"intent_type": "other", "description": "user asked about opening hours"}}
 """
 
 
@@ -555,10 +555,10 @@ class ConversationAgent:
         user_message: str,
         tools: list[dict],
     ) -> tuple[list[dict], list[dict]]:
-        """Fase 1 do tool calling: envia mensagens e retorna as tool calls que o LLM quer fazer.
+        """Phase 1 of tool calling: sends messages and returns the tool calls the LLM wants to make.
 
-        Retorna (messages_so_far, tool_calls).
-        messages_so_far deve ser passado para get_reply_after_tools junto com os resultados reais.
+        Returns (messages_so_far, tool_calls).
+        messages_so_far must be passed to get_reply_after_tools along with the real results.
         """
         system = SYSTEM_PROMPT.format(contexto=contexto)
         messages: list[dict] = [{"role": "system", "content": system}]
@@ -574,7 +574,7 @@ class ConversationAgent:
                 max_tokens=500,
             )
         except Exception as e:
-            logger.error("Erro no get_tool_calls: %s", e)
+            logger.error("Error in get_tool_calls: %s", e)
             return messages, []
 
         tool_calls: list[dict] = [
@@ -603,20 +603,20 @@ class ConversationAgent:
         tool_results: dict[str, str],
         contexto: str = "",
     ) -> str:
-        """Fase 2 do tool calling: gera a resposta final com os resultados das ferramentas.
+        """Phase 2 of tool calling: generates the final response with the tool results.
 
-        Os resultados são injetados no system prompt como contexto adicional — não como
-        mensagens role:'tool'. Isso garante que a mensagem do usuário permaneça como
-        último item da cadeia, preservando a continuidade conversacional e evitando
-        que o LLM "reinicie" a conversa com saudações.
+        Results are injected into the system prompt as additional context — not as
+        role:'tool' messages. This ensures the user's message stays as the last item
+        in the chain, preserving conversational continuity and preventing the LLM
+        from "restarting" the conversation with greetings.
 
-        tool_results: dict de tool_call_id → resultado descritivo (dados reais do banco).
-        contexto: string de contexto do usuário (do _build_context) para o guardrail.
+        tool_results: dict of tool_call_id → descriptive result (real DB data).
+        contexto: user context string (from _build_context) for the guardrail.
         """
-        tool_context = "\n\n━━━ DADOS OBTIDOS PELAS FERRAMENTAS ━━━\n"
+        tool_context = "\n\n━━━ DATA RETRIEVED BY TOOLS ━━━\n"
         for result in tool_results.values():
             tool_context += result + "\n"
-        tool_context += "━━━ FIM DOS DADOS ━━━"
+        tool_context += "━━━ END OF DATA ━━━"
 
         rebuilt: list[dict] = []
         for msg in messages:
@@ -643,14 +643,14 @@ class ConversationAgent:
                 temperature=0.6,
                 max_tokens=500,
             )
-            reply = resp.text or "Feito!"
+            reply = resp.text or "Done!"
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
             return await validate_reply(
                 sanitized, history_for_guardrail, contexto, last_user_msg
             )
         except Exception as e:
-            logger.error("Erro no get_reply_after_tools: %s", e)
-            return "Feito!"
+            logger.error("Error in get_reply_after_tools: %s", e)
+            return "Done!"
 
     async def chat_with_tools(
         self,
@@ -659,7 +659,7 @@ class ConversationAgent:
         user_message: str,
         tools: list[dict] | None = None,
     ) -> tuple[str, list[dict]]:
-        """Atalho para quando não há tools ou não se precisa das duas fases separadas."""
+        """Shortcut for when there are no tools or the two phases are not needed separately."""
         system = SYSTEM_PROMPT.format(contexto=contexto)
         messages: list[dict] = [{"role": "system", "content": system}]
         for h in history[-20:]:
@@ -676,10 +676,10 @@ class ConversationAgent:
                 max_tokens=500,
             )
         except Exception as e:
-            logger.error("Erro no chat_with_tools: %s", e)
-            return "Tive um problema técnico agora. Me manda de novo em instantes!", []
+            logger.error("Error in chat_with_tools: %s", e)
+            return "I had a technical issue. Please send your message again in a moment!", []
 
-        reply = resp.text or "Tive um problema técnico."
+        reply = resp.text or "I had a technical issue."
         sanitized = await _sanitize_response(reply, has_history, user_greeted)
         history_for_guardrail = list(history) + [{"role": "user", "content": user_message}]
         validated = await validate_reply(sanitized, history_for_guardrail, contexto, user_message)
@@ -690,25 +690,25 @@ class ConversationAgent:
         phone: str,
         user_message: str,
         history: list[dict],
-        role: str = "geral",
-        produto_info: str = "nenhum produto em contexto",
-        status_negociacao: str = "sem negociação ativa",
-        usuario_nome: str = "não informado ainda",
+        role: str = "general",
+        product_info: str = "no product in context",
+        negotiation_status: str = "no active negotiation",
+        user_name: str = "not provided yet",
     ) -> str:
-        contexto = (
-            f"Nome: {usuario_nome} | Papel: {role} | "
-            f"Produto: {produto_info} | Negociação: {status_negociacao}"
+        context = (
+            f"Name: {user_name} | Role: {role} | "
+            f"Product: {product_info} | Negotiation: {negotiation_status}"
         )
         text, _ = await self.chat_with_tools(
-            contexto=contexto,
+            contexto=context,
             history=history,
             user_message=user_message,
             tools=None,
         )
         return text
 
-    async def extract_intent(self, mensagem: str, contexto: str = "geral") -> dict:
-        prompt = INTENT_EXTRACTION_PROMPT.format(mensagem=mensagem, contexto=contexto)
+    async def extract_intent(self, message: str, contexto: str = "general") -> dict:
+        prompt = INTENT_EXTRACTION_PROMPT.format(message=message, context=contexto)
         try:
             resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
@@ -718,27 +718,27 @@ class ConversationAgent:
             )
             return json.loads(resp.text or "{}")
         except Exception as e:
-            logger.error("Erro ao extrair intenção: %s", e)
-            return {"intencao": "outro", "descricao": mensagem}
+            logger.error("Error extracting intent: %s", e)
+            return {"intent_type": "other", "description": message}
 
     async def speak(
         self,
-        instrucao: str,
+        instruction: str,
         history: list[dict] | None = None,
         contexto: str = "",
     ) -> str:
-        """Gera resposta ao usuário com histórico e contexto completos.
+        """Generates a response to the user with full history and context.
 
-        O backend informa *o que* comunicar via instrucao; o agente decide
-        *como* falar, mantendo tom e continuidade da conversa.
-        Substitui build_reply e ask_confirmation.
+        The backend specifies *what* to communicate via instruction; the agent decides
+        *how* to say it, maintaining tone and conversational continuity.
+        Replaces build_reply and ask_confirmation.
         """
         history = history or []
-        system = SYSTEM_PROMPT.format(contexto=contexto or "sem contexto disponível")
+        system = SYSTEM_PROMPT.format(contexto=contexto or "no context available")
         system += (
-            "\n\n━━━ INSTRUÇÃO DO SISTEMA ━━━\n"
-            f"{instrucao}\n"
-            "Transforme em mensagem natural para WhatsApp. Não cite termos técnicos."
+            "\n\n━━━ SYSTEM INSTRUCTION ━━━\n"
+            f"{instruction}\n"
+            "Transform into a natural WhatsApp message. Do not use technical terms."
         )
         messages: list[dict] = [{"role": "system", "content": system}]
         for h in history[-20:]:
@@ -755,9 +755,9 @@ class ConversationAgent:
                 temperature=0.6,
                 max_tokens=500,
             )
-            reply = resp.text or instrucao
+            reply = resp.text or instruction
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
             return await validate_reply(sanitized, history, contexto, last_user_msg)
         except Exception as e:
-            logger.error("Erro no speak: %s", e)
-            return instrucao
+            logger.error("Error in speak: %s", e)
+            return instruction

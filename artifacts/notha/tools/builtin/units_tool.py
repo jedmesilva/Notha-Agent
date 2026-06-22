@@ -63,28 +63,28 @@ def _resolve_unit(unit_str: str) -> str:
 
 
 class UnitsTool(Tool):
-    name = "converter_unidades"
+    name = "convert_units"
     description = (
-        "Converte valores entre unidades de medida. "
-        "Suporta: peso (kg, lb, oz, g), comprimento (km, m, mi, ft, cm), "
-        "volume (l, ml, gal), temperatura (°C, °F, K), "
-        "energia (J, cal, kWh), pressão (Pa, bar, psi, atm), "
-        "potência (W, kW, HP), velocidade (km/h, mph, m/s, knot) e mais."
+        "Converts values between units of measurement. "
+        "Supports: weight (kg, lb, oz, g), length (km, m, mi, ft, cm), "
+        "volume (l, ml, gal), temperature (°C, °F, K), "
+        "energy (J, cal, kWh), pressure (Pa, bar, psi, atm), "
+        "power (W, kW, HP), speed (km/h, mph, m/s, knot) and more."
     )
     parameters = {
         "type": "object",
         "properties": {
             "value": {
                 "type": "number",
-                "description": "Valor numérico a converter.",
+                "description": "Numeric value to convert.",
             },
             "from_unit": {
                 "type": "string",
-                "description": "Unidade de origem. Ex: 'kg', 'mile', 'fahrenheit', 'gallon'.",
+                "description": "Source unit. E.g.: 'kg', 'mile', 'fahrenheit', 'gallon'.",
             },
             "to_unit": {
                 "type": "string",
-                "description": "Unidade de destino. Ex: 'lb', 'kilometer', 'celsius', 'liter'.",
+                "description": "Target unit. E.g.: 'lb', 'kilometer', 'celsius', 'liter'.",
             },
         },
         "required": ["value", "from_unit", "to_unit"],
@@ -92,7 +92,7 @@ class UnitsTool(Tool):
 
     async def execute(self, value: float, from_unit: str, to_unit: str) -> str:
         if not _PINT_AVAILABLE:
-            return "Biblioteca de conversão de unidades não disponível no momento."
+            return "Unit conversion library is not available at this time."
 
         try:
             from_resolved = _resolve_unit(from_unit)
@@ -114,8 +114,8 @@ class UnitsTool(Tool):
 
         except pint_errors.DimensionalityError:
             return (
-                f"Não é possível converter '{from_unit}' para '{to_unit}': "
-                f"as unidades são de tipos diferentes (ex: peso ≠ comprimento)."
+                f"Cannot convert '{from_unit}' to '{to_unit}': "
+                f"the units are of different types (e.g. weight ≠ length)."
             )
         except Exception as e:
-            return f"Erro na conversão de '{from_unit}' para '{to_unit}': {e}"
+            return f"Error converting '{from_unit}' to '{to_unit}': {e}"

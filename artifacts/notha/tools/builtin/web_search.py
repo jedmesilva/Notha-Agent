@@ -5,18 +5,17 @@ logger = logging.getLogger("notha.tools.web_search")
 
 
 class WebSearchTool(Tool):
-    name = "pesquisar_web"
+    name = "web_search"
     description = (
-        "Pesquisa informações atualizadas na internet. Use quando precisar de "
-        "dados recentes, notícias, fatos ou qualquer informação que possa estar "
-        "desatualizada no seu treinamento."
+        "Searches the internet for up-to-date information. Use when you need recent data, "
+        "news, facts, or any information that may be outdated in your training."
     )
     parameters = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "O termo ou pergunta a pesquisar.",
+                "description": "The search term or question to look up.",
             }
         },
         "required": ["query"],
@@ -30,17 +29,17 @@ class WebSearchTool(Tool):
                 results = list(ddgs.text(query, max_results=4))
 
             if not results:
-                return "Não encontrei resultados para essa pesquisa."
+                return "No results found for this search."
 
             lines = []
             for r in results:
                 title = r.get("title", "")
                 body = r.get("body", "")
                 href = r.get("href", "")
-                lines.append(f"{title}\n{body}\nFonte: {href}")
+                lines.append(f"{title}\n{body}\nSource: {href}")
 
             return "\n\n".join(lines)
 
         except Exception as e:
-            logger.error(f"Erro na busca web: {e}")
-            return f"Não consegui realizar a pesquisa no momento: {e}"
+            logger.error(f"Web search error: {e}")
+            return f"Could not perform the search at this time: {e}"

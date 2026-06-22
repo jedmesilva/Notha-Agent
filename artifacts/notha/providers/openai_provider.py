@@ -5,7 +5,7 @@ from providers.base import LLMProvider, LLMResponse, ToolCall
 
 
 class OpenAIProvider(LLMProvider):
-    """Provedor OpenAI — suporta API direta (OPENAI_API_KEY) ou Replit AI Integrations."""
+    """OpenAI provider — supports direct API (OPENAI_API_KEY) or Replit AI Integrations."""
 
     def __init__(self):
         replit_base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
@@ -18,8 +18,8 @@ class OpenAIProvider(LLMProvider):
             self._client = AsyncOpenAI(api_key=direct_api_key)
         else:
             raise RuntimeError(
-                "OpenAI não configurado. Defina OPENAI_API_KEY ou as variáveis "
-                "AI_INTEGRATIONS_OPENAI_BASE_URL e AI_INTEGRATIONS_OPENAI_API_KEY."
+                "OpenAI not configured. Set OPENAI_API_KEY or the "
+                "AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY variables."
             )
 
         self._default_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")

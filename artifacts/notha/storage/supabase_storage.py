@@ -6,13 +6,13 @@ from storage.base import Storage
 
 class SupabaseStorage(Storage):
     """
-    Armazenamento persistente via Supabase.
+    Persistent storage via Supabase.
 
-    Variáveis de ambiente necessárias:
-      - SUPABASE_URL       → URL do projeto Supabase (ex: https://xxx.supabase.co)
-      - SUPABASE_KEY       → chave de serviço (service_role key)
+    Required environment variables:
+      - SUPABASE_URL       → Supabase project URL (e.g. https://xxx.supabase.co)
+      - SUPABASE_KEY       → service role key
 
-    Schema esperado na tabela 'agent_store':
+    Expected schema in the 'agent_store' table:
       CREATE TABLE agent_store (
         key   TEXT PRIMARY KEY,
         value JSONB NOT NULL,
@@ -28,7 +28,7 @@ class SupabaseStorage(Storage):
 
         if not url or not key:
             raise RuntimeError(
-                "Supabase não configurado. Defina SUPABASE_URL e SUPABASE_KEY."
+                "Supabase not configured. Set SUPABASE_URL and SUPABASE_KEY."
             )
 
         try:
@@ -36,7 +36,7 @@ class SupabaseStorage(Storage):
             self._client = create_client(url, key)
         except ImportError:
             raise RuntimeError(
-                "Pacote 'supabase' não instalado. Execute: uv add supabase"
+                "Package 'supabase' not installed. Run: uv add supabase"
             )
 
     async def get(self, key: str) -> Any:

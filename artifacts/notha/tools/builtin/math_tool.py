@@ -16,13 +16,13 @@ _SAFE_LOCALS = {
 
 
 class MathTool(Tool):
-    name = "calcular"
+    name = "calculate"
     description = (
-        "Executa cálculos matemáticos com precisão garantida. "
-        "Use SEMPRE que precisar de aritmética, álgebra, equações ou qualquer conta "
-        "— nunca confie no seu próprio resultado sem verificar com essa tool. "
-        "Suporta: operações básicas, potências, raízes, logaritmos, trigonometria, "
-        "fatoração, simplificação de expressões e resolução de equações simples."
+        "Performs mathematical calculations with guaranteed precision. "
+        "Always use this when you need arithmetic, algebra, equations, or any numeric operation "
+        "— never trust your own result without verifying with this tool. "
+        "Supports: basic operations, powers, roots, logarithms, trigonometry, "
+        "factorisation, expression simplification, and simple equation solving."
     )
     parameters = {
         "type": "object",
@@ -30,7 +30,7 @@ class MathTool(Tool):
             "expression": {
                 "type": "string",
                 "description": (
-                    "Expressão matemática a calcular ou verificar. Exemplos: "
+                    "Mathematical expression to calculate or verify. Examples: "
                     "'1847 * 293', 'sqrt(144)', 'log(1000, 10)', "
                     "'solve(x**2 - 4, x)', 'simplify((x**2 - 1)/(x - 1))'"
                 ),
@@ -55,4 +55,4 @@ class MathTool(Tool):
             return f"{expression} = {evaluated} ≈ {numeric}"
 
         except Exception as e:
-            return f"Não foi possível calcular '{expression}': {e}"
+            return f"Could not calculate '{expression}': {e}"

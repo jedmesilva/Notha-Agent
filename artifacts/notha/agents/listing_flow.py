@@ -1,19 +1,19 @@
 """
-ListingFlowAgent — máquina de estados para cadastro completo de produto via WhatsApp.
+ListingFlowAgent — state machine for complete product listing via WhatsApp.
 
 Steps:
-  product          → O que você quer vender?
-  brand_model      → Marca, modelo e versão
-  usage_state      → Novo ou usado?
-  condition        → Estado de conservação
-  receipt          → Tem nota fiscal?
-  photos_upload    → Fotos do produto (múltiplas; texto = "pronto")
-  address          → Endereço de retirada
-  price            → Preço desejado e mínimo aceitável
-  processing       → [automático] busca web + banco + visão + precificação
-  review_condition → [condicional] pausa quando visão detecta condição inconsistente
-  confirm          → Resumo e confirmação
-  done             → Listing criado
+  product          → What do you want to sell?
+  brand_model      → Brand, model and version
+  usage_state      → New or used?
+  condition        → Condition
+  receipt          → Do you have a receipt?
+  photos_upload    → Product photos (multiple; text = "done")
+  address          → Pickup address
+  price            → Desired price and minimum acceptable
+  processing       → [automatic] web search + DB + vision + pricing
+  review_condition → [conditional] paused when vision detects inconsistent condition
+  confirm          → Summary and confirmation
+  done             → Listing created
 """
 import json
 import logging
@@ -23,7 +23,7 @@ logger = logging.getLogger("notha.agent.listing_flow")
 
 
 def _parse_jsonb(value, default):
-    """Converte valor JSONB do asyncpg para Python — suporta dict/list ou string JSON."""
+    """Converts asyncpg JSONB value to Python — supports dict/list or JSON string."""
     if value is None:
         return default
     if isinstance(value, (dict, list)):
@@ -35,33 +35,33 @@ def _parse_jsonb(value, default):
 
 
 CONDITION_LABEL = {
-    "like_new":  "Como novo (sem marcas de uso)",
-    "good":      "Bom estado (uso leve, poucas marcas)",
-    "fair":      "Conservado (uso normal, pequenos desgastes)",
-    "worn":      "Desgastado (uso intenso, marcas visíveis)",
-    "defective": "Com defeito (funciona parcialmente ou não funciona)",
+    "like_new":  "Like new (no signs of use)",
+    "good":      "Good condition (light use, few marks)",
+    "fair":      "Fair condition (normal use, minor wear)",
+    "worn":      "Worn (heavy use, visible marks)",
+    "defective": "Defective (partially or fully non-functional)",
 }
 
 
 class ListingFlowAgent:
 
     # ─────────────────────────────────────────────
-    # Guardrails — extração com evidência e retry
+    # Guardrails — extraction with evidence and retry
     # ─────────────────────────────────────────────
 
     _EXTRACT_GUARDRAIL = (
-        "\n\nRETORNE SEMPRE UM JSON VÁLIDO seguindo estas REGRAS DE EXTRAÇÃO (OBRIGATÓRIAS):\n"
-        "1. Para cada campo extraído, inclua um campo 'evidencia_<campo>' com o trecho "
-        "   EXATO da mensagem do usuário que embasa o valor. Se não houver trecho que sustente, "
-        "   o campo principal DEVE ser null e 'evidencia_<campo>' DEVE ser null.\n"
-        "2. NUNCA invente, infira ou suponha valores. Só extraia o que foi dito explicitamente.\n"
-        "3. NUNCA complete informações implícitas (ex: o usuário disse 'iPhone 13' sem citar 'Apple' "
-        "   → brand=null, não 'Apple').\n"
-        "4. Em caso de dúvida, prefira null a um valor incerto."
+        "\n\nALWAYS RETURN VALID JSON following these MANDATORY EXTRACTION RULES:\n"
+        "1. For each extracted field, include an 'evidence_<field>' field with the EXACT excerpt "
+        "   from the user's message that supports the value. If there is no excerpt to support it, "
+        "   the main field MUST be null and 'evidence_<field>' MUST be null.\n"
+        "2. NEVER invent, infer, or assume values. Only extract what was explicitly stated.\n"
+        "3. NEVER complete implicit information (e.g. user said 'iPhone 13' without citing 'Apple' "
+        "   → brand=null, not 'Apple').\n"
+        "4. When in doubt, prefer null over an uncertain value."
     )
 
     async def _extract(self, system: str, user_msg: str) -> dict:
-        """Extração base — use _extract_validated() nas etapas de negócio."""
+        """Base extraction — use _extract_validated() in business steps."""
         try:
             resp = await get_provider().complete(
                 messages=[
@@ -74,7 +74,7 @@ class ListingFlowAgent:
             )
             return json.loads(resp.text or "{}")
         except Exception as e:
-            logger.error(f"Erro na extração LLM: {e}")
+            logger.error(f"LLM extraction error: {e}")
             return {}
 
     async def _extract_validated(
@@ -85,13 +85,13 @@ class ListingFlowAgent:
         max_retries: int = 2,
     ) -> dict:
         """
-        Extração com guardrails:
-          - Exige campo 'evidencia_<campo>' em cada campo extraído
-          - Verifica que a evidência é um substring real da mensagem do usuário
-          - Aplica validators[campo](value) para cada campo — retorna None se inválido
-          - Retry com feedback de erro (max_retries tentativas)
+        Extraction with guardrails:
+          - Requires an 'evidence_<field>' field for each extracted field
+          - Verifies that the evidence is a real substring of the user message
+          - Applies validators[field](value) for each field — returns None if invalid
+          - Retry with error feedback (max_retries attempts)
 
-        validators: {campo: callable(value) -> value_validado | None}
+        validators: {field: callable(value) -> validated_value | None}
         """
         messages = [
             {"role": "system", "content": system + self._EXTRACT_GUARDRAIL},
@@ -99,7 +99,7 @@ class ListingFlowAgent:
         ]
         last_result: dict = {}
 
-        for tentativa in range(max_retries):
+        for attempt in range(max_retries):
             try:
                 resp = await get_provider().complete(
                     messages=messages,
@@ -109,53 +109,53 @@ class ListingFlowAgent:
                 )
                 raw = json.loads(resp.text or "{}")
             except Exception as e:
-                logger.error(f"Extração validada falhou (tentativa {tentativa+1}): {e}")
+                logger.error(f"Validated extraction failed (attempt {attempt+1}): {e}")
                 break
 
-            erros: list[str] = []
-            resultado: dict = {}
+            errors: list[str] = []
+            result: dict = {}
             user_lower = user_msg.lower()
 
-            for campo, validator in validators.items():
-                valor_bruto = raw.get(campo)
-                evidencia = raw.get(f"evidencia_{campo}")
+            for field, validator in validators.items():
+                raw_value = raw.get(field)
+                evidence = raw.get(f"evidence_{field}")
 
-                if valor_bruto is not None:
-                    if evidencia is None or str(evidencia).lower() not in user_lower:
-                        erros.append(
-                            f"Campo '{campo}': valor '{valor_bruto}' extraído sem evidência textual na mensagem do usuário. "
-                            f"Retorne null para '{campo}' e null para 'evidencia_{campo}'."
+                if raw_value is not None:
+                    if evidence is None or str(evidence).lower() not in user_lower:
+                        errors.append(
+                            f"Field '{field}': value '{raw_value}' extracted without textual evidence in the user message. "
+                            f"Return null for '{field}' and null for 'evidence_{field}'."
                         )
-                        resultado[campo] = None
+                        result[field] = None
                         continue
 
-                valor_validado = validator(valor_bruto)
-                if valor_bruto is not None and valor_validado is None:
-                    erros.append(
-                        f"Campo '{campo}': valor '{valor_bruto}' inválido. "
-                        f"Retorne null ou um dos valores permitidos. Inclua 'evidencia_{campo}' com o trecho exato."
+                validated_value = validator(raw_value)
+                if raw_value is not None and validated_value is None:
+                    errors.append(
+                        f"Field '{field}': value '{raw_value}' is invalid. "
+                        f"Return null or one of the allowed values. Include 'evidence_{field}' with the exact excerpt."
                     )
-                resultado[campo] = valor_validado
+                result[field] = validated_value
 
-            last_result = resultado
+            last_result = result
 
-            if not erros:
-                return resultado
+            if not errors:
+                return result
 
-            logger.warning(f"Extração com erros (tentativa {tentativa+1}): {erros}")
+            logger.warning(f"Extraction with errors (attempt {attempt+1}): {errors}")
             messages.append({"role": "assistant", "content": json.dumps(raw)})
             messages.append({
                 "role": "user",
                 "content": (
-                    "Sua extração contém problemas. Corrija e retorne um novo JSON válido:\n"
-                    + "\n".join(f"- {e}" for e in erros)
+                    "Your extraction has problems. Correct them and return a new valid JSON:\n"
+                    + "\n".join(f"- {e}" for e in errors)
                 ),
             })
 
         return last_result
 
     # ─────────────────────────────────────────────
-    # Validators reutilizáveis
+    # Reusable validators
     # ─────────────────────────────────────────────
 
     @staticmethod
@@ -180,7 +180,7 @@ class ListingFlowAgent:
 
     @staticmethod
     def _val_price(v):
-        """Preço deve ser número positivo entre R$1 e R$9.999.999."""
+        """Price must be a positive number between R$1 and R$9,999,999."""
         try:
             f = float(v)
             if 1.0 <= f <= 9_999_999.0:
@@ -201,10 +201,10 @@ class ListingFlowAgent:
             return v
         return None
 
-    async def _reply(self, instrucao: str) -> str:
+    async def _reply(self, instruction: str) -> str:
         """
-        Gera resposta conversacional a partir de uma instrução de roteiro.
-        O LLM só pode redigir a mensagem — não decide dados, não inventa informações.
+        Generates a conversational response from a script instruction.
+        The LLM can only write the message — it does not decide data, does not invent information.
         """
         try:
             resp = await get_provider().complete(
@@ -212,40 +212,40 @@ class ListingFlowAgent:
                     {
                         "role": "system",
                         "content": (
-                            "Você é o NOTHA, assistente de venda de produtos via WhatsApp. "
-                            "Sua única função aqui é redigir a mensagem descrita na instrução, "
-                            "de forma curta, direta e natural. Máximo 3 frases. Sem markdown. "
-                            "Português brasileiro coloquial.\n\n"
-                            "PROIBIDO:\n"
-                            "- Inventar ou inferir dados que não estão na instrução\n"
-                            "- Sugerir preços ou valores não fornecidos\n"
-                            "- Fazer perguntas além do que a instrução pede\n"
-                            "- Começar com saudações (Oi!, Olá!, Certo!, Perfeito!)\n"
-                            "- Dar informações sobre o produto além das fornecidas\n"
-                            "- Prometer funcionalidades ou prazos não confirmados"
+                            "You are NOTHA, a product sales assistant via WhatsApp. "
+                            "Your only role here is to write the message described in the instruction, "
+                            "in a short, direct and natural way. Maximum 3 sentences. No markdown. "
+                            "Detect the user's language from the conversation context and reply in that language.\n\n"
+                            "PROHIBITED:\n"
+                            "- Inventing or inferring data not in the instruction\n"
+                            "- Suggesting prices or values not provided\n"
+                            "- Asking questions beyond what the instruction requests\n"
+                            "- Starting with greetings (Hi!, Hello!, Sure!, Perfect!)\n"
+                            "- Giving product information beyond what was provided\n"
+                            "- Promising features or deadlines not confirmed"
                         ),
                     },
-                    {"role": "user", "content": instrucao},
+                    {"role": "user", "content": instruction},
                 ],
                 temperature=0.4,
                 max_tokens=250,
             )
-            return resp.text or instrucao
+            return resp.text or instruction
         except Exception:
-            return instrucao
+            return instruction
 
     # ─────────────────────────────────────────────
-    # Entrada do fluxo
+    # Flow entry point
     # ─────────────────────────────────────────────
 
     async def start(self) -> str:
         return await self._reply(
-            "Inicie o cadastro perguntando o que o usuário quer vender. "
-            "Uma pergunta simples e direta, no máximo uma frase."
+            "Start the listing by asking what the user wants to sell. "
+            "One simple and direct question, at most one sentence."
         )
 
     # ─────────────────────────────────────────────
-    # Dispatcher principal
+    # Main dispatcher
     # ─────────────────────────────────────────────
 
     async def handle_message(
@@ -256,10 +256,10 @@ class ListingFlowAgent:
         db=None,
     ) -> tuple[dict, list, str, bool]:
         """
-        Processa mensagem de texto no fluxo de cadastro.
+        Processes a text message in the listing flow.
 
-        Retorna: (data, photos, resposta, completed)
-          - completed=True quando o step é 'confirm' e usuário confirmou
+        Returns: (data, photos, reply, completed)
+          - completed=True when the step is 'confirm' and the user confirmed
         """
         step = flow["step"]
         data   = _parse_jsonb(flow.get("data"), {})
@@ -280,7 +280,7 @@ class ListingFlowAgent:
 
         handler = handlers.get(step)
         if not handler:
-            return data, photos, "Tudo certo! Pode continuar.", False
+            return data, photos, "", False
 
         if step in ("photos_upload", "address"):
             return await handler(data, photos, text, seller_profile)
@@ -297,8 +297,8 @@ class ListingFlowAgent:
         caption: str,
     ) -> tuple[list, str]:
         """
-        Processa mídia recebida. Só aceita fotos durante o step 'photos_upload'.
-        Retorna (photos_updated, resposta).
+        Processes received media. Only accepts photos during the 'photos_upload' step.
+        Returns (photos_updated, reply).
         """
         step   = flow["step"]
         photos = _parse_jsonb(flow.get("photos"), [])
@@ -310,42 +310,42 @@ class ListingFlowAgent:
         n = len(photos)
         if n == 1:
             reply = await self._reply(
-                "Recebi a primeira foto do produto! "
-                "Diga que pode mandar mais fotos de outros ângulos ou da etiqueta/embalagem. "
-                "Quando terminar é só digitar 'pronto'."
+                "Received the first product photo! "
+                "Tell the user they can send more photos from different angles, the label, or packaging. "
+                "When done, just type 'done'."
             )
         else:
             reply = await self._reply(
-                f"Recebida a foto {n}! Pode mandar mais ou digitar 'pronto' quando terminar."
+                f"Received photo {n}! Send more or type 'done' when finished."
             )
         return photos, reply
 
     # ─────────────────────────────────────────────
-    # Handlers de cada etapa
+    # Step handlers
     # ─────────────────────────────────────────────
 
     async def _step_product(self, data, photos, text):
         data["description"] = text.strip()
-        pergunta = await self._reply(
-            f"O usuário quer vender: '{text}'. "
-            "Agora pergunte a marca, modelo e versão (se aplicável). "
-            "Exemplo de resposta esperada: 'iPhone 13 Pro, 256GB' ou 'Nike Air Max 90'. "
-            "Se não tiver marca/modelo, pode responder 'sem marca' ou 'não sei'."
+        question = await self._reply(
+            f"The user wants to sell: '{text}'. "
+            "Now ask for the brand, model and version (if applicable). "
+            "Example expected response: 'iPhone 13 Pro, 256GB' or 'Nike Air Max 90'. "
+            "If there is no brand/model, they can answer 'no brand' or 'don't know'."
         )
         data["step_next"] = "brand_model"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_brand_model(self, data, photos, text):
         ext = await self._extract_validated(
             system=(
-                "Extraia marca, modelo e versão do texto.\n"
-                "Retorne JSON com os campos: brand, model, version.\n"
-                "Exemplos:\n"
-                "  'iPhone 13 Pro 256GB' → brand=null (usuário não disse 'Apple'), model='iPhone 13 Pro', version='256GB'\n"
+                "Extract brand, model and version from the text.\n"
+                "Return JSON with fields: brand, model, version.\n"
+                "Examples:\n"
+                "  'iPhone 13 Pro 256GB' → brand=null (user did not say 'Apple'), model='iPhone 13 Pro', version='256GB'\n"
                 "  'Nike Air Max 90' → brand='Nike', model='Air Max 90', version=null\n"
-                "  'sem marca' ou 'não sei' → todos null\n"
-                "Se o usuário não mencionou a marca explicitamente, retorne brand=null. "
-                "Não complete com marcas que você 'sabe' — só o que foi dito."
+                "  'no brand' or 'don't know' → all null\n"
+                "If the user did not explicitly mention the brand, return brand=null. "
+                "Do not fill in brands you 'know' — only extract what was actually said."
             ),
             user_msg=text,
             validators={
@@ -359,42 +359,42 @@ class ListingFlowAgent:
             "model":   ext.get("model"),
             "version": ext.get("version"),
         })
-        pergunta = await self._reply(
-            "Pergunte se o produto é novo (nunca usado, pode estar na caixa) ou usado."
+        question = await self._reply(
+            "Ask if the product is new (never used, may still be in the box) or used."
         )
         data["step_next"] = "usage_state"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_usage_state(self, data, photos, text):
         ext = await self._extract_validated(
             system=(
-                "Determine se o produto é novo ou usado com base EXCLUSIVAMENTE no que o usuário disse.\n"
-                "Valores permitidos para 'usage_state': 'new' ou 'used'.\n"
-                "Palavras que indicam new: novo, nunca usado, lacrado, na caixa, zerado.\n"
-                "Na dúvida, retorne null — não assuma 'used' automaticamente."
+                "Determine whether the product is new or used based EXCLUSIVELY on what the user said.\n"
+                "Allowed values for 'usage_state': 'new' or 'used'.\n"
+                "Words indicating new: new, never used, sealed, in the box, brand new, zero km, nunca usado, lacrado, na caixa, zerado.\n"
+                "When in doubt, return null — do not automatically assume 'used'."
             ),
             user_msg=text,
             validators={"usage_state": self._val_usage_state},
         )
         data["usage_state"] = ext.get("usage_state") or "used"
-        opcoes = "\n".join(f"  {i+1}. {v}" for i, v in enumerate(CONDITION_LABEL.values()))
-        pergunta = await self._reply(
-            f"Produto declarado como {data['usage_state']}. "
-            "Agora pergunte sobre o estado de conservação. As opções são:\n"
-            f"{opcoes}\n"
-            "Peça que o usuário escolha um número ou descreva com as próprias palavras."
+        options = "\n".join(f"  {i+1}. {v}" for i, v in enumerate(CONDITION_LABEL.values()))
+        question = await self._reply(
+            f"Product declared as {data['usage_state']}. "
+            "Now ask about the condition. The options are:\n"
+            f"{options}\n"
+            "Ask the user to choose a number or describe it in their own words."
         )
         data["step_next"] = "condition"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_condition(self, data, photos, text):
         ext = await self._extract_validated(
             system=(
-                "Classifique o estado de conservação com base APENAS no que o usuário disse.\n"
-                "Valores permitidos para 'condition': like_new, good, fair, worn, defective.\n"
-                "Mapeamento de números: 1=like_new, 2=good, 3=fair, 4=worn, 5=defective.\n"
-                "Em 'condition_description', copie literalmente as palavras do usuário — não parafraseie.\n"
-                "Se a mensagem for ambígua, retorne condition=null."
+                "Classify the condition based ONLY on what the user said.\n"
+                "Allowed values for 'condition': like_new, good, fair, worn, defective.\n"
+                "Number mapping: 1=like_new, 2=good, 3=fair, 4=worn, 5=defective.\n"
+                "In 'condition_description', copy the user's exact words — do not paraphrase.\n"
+                "If the message is ambiguous, return condition=null."
             ),
             user_msg=text,
             validators={
@@ -404,84 +404,84 @@ class ListingFlowAgent:
         )
         data["condition"]             = ext.get("condition") or "fair"
         data["condition_description"] = ext.get("condition_description") or text.strip()
-        pergunta = await self._reply("Pergunte se o produto tem nota fiscal.")
+        question = await self._reply("Ask if the product has a receipt.")
         data["step_next"] = "receipt"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_receipt(self, data, photos, text):
         ext = await self._extract_validated(
             system=(
-                "O usuário está informando se o produto tem nota fiscal.\n"
-                "Extraia apenas o campo 'has_receipt' (true ou false).\n"
-                "Palavras que indicam 'tem': tem, sim, tenho, possui, veio com, inclui.\n"
-                "Palavras que indicam 'não tem': não, sem, perdi, não tenho, não tem.\n"
-                "Se ambíguo, retorne null — não assuma false automaticamente."
+                "The user is saying whether the product has a receipt.\n"
+                "Extract only the field 'has_receipt' (true or false).\n"
+                "Words indicating 'has receipt': yes, have, includes, came with, it has, tem, sim, tenho, possui, veio com, inclui.\n"
+                "Words indicating 'no receipt': no, without, lost, don't have, não, sem, perdi, não tenho, não tem.\n"
+                "If ambiguous, return null — do not automatically assume false."
             ),
             user_msg=text,
             validators={"has_receipt": self._val_bool},
         )
         data["has_receipt"] = ext.get("has_receipt") if ext.get("has_receipt") is not None else False
-        pergunta = await self._reply(
-            "Instrua o usuário a enviar as fotos do produto agora. "
-            "Diga que pode mandar várias fotos mostrando diferentes ângulos, "
-            "e também pode fotografar etiqueta, embalagem ou nota fiscal se tiver. "
-            "Quando terminar, é só digitar 'pronto'."
+        question = await self._reply(
+            "Instruct the user to send product photos now. "
+            "Say they can send multiple photos showing different angles, "
+            "and can also photograph the label, packaging or receipt if they have one. "
+            "When done, just type 'done'."
         )
         data["step_next"] = "photos_upload"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_photos_text(self, data, photos, text, seller_profile):
-        """Texto recebido durante etapa de fotos — geralmente indica que terminou."""
+        """Text received during the photos step — usually indicates they're done."""
         if not photos:
             reply = await self._reply(
-                "Ainda não recebi nenhuma foto. Por favor, mande pelo menos uma foto do produto para continuar!"
+                "No photo received yet. Please send at least one product photo to continue!"
             )
             return data, photos, reply, False
 
         ready = await self._extract_validated(
             system=(
-                "O usuário está no processo de envio de fotos de um produto.\n"
-                "Determine APENAS se a mensagem indica que terminou de enviar fotos.\n"
-                "Campo 'ready': true se a mensagem sinaliza conclusão, false se ainda quer enviar mais.\n"
-                "Palavras que indicam conclusão: pronto, ok, é isso, terminei, pode seguir, continuar, acabou, só isso, encerrei.\n"
-                "Se a mensagem for uma pergunta, comentário ou descrição — não é 'ready'."
+                "The user is in the process of sending product photos.\n"
+                "Determine ONLY whether the message indicates they have finished sending photos.\n"
+                "Field 'ready': true if the message signals completion, false if they want to send more.\n"
+                "Words indicating completion: done, ok, that's it, finished, go ahead, continue, all done, pronto, ok, é isso, terminei, pode seguir.\n"
+                "If the message is a question, comment or description — it is not 'ready'."
             ),
             user_msg=text,
             validators={"ready": self._val_ready},
         )
         if not ready.get("ready", True):
             data["photo_notes"] = text
-            reply = await self._reply("Anotei! Tem mais fotos para enviar ou pode digitar 'pronto' para continuar.")
+            reply = await self._reply("Got it! Send more photos or type 'done' to continue.")
             return data, photos, reply, False
 
         pickup_address = (seller_profile or {}).get("pickup_address")
         if pickup_address:
-            pergunta = await self._reply(
-                f"Recebi {len(photos)} foto(s)! "
-                f"O endereço de retirada cadastrado é: {pickup_address}. "
-                "Pergunte se quer usar esse endereço ou informar um diferente para este produto."
+            question = await self._reply(
+                f"Received {len(photos)} photo(s)! "
+                f"The registered pickup address is: {pickup_address}. "
+                "Ask if they want to use this address or provide a different one for this product."
             )
         else:
-            pergunta = await self._reply(
-                f"Recebi {len(photos)} foto(s)! "
-                "Agora preciso do endereço de retirada após a venda. "
-                "Peça o endereço completo: rua, número, bairro, cidade e CEP."
+            question = await self._reply(
+                f"Received {len(photos)} photo(s)! "
+                "Now I need the pickup address after the sale. "
+                "Ask for the full address: street, number, neighbourhood, city and postcode."
             )
         data["_suggested_address"] = pickup_address
         data["step_next"] = "address"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_address(self, data, photos, text, seller_profile):
         suggested = data.get("_suggested_address")
         if suggested:
             ext = await self._extract_validated(
                 system=(
-                    "O usuário foi perguntado se confirma o endereço cadastrado ou quer informar um novo.\n"
-                    "Extraia:\n"
-                    "  'confirms_existing': true se o usuário aceitou o endereço já cadastrado.\n"
-                    "  'new_address': string com o novo endereço, ou null se não forneceu um novo.\n"
-                    "Palavras de confirmação: sim, pode usar, esse mesmo, o cadastrado, tá bom, ok.\n"
-                    "NUNCA invente um endereço — se o usuário não forneceu texto de endereço, new_address=null."
+                    "The user was asked whether to confirm the registered address or provide a new one.\n"
+                    "Extract:\n"
+                    "  'confirms_existing': true if the user accepted the already registered address.\n"
+                    "  'new_address': string with the new address, or null if none provided.\n"
+                    "Confirmation words: yes, use that one, same one, the registered one, ok, sure, sim, pode usar, esse mesmo, o cadastrado, tá bom.\n"
+                    "NEVER invent an address — if the user did not provide address text, new_address=null."
                 ),
                 user_msg=text,
                 validators={
@@ -498,24 +498,24 @@ class ListingFlowAgent:
         else:
             data["pickup_address"] = text.strip()
 
-        pergunta = await self._reply(
-            "Agora pergunte qual o preço de venda que o vendedor quer anunciar "
-            "e qual o valor mínimo que aceitaria. "
-            "Explique que o mínimo é sigiloso e nunca será revelado ao comprador."
+        question = await self._reply(
+            "Now ask what selling price the seller wants to list the product at, "
+            "and what is the minimum they would accept. "
+            "Explain that the minimum is confidential and will never be revealed to the buyer."
         )
         data["step_next"] = "price"
-        return data, photos, pergunta, False
+        return data, photos, question, False
 
     async def _step_price(self, data, photos, text, db):
         ext = await self._extract_validated(
             system=(
-                "O usuário está informando o preço de venda e/ou o preço mínimo que aceitaria.\n"
-                "Extraia:\n"
-                "  'asking_price': valor numérico em reais (ex: 'quero 500' → 500.0), ou null.\n"
-                "  'seller_min_price': valor numérico do mínimo aceitável (ex: 'aceito no mínimo 400' → 400.0), ou null.\n"
-                "Valores por extenso são aceitos: 'quinhentos reais' → 500.\n"
-                "NUNCA invente um preço mínimo se o usuário não mencionou. "
-                "NUNCA arredonde ou ajuste o valor — use exatamente o que o usuário disse."
+                "The user is providing the sale price and/or the minimum price they would accept.\n"
+                "Extract:\n"
+                "  'asking_price': numeric value in the local currency (e.g. 'I want 500' → 500.0), or null.\n"
+                "  'seller_min_price': numeric minimum acceptable value (e.g. 'I accept at least 400' → 400.0), or null.\n"
+                "Values written in words are accepted: 'five hundred' → 500.\n"
+                "NEVER invent a minimum price if the user did not mention one. "
+                "NEVER round or adjust the value — use exactly what the user said."
             ),
             user_msg=text,
             validators={
@@ -527,23 +527,24 @@ class ListingFlowAgent:
         data["seller_min_price"] = ext.get("seller_min_price")
         data["step_next"] = "processing"
         reply = await self._reply(
-            "Diga que recebeu tudo e que agora vai pesquisar o produto na internet e no histórico "
-            "da plataforma para sugerir o melhor preço. Diga que isso leva alguns segundos."
+            "Tell the user you received everything and will now search for the product online "
+            "and in the platform history to suggest the best price. "
+            "Say this takes a few seconds."
         )
         return data, photos, reply, False
 
     async def _step_review_condition(self, data, photos, text):
         """
-        Pausa ativada quando a análise visual detecta inconsistência com a condição declarada.
+        Pause activated when visual analysis detects inconsistency with the declared condition.
 
-        Mostra ao vendedor o que foi detectado nas fotos e oferece duas opções:
-          1. Manter a condição declarada (ele confirma que está certo)
-          2. Corrigir a condição (escolhe uma das 5 opções)
+        Shows the seller what was detected in the photos and offers two options:
+          1. Keep the declared condition (they confirm it's correct)
+          2. Correct the condition (choose one of the 5 options)
 
-        Só avança para 'confirm' após uma resposta válida.
+        Only advances to 'confirm' after a valid response.
         """
         vision_data = _parse_jsonb(data.get("vision_analysis"), {})
-        visual_desc = vision_data.get("descricao_visual", "") if vision_data else ""
+        visual_desc = vision_data.get("visual_description", "") if vision_data else ""
         current_condition = data.get("condition", "fair")
 
         valid_options = list(CONDITION_LABEL.keys())
@@ -553,15 +554,15 @@ class ListingFlowAgent:
 
         ext = await self._extract_validated(
             system=(
-                "O vendedor está respondendo sobre o estado de conservação do produto.\n"
-                "Ele pode estar confirmando a condição já declarada ou corrigindo para uma nova.\n\n"
-                "Extraia:\n"
-                "  'kept': true se confirmou manter a condição atual, false se quer corrigir.\n"
-                "  'new_condition': valor da nova condição se ele corrigiu, null se manteve.\n"
-                f"Valores válidos para 'new_condition': {', '.join(valid_options)}.\n"
-                "Mapeamento de números: 1=like_new, 2=good, 3=fair, 4=worn, 5=defective.\n"
-                "Palavras de confirmação: sim, mantenho, está correto, pode deixar, é isso mesmo.\n"
-                "Se ambíguo, kept=false e new_condition=null (pede nova resposta)."
+                "The seller is responding about the product's condition.\n"
+                "They may be confirming the declared condition or correcting it to a new one.\n\n"
+                "Extract:\n"
+                "  'kept': true if they confirmed keeping the current condition, false if they want to correct it.\n"
+                f"  'new_condition': value of the new condition if corrected, null if kept.\n"
+                f"Valid values for 'new_condition': {', '.join(valid_options)}.\n"
+                "Number mapping: 1=like_new, 2=good, 3=fair, 4=worn, 5=defective.\n"
+                "Confirmation words: yes, keep it, that's correct, it's fine, exactly, sim, mantenho, está correto, pode deixar.\n"
+                "If ambiguous, kept=false and new_condition=null (ask again)."
             ),
             user_msg=text,
             validators={
@@ -577,39 +578,39 @@ class ListingFlowAgent:
             data["condition_revised"] = False
             data["step_next"] = "confirm"
             reply = await self._reply(
-                f"O vendedor manteve a condição declarada: {CONDITION_LABEL.get(current_condition, current_condition)}. "
-                "Diga que está registrado e que vamos seguir para o resumo do anúncio."
+                f"The seller kept the declared condition: {CONDITION_LABEL.get(current_condition, current_condition)}. "
+                "Confirm it is registered and that we will proceed to the listing summary."
             )
             return data, photos, reply, False
 
         if new_condition:
             data["condition"]             = new_condition
-            data["condition_description"] = f"Corrigido pelo vendedor após análise visual: {text.strip()}"
+            data["condition_description"] = f"Corrected by seller after visual analysis: {text.strip()}"
             data["condition_revised"]     = True
             data["step_next"] = "confirm"
             reply = await self._reply(
-                f"O vendedor corrigiu a condição para: {CONDITION_LABEL.get(new_condition, new_condition)}. "
-                "Confirme a correção e diga que vamos seguir para o resumo."
+                f"The seller corrected the condition to: {CONDITION_LABEL.get(new_condition, new_condition)}. "
+                "Confirm the correction and say we will proceed to the summary."
             )
             return data, photos, reply, False
 
         msg = await self._reply(
-            f"Não entendi a resposta. Apresente as opções de condição e pergunte qual se aplica:\n"
+            f"Response not understood. Present the condition options and ask which applies:\n"
             f"{options_text}\n"
-            "Ou diga 'sim' para confirmar a condição já declarada."
+            "Or say 'yes' to confirm the already declared condition."
         )
         return data, photos, msg, False
 
     async def _step_confirm(self, data, photos, text):
         ext = await self._extract_validated(
             system=(
-                "O usuário está respondendo ao resumo do anúncio para confirmar ou rejeitar.\n"
-                "Extraia:\n"
-                "  'confirmed': true se o usuário aceitou e quer publicar, false se recusou ou quer mudar algo.\n"
-                "  'new_price': valor numérico se o usuário pediu explicitamente para anunciar por outro preço, null caso contrário.\n"
-                "Confirmações claras: sim, confirmo, pode anunciar, fechou, ok, tá bom, isso mesmo, pode publicar.\n"
-                "Recusas: não, mudei de ideia, quero mudar, cancela, espera.\n"
-                "NUNCA deduza 'confirmed=true' se a mensagem for ambígua. Na dúvida, confirmed=false."
+                "The user is responding to the listing summary to confirm or reject it.\n"
+                "Extract:\n"
+                "  'confirmed': true if the user accepted and wants to publish, false if they refused or want to change something.\n"
+                "  'new_price': numeric value if the user explicitly asked to list at a different price, null otherwise.\n"
+                "Clear confirmations: yes, confirm, list it, deal, ok, sure, go ahead, sim, confirmo, pode anunciar, fechou.\n"
+                "Rejections: no, changed my mind, I want to change, cancel, wait, não, mudei de ideia.\n"
+                "NEVER infer 'confirmed=true' if the message is ambiguous. When in doubt, confirmed=false."
             ),
             user_msg=text,
             validators={
@@ -626,17 +627,17 @@ class ListingFlowAgent:
         if new_price:
             data["listed_price"] = new_price
             reply = await self._reply(
-                f"O usuário quer anunciar por R$ {new_price:.2f}. "
-                "Confirme a alteração e pergunte se quer publicar com esse preço."
+                f"The user wants to list at R$ {new_price:.2f}. "
+                "Confirm the change and ask if they want to publish at this price."
             )
         else:
             reply = await self._reply(
-                "O usuário não confirmou. Pergunte o que gostaria de ajustar no anúncio."
+                "The user did not confirm. Ask what they would like to adjust in the listing."
             )
         return data, photos, reply, False
 
     # ─────────────────────────────────────────────
-    # Processamento automático (step: processing)
+    # Automatic processing (step: processing)
     # ─────────────────────────────────────────────
 
     async def processar(
@@ -646,13 +647,13 @@ class ListingFlowAgent:
         db=None,
     ) -> tuple[dict, str]:
         """
-        Executa o processamento completo:
-          1. Busca web: preços de mercado + ficha técnica do produto
-          2. Histórico do banco: vendas similares (por categoria)
-          3. Análise visual: GPT-4o Vision nas fotos enviadas
-          4. PricingAgent: cruza tudo e gera preço sugerido + mínimo
+        Runs the full processing pipeline:
+          1. Web search: market prices + product specs
+          2. DB history: similar sold listings (by category)
+          3. Visual analysis: GPT-4o Vision on submitted photos
+          4. PricingAgent: combines all data to generate suggested price + minimum
 
-        Retorna (data_atualizado, mensagem_de_confirmação).
+        Returns (updated_data, confirmation_message).
         """
         from agents.pricing import PricingAgent
         from tools.builtin.web_search import WebSearchTool
@@ -673,26 +674,26 @@ class ListingFlowAgent:
 
         product_name = " ".join(filter(None, [brand, model, version])) or description
 
-        # 1. Busca web — preços + ficha técnica
+        # 1. Web search — prices + product specs
         searcher = WebSearchTool()
         web_prices, web_specs = None, None
         try:
             web_prices = await searcher.execute(
-                f"preço {product_name} usado site:olx.com.br OR site:mercadolivre.com.br"
+                f"price {product_name} used site:olx.com.br OR site:mercadolivre.com.br"
             )
         except Exception as e:
-            logger.warning(f"Busca de preços falhou: {e}")
+            logger.warning(f"Price search failed: {e}")
         try:
-            web_specs = await searcher.execute(f"{product_name} especificações ficha técnica")
+            web_specs = await searcher.execute(f"{product_name} specifications technical sheet")
         except Exception as e:
-            logger.warning(f"Busca de specs falhou: {e}")
+            logger.warning(f"Specs search failed: {e}")
 
         data["web_info"] = {
             "prices": (web_prices or "")[:600],
             "specs":  (web_specs  or "")[:400],
         }
 
-        # 2. Histórico de vendas similares no banco
+        # 2. Similar sales history from DB
         similar_history = []
         category = data.get("category") or _infer_category(product_name)
         data["category"] = category
@@ -701,9 +702,9 @@ class ListingFlowAgent:
                 rows = await listing_repo.find_similar_sold(category)
                 similar_history = [dict(r) for r in rows]
             except Exception as e:
-                logger.warning(f"Histórico banco falhou: {e}")
+                logger.warning(f"DB history failed: {e}")
 
-        # 3. Download das imagens como base64 (uma única vez)
+        # 3. Download images as base64 (once only)
         base64_images: list[str] = []
         if photos:
             from whatsapp import download_media_as_base64
@@ -714,9 +715,9 @@ class ListingFlowAgent:
                 )
                 if data_uri:
                     base64_images.append(data_uri)
-            logger.info(f"Download de {len(base64_images)}/{len(photos[:4])} fotos para análise visual")
+            logger.info(f"Downloaded {len(base64_images)}/{len(photos[:4])} photos for visual analysis")
 
-        # 3b. Análise visual das fotos (GPT-4o Vision)
+        # 3b. Visual analysis of photos (GPT-4o Vision)
         vision_data: dict | None = None
         if base64_images:
             vision_data = await self._analyze_photos(
@@ -724,72 +725,72 @@ class ListingFlowAgent:
             )
         data["vision_analysis"] = vision_data
 
-        # 3c. Preenche campos vazios com dados extraídos visualmente
+        # 3c. Fill empty fields with visually extracted data
         if vision_data:
             filled = []
-            if not data.get("brand") and vision_data.get("marca_visivel"):
-                data["brand"]        = vision_data["marca_visivel"]
+            if not data.get("brand") and vision_data.get("visible_brand"):
+                data["brand"]        = vision_data["visible_brand"]
                 data["brand_source"] = "vision"
                 filled.append(f"brand='{data['brand']}'")
-            if not data.get("model") and vision_data.get("modelo_visivel"):
-                data["model"]        = vision_data["modelo_visivel"]
+            if not data.get("model") and vision_data.get("visible_model"):
+                data["model"]        = vision_data["visible_model"]
                 data["model_source"] = "vision"
                 filled.append(f"model='{data['model']}'")
-            if not data.get("version") and vision_data.get("versao_visivel"):
-                data["version"]        = vision_data["versao_visivel"]
+            if not data.get("version") and vision_data.get("visible_version"):
+                data["version"]        = vision_data["visible_version"]
                 data["version_source"] = "vision"
                 filled.append(f"version='{data['version']}'")
-            if vision_data.get("detalhes_visiveis"):
-                data["vision_technical_details"] = vision_data["detalhes_visiveis"]
+            if vision_data.get("visible_details"):
+                data["vision_technical_details"] = vision_data["visible_details"]
             if filled:
-                logger.info(f"Campos preenchidos via visão: {', '.join(filled)}")
-            if not vision_data.get("condicao_consistente", True):
+                logger.info(f"Fields filled via vision: {', '.join(filled)}")
+            if not vision_data.get("condition_consistent", True):
                 logger.warning(
-                    f"Condição inconsistente: vendedor declarou '{condition}' "
-                    f"mas visão detectou: {vision_data.get('descricao_visual', '')[:100]}"
+                    f"Condition inconsistency: seller declared '{condition}' "
+                    f"but vision detected: {vision_data.get('visual_description', '')[:100]}"
                 )
                 data["_condition_inconsistent"] = True
 
-        # Recalcula product_name com campos enriquecidos pela visão
+        # Recalculate product_name with vision-enriched fields
         brand        = data.get("brand") or ""
         model        = data.get("model") or ""
         version      = data.get("version") or ""
         product_name = " ".join(filter(None, [brand, model, version])) or description
 
-        visual_desc = (vision_data or {}).get("descricao_visual", "") if vision_data else ""
-        condition_ok = (vision_data or {}).get("condicao_consistente", True) if vision_data else True
+        visual_desc  = (vision_data or {}).get("visual_description", "") if vision_data else ""
+        condition_ok = (vision_data or {}).get("condition_consistent", True) if vision_data else True
         condition_alert = (
-            f"ATENÇÃO: análise visual detecta inconsistência com a condição declarada. "
-            f"Descrição visual: {visual_desc}. "
+            f"WARNING: visual analysis detects inconsistency with declared condition. "
+            f"Visual description: {visual_desc}. "
             if not condition_ok else ""
         )
 
-        # 4. Precificação com todos os dados
+        # 4. Pricing with all data
         rich_description = (
             f"{product_name}. "
-            f"Estado: {usage_state}. "
-            f"Condição: {CONDITION_LABEL.get(condition, condition)}. "
-            f"Nota fiscal: {'sim' if has_receipt else 'não'}. "
-            + (f"Análise visual: {visual_desc}. " if visual_desc else "")
+            f"State: {usage_state}. "
+            f"Condition: {CONDITION_LABEL.get(condition, condition)}. "
+            f"Receipt: {'yes' if has_receipt else 'no'}. "
+            + (f"Visual analysis: {visual_desc}. " if visual_desc else "")
             + condition_alert
-            + (f"Preços encontrados na web: {web_prices[:300]}." if web_prices else "")
+            + (f"Prices found on the web: {web_prices[:300]}." if web_prices else "")
         )
         pricing_agent = PricingAgent(db)
         appraisal = await pricing_agent.appraise(
-            descricao=rich_description,
-            categoria=category,
-            preco_informado_vendedor=asking_price,
-            historico_similares=similar_history,
-            fotos=base64_images or None,
+            description=rich_description,
+            category=category,
+            seller_asking_price=asking_price,
+            similar_history=similar_history,
+            photos=base64_images or None,
         )
         data["appraisal"] = appraisal
 
         data["seller_city"] = _extract_city(pickup_address)
 
-        price_agent  = appraisal.get("preco_sugerido", 0) or 0
-        min_agent    = appraisal.get("preco_minimo_sugerido", 0) or 0
-        justification = appraisal.get("justificativa", "")
-        confidence   = appraisal.get("confianca", "baixa")
+        price_agent   = appraisal.get("suggested_price", 0) or 0
+        min_agent     = appraisal.get("min_suggested_price", 0) or 0
+        justification = appraisal.get("justification", "")
+        confidence    = appraisal.get("confidence", "low")
 
         listed_price = asking_price or price_agent
         floor_price  = seller_min or min_agent
@@ -802,63 +803,63 @@ class ListingFlowAgent:
         if asking_price and price_agent > 0:
             diff = abs(asking_price - price_agent) / price_agent
             if diff > 0.30:
-                direction = "acima" if asking_price > price_agent else "abaixo"
+                direction = "above" if asking_price > price_agent else "below"
                 price_alert = (
-                    f"Atenção: seu preço de R$ {asking_price:.2f} está "
-                    f"{diff*100:.0f}% {direction} do valor de mercado de R$ {price_agent:.2f}. "
+                    f"Note: your price of R$ {asking_price:.2f} is "
+                    f"{diff*100:.0f}% {direction} the market value of R$ {price_agent:.2f}. "
                 )
 
-        lines = [f"Produto: {product_name}"]
+        lines = [f"Product: {product_name}"]
 
         origin_vision = [
             c for c in ("brand", "model", "version")
             if data.get(f"{c}_source") == "vision"
         ]
         if origin_vision:
-            lines.append(f"  (detectado nas fotos: {', '.join(origin_vision)})")
+            lines.append(f"  (detected in photos: {', '.join(origin_vision)})")
 
-        if vision_data and vision_data.get("detalhes_visiveis"):
-            details = ", ".join(vision_data["detalhes_visiveis"][:4])
-            lines.append(f"Detalhes lidos nas fotos: {details}")
+        if vision_data and vision_data.get("visible_details"):
+            details = ", ".join(vision_data["visible_details"][:4])
+            lines.append(f"Details read from photos: {details}")
 
         lines += [
-            f"Estado: {usage_state} | Condição: {CONDITION_LABEL.get(condition, condition)}",
-            f"Nota fiscal: {'sim' if has_receipt else 'não'}",
-            f"Fotos: {len(photos)} enviada(s)",
-            f"Retirada: {pickup_address or 'não informado'}",
+            f"State: {usage_state} | Condition: {CONDITION_LABEL.get(condition, condition)}",
+            f"Receipt: {'yes' if has_receipt else 'no'}",
+            f"Photos: {len(photos)} submitted",
+            f"Pickup: {pickup_address or 'not provided'}",
         ]
 
         if asking_price:
-            lines.append(f"Seu preço: R$ {asking_price:.2f}")
+            lines.append(f"Your price: R$ {asking_price:.2f}")
         if seller_min:
-            lines.append(f"Seu mínimo: R$ {seller_min:.2f} (sigiloso)")
-        lines.append(f"Avaliação NOTHA: R$ {price_agent:.2f} (confiança: {confidence})")
-        lines.append(f"Motivo: {justification}")
+            lines.append(f"Your minimum: R$ {seller_min:.2f} (confidential)")
+        lines.append(f"NOTHA appraisal: R$ {price_agent:.2f} (confidence: {confidence})")
+        lines.append(f"Reason: {justification}")
         if price_alert:
             lines.append(price_alert)
-        lines.append(f"Será anunciado por: R$ {listed_price:.2f}")
+        lines.append(f"Will be listed at: R$ {listed_price:.2f}")
 
         summary = "\n".join(lines)
 
         if data.get("_condition_inconsistent"):
             declared_label = CONDITION_LABEL.get(condition, condition)
-            visual_excerpt = visual_desc[:200] if visual_desc else "não disponível"
+            visual_excerpt = visual_desc[:200] if visual_desc else "not available"
             msg = await self._reply(
-                f"A análise das fotos detectou uma possível inconsistência na condição declarada.\n"
-                f"Condição declarada: {declared_label}.\n"
-                f"O que foi observado nas fotos: {visual_excerpt}\n\n"
-                "Peça que o vendedor confirme se a condição está correta ou corrija para uma das opções:\n"
-                "1. Como novo (sem marcas de uso)\n"
-                "2. Bom estado (uso leve, poucas marcas)\n"
-                "3. Conservado (uso normal, pequenos desgastes)\n"
-                "4. Desgastado (uso intenso, marcas visíveis)\n"
-                "5. Com defeito (descreva o defeito)\n"
-                "Ou diga 'sim' para confirmar a condição já declarada."
+                f"The photo analysis detected a possible inconsistency in the declared condition.\n"
+                f"Declared condition: {declared_label}.\n"
+                f"What was observed in the photos: {visual_excerpt}\n\n"
+                "Ask the seller to confirm whether the condition is correct or correct it to one of the options:\n"
+                "1. Like new (no signs of use)\n"
+                "2. Good condition (light use, few marks)\n"
+                "3. Fair condition (normal use, minor wear)\n"
+                "4. Worn (heavy use, visible marks)\n"
+                "5. Defective (describe the defect)\n"
+                "Or say 'yes' to confirm the already declared condition."
             )
             return data, msg
 
         msg = await self._reply(
-            f"Apresente o resumo do anúncio e pergunte se confirma:\n\n{summary}"
+            f"Present the listing summary and ask if they confirm:\n\n{summary}"
         )
         return data, msg
 
@@ -867,10 +868,10 @@ class ListingFlowAgent:
         base64_images: list[str] | None = None,
     ) -> dict | None:
         """
-        Usa GPT-4o Vision para analisar as fotos do produto.
+        Uses GPT-4o Vision to analyse product photos.
 
-        GUARDRAIL: só extrai texto que esteja LITERALMENTE IMPRESSO nas imagens.
-        Aceita base64_images (data URIs já baixadas) para evitar download duplo.
+        GUARDRAIL: only extracts text LITERALLY PRINTED in the images.
+        Accepts base64_images (pre-downloaded data URIs) to avoid double download.
         """
         from whatsapp import download_media_as_base64
 
@@ -897,32 +898,32 @@ class ListingFlowAgent:
         content.append({
             "type": "text",
             "text": (
-                f"Produto declarado: {product}.\n"
-                f"Condição declarada pelo vendedor: {CONDITION_LABEL.get(declared_condition, declared_condition)}.\n\n"
-                "Retorne SOMENTE um JSON válido com os campos abaixo. Nenhum texto fora do JSON.\n\n"
-                "CAMPO 1 — descricao_visual (string):\n"
-                "  Descreva objetivamente o estado físico visível: acabamento, arranhões, manchas, amassados, desgaste.\n"
-                "  Se as fotos forem insuficientes (desfocadas, escuras), diga isso.\n\n"
-                "CAMPO 2 — condicao_consistente (true | false):\n"
-                "  A condição declarada é consistente com o que aparece nas fotos?\n\n"
-                "CAMPO 3 — marca_visivel (string | null):\n"
-                "  Leia a marca SOMENTE se ela estiver LITERALMENTE ESCRITA/IMPRESSA em etiqueta, caixa, tela ou adesivo.\n"
-                "  NÃO infira a marca pela forma ou aparência do produto. Se não está escrito → null.\n\n"
-                "CAMPO 4 — modelo_visivel (string | null):\n"
-                "  Leia o modelo/nome do produto SOMENTE se LITERALMENTE ESCRITO nas imagens.\n"
-                "  NÃO adivinhe pelo formato. Se não está escrito → null.\n\n"
-                "CAMPO 5 — versao_visivel (string | null):\n"
-                "  Leia versão/capacidade/variante SOMENTE se ESCRITA nas imagens.\n"
-                "  NÃO infira pela cor ou tamanho. Se não está escrito → null.\n\n"
-                "CAMPO 6 — detalhes_visiveis (array de strings):\n"
-                "  Lista de quaisquer informações técnicas LIDAS literalmente nas imagens.\n"
-                "  Inclua apenas o que está escrito. Array vazio [] se nada for legível.\n\n"
-                "CAMPO 7 — fotos_suficientes (true | false):\n"
-                "  As fotos têm qualidade e ângulos suficientes para avaliação confiável?\n\n"
-                "REGRAS CRÍTICAS:\n"
-                "- NUNCA atribua valor de mercado ou sugira preços.\n"
-                "- NUNCA faça afirmações sobre autenticidade ou procedência.\n"
-                "- Para marca/modelo/versao: se não está escrito na imagem, retorne null."
+                f"Declared product: {product}.\n"
+                f"Condition declared by the seller: {CONDITION_LABEL.get(declared_condition, declared_condition)}.\n\n"
+                "Return ONLY valid JSON with the fields below. No text outside the JSON.\n\n"
+                "FIELD 1 — visual_description (string):\n"
+                "  Objectively describe the visible physical state: finish, scratches, stains, dents, wear.\n"
+                "  If photos are insufficient (blurry, dark), say so.\n\n"
+                "FIELD 2 — condition_consistent (true | false):\n"
+                "  Is the declared condition consistent with what appears in the photos?\n\n"
+                "FIELD 3 — visible_brand (string | null):\n"
+                "  Read the brand ONLY if it is LITERALLY PRINTED/WRITTEN on a label, box, screen or sticker.\n"
+                "  Do NOT infer the brand from the product's shape or appearance. If not written → null.\n\n"
+                "FIELD 4 — visible_model (string | null):\n"
+                "  Read the model/product name ONLY if LITERALLY WRITTEN in the images.\n"
+                "  Do NOT guess from the shape. If not written → null.\n\n"
+                "FIELD 5 — visible_version (string | null):\n"
+                "  Read version/capacity/variant ONLY if WRITTEN in the images.\n"
+                "  Do NOT infer from colour or size. If not written → null.\n\n"
+                "FIELD 6 — visible_details (array of strings):\n"
+                "  List of any technical information READ literally in the images.\n"
+                "  Include only what is written. Empty array [] if nothing is legible.\n\n"
+                "FIELD 7 — photos_sufficient (true | false):\n"
+                "  Do the photos have sufficient quality and angles for a reliable evaluation?\n\n"
+                "CRITICAL RULES:\n"
+                "- NEVER assign market value or suggest prices.\n"
+                "- NEVER make claims about authenticity or provenance.\n"
+                "- For brand/model/version: if not written in the image, return null."
             ),
         })
 
@@ -932,9 +933,9 @@ class ListingFlowAgent:
                     {
                         "role": "system",
                         "content": (
-                            "Você é um avaliador visual de produtos físicos. "
-                            "Retorne SEMPRE um JSON válido. "
-                            "Só extraia informações literalmente visíveis nas imagens."
+                            "You are a visual evaluator of physical products. "
+                            "ALWAYS return valid JSON. "
+                            "Only extract information literally visible in the images."
                         ),
                     },
                     {"role": "user", "content": content},
@@ -946,16 +947,16 @@ class ListingFlowAgent:
             )
             raw = json.loads(resp.text or "{}")
             return {
-                "descricao_visual":    str(raw.get("descricao_visual") or ""),
-                "condicao_consistente": bool(raw.get("condicao_consistente", True)),
-                "marca_visivel":        raw.get("marca_visivel") or None,
-                "modelo_visivel":       raw.get("modelo_visivel") or None,
-                "versao_visivel":       raw.get("versao_visivel") or None,
-                "detalhes_visiveis":    list(raw.get("detalhes_visiveis") or []),
-                "fotos_suficientes":    bool(raw.get("fotos_suficientes", True)),
+                "visual_description":  str(raw.get("visual_description") or ""),
+                "condition_consistent": bool(raw.get("condition_consistent", True)),
+                "visible_brand":        raw.get("visible_brand") or None,
+                "visible_model":        raw.get("visible_model") or None,
+                "visible_version":      raw.get("visible_version") or None,
+                "visible_details":      list(raw.get("visible_details") or []),
+                "photos_sufficient":    bool(raw.get("photos_sufficient", True)),
             }
         except Exception as e:
-            logger.warning(f"Análise visual falhou: {e}")
+            logger.warning(f"Visual analysis failed: {e}")
             return None
 
 
@@ -966,32 +967,32 @@ class ListingFlowAgent:
 def _infer_category(name: str) -> str:
     n = name.lower()
     categories = {
-        "eletrônicos": [
+        "electronics": [
             "iphone", "samsung", "celular", "smartphone", "notebook", "computador",
             "tablet", "ipad", "tv", "monitor", "fone", "headphone", "console",
             "playstation", "xbox", "nintendo", "câmera", "camera",
         ],
-        "eletrodomésticos": [
+        "appliances": [
             "geladeira", "fogão", "micro-ondas", "lavadora", "máquina de lavar",
             "ar condicionado", "ventilador", "liquidificador", "batedeira", "churrasqueira",
         ],
-        "móveis": [
+        "furniture": [
             "sofá", "sofa", "mesa", "cadeira", "cama", "guarda-roupa", "armário",
             "estante", "escrivaninha", "rack",
         ],
-        "vestuário": [
+        "clothing": [
             "camisa", "camiseta", "calça", "vestido", "sapato", "tênis", "sandália",
             "casaco", "jaqueta", "bolsa", "mochila",
         ],
-        "veículos": ["carro", "moto", "bicicleta", "patinete", "scooter"],
-        "brinquedos": ["brinquedo", "boneca", "lego", "jogo de tabuleiro"],
-        "esportes": ["esteira", "haltere", "peso", "raquete", "bola", "bike"],
-        "livros": ["livro", "revista", "manual", "apostila"],
+        "vehicles": ["carro", "moto", "bicicleta", "patinete", "scooter"],
+        "toys": ["brinquedo", "boneca", "lego", "jogo de tabuleiro"],
+        "sports": ["esteira", "haltere", "peso", "raquete", "bola", "bike"],
+        "books": ["livro", "revista", "manual", "apostila"],
     }
     for cat, keywords in categories.items():
         if any(k in n for k in keywords):
             return cat
-    return "outros"
+    return "other"
 
 
 def _extract_city(address: str) -> str | None:

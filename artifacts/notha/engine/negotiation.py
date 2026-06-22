@@ -56,16 +56,16 @@ class NegotiationEngine:
         """
         client = _make_client()
         prompt = f"""
-        Um comprador ofereceu R${offer:.2f} por um produto com preço mínimo de R${min_price:.2f}.
-        Contexto adicional fornecido pelo comprador: "{extra_context}"
+        A buyer offered R${offer:.2f} for a product with a minimum price of R${min_price:.2f}.
+        Additional context provided by the buyer: "{extra_context}"
         
-        Que ajuste percentual de desconto (negativo) seria razoável dado o contexto? Fatores válidos:
-        - Retirada imediata (hoje)
-        - Pagamento instantâneo à vista
-        - Compra de múltiplas unidades
+        What percentage discount (negative) would be reasonable given the context? Valid factors:
+        - Immediate pickup (today)
+        - Instant cash payment
+        - Purchasing multiple units
         
-        Responda SOMENTE com um número decimal entre 0 e 0.15 (ex: 0.05 para 5% de desconto).
-        Se o contexto não justificar desconto algum, responda 0.
+        Respond ONLY with a decimal number between 0 and 0.15 (e.g. 0.05 for 5% discount).
+        If the context does not justify any discount, respond 0.
         """
         try:
             resp = await client.chat.completions.create(
@@ -108,7 +108,7 @@ class NegotiationEngine:
 
         return {"decision": "reject", "value": min_price}
 
-    # Legacy alias
+    # Legacy alias — keeps backward compatibility with old callers
     async def decidir_oferta(self, negotiation_id, offer, min_price, extra_context=None):
         result = await self.decide_offer(negotiation_id, offer, min_price, extra_context)
         return {
@@ -138,14 +138,14 @@ class NegotiationEngine:
         import json
         buyer_limits  = json.loads(neg["buyer_limits"])  if neg["buyer_limits"]  else {}
         seller_limits = json.loads(neg["seller_limits"]) if neg["seller_limits"] else {
-            "minimo": listing["floor_price"],
-            "ideal":  listing["listed_price"],
+            "minimum": listing["floor_price"],
+            "target":  listing["listed_price"],
         }
         appraisal_data = json.loads(listing["appraisal_data"]) if listing["appraisal_data"] else {}
 
         history = []
         rejected = await self._neg_repo.get_rejected_values(negotiation_id)
-        current_offer = buyer_limits.get("ideal", listing["listed_price"] * 0.9)
+        current_offer = buyer_limits.get("target", listing["listed_price"] * 0.9)
 
         existing_rounds = await self._neg_repo.get_proxy_rounds(negotiation_id)
         start_round = len(existing_rounds)
@@ -165,7 +165,7 @@ class NegotiationEngine:
                 logger.error(f"Seller guard rail violated: {e}")
                 break
 
-            if seller_resp.decision == "aceitar":
+            if seller_resp.decision == "accept":
                 await self._neg_repo.add_proxy_round(
                     negotiation_id, round_num, current_offer,
                     seller_argument=f"ACCEPTED: {seller_resp.argument}",
@@ -199,14 +199,14 @@ class NegotiationEngine:
                 "buyer_arg":      buyer_resp.argument,
             })
 
-            if buyer_resp.decision == "aceitar":
+            if buyer_resp.decision == "accept":
                 return await self._propose_to_humans(negotiation_id, seller_resp.value)
 
             current_offer = buyer_resp.value
 
         fallback_value = self._fallback_intersection(
-            buyer_limits.get("maximo", 0),
-            seller_limits.get("minimo", listing["floor_price"]),
+            buyer_limits.get("maximum", 0),
+            seller_limits.get("minimum", listing["floor_price"]),
         )
         if fallback_value is None:
             await self._neg_repo.update_status(negotiation_id, "no_deal")

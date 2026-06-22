@@ -1,10 +1,10 @@
 """
-Fluxo completo de upload de documento de identidade.
+Complete identity document upload flow.
 
-1. Baixa a imagem do WhatsApp via Graph API
-2. Faz upload para o bucket Supabase Storage (documentos-identidade)
-3. Registra no banco (documentos_identidade) e atualiza status do usuário
-4. Retorna a URL assinada para acesso interno (admin)
+1. Downloads the image from WhatsApp via Graph API
+2. Uploads to Supabase Storage bucket (identity-documents)
+3. Registers in the database and updates the user's identity_status
+4. Returns the signed URL for internal (admin) access
 """
 import logging
 import os
@@ -19,16 +19,16 @@ logger = logging.getLogger("notha.storage.identity")
 GRAPH_API_URL = "https://graph.facebook.com/v21.0"
 
 
-async def baixar_midia_whatsapp(media_id: str) -> tuple[bytes, str]:
-    """Baixa mídia pelo media_id do WhatsApp Cloud API.
+async def download_whatsapp_media(media_id: str) -> tuple[bytes, str]:
+    """Downloads media by media_id from the WhatsApp Cloud API.
 
-    Retorna (bytes_da_imagem, content_type).
+    Returns (image_bytes, content_type).
     """
     token = os.environ.get("WHATSAPP_ACCESS_TOKEN", "")
     headers = {"Authorization": f"Bearer {token}"}
 
     async with httpx.AsyncClient(timeout=60) as client:
-        # 1. Obtém a URL real da mídia
+        # 1. Fetch the real media URL
         info_resp = await client.get(
             f"{GRAPH_API_URL}/{media_id}",
             headers=headers,
@@ -40,16 +40,16 @@ async def baixar_midia_whatsapp(media_id: str) -> tuple[bytes, str]:
         mime_type = info.get("mime_type", "image/jpeg")
 
         if not media_url:
-            raise ValueError(f"URL de mídia não encontrada para media_id={media_id}")
+            raise ValueError(f"Media URL not found for media_id={media_id}")
 
-        # 2. Baixa os bytes da imagem
+        # 2. Download the image bytes
         img_resp = await client.get(media_url, headers=headers)
         img_resp.raise_for_status()
 
     return img_resp.content, mime_type
 
 
-def _extensao(mime_type: str) -> str:
+def _extension(mime_type: str) -> str:
     _MAP = {
         "image/jpeg": "jpg",
         "image/jpg": "jpg",
@@ -61,68 +61,63 @@ def _extensao(mime_type: str) -> str:
     return _MAP.get(mime_type, "bin")
 
 
-async def processar_documento_identidade(
+async def process_identity_document(
     user_id: int,
     media_id: str,
-    tipo: str = "desconhecido",
+    doc_type: str = "unknown",
     user_repo=None,
 ) -> dict:
-    """Baixa, armazena e registra um documento de identidade.
+    """Downloads, stores, and registers an identity document.
 
-    Retorna dict com: object_path, signed_url, doc_id.
+    Returns dict with: object_path, signed_url, doc_id.
     """
-    # Baixa a imagem do WhatsApp
     try:
-        imagem_bytes, mime_type = await baixar_midia_whatsapp(media_id)
+        image_bytes, mime_type = await download_whatsapp_media(media_id)
     except Exception as e:
-        logger.error("Falha ao baixar mídia %s: %s", media_id, e)
+        logger.error("Failed to download media %s: %s", media_id, e)
         raise
 
-    # Constrói o nome do arquivo com timestamp para unicidade
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    ext = _extensao(mime_type)
-    filename = f"{tipo}_{ts}.{ext}"
+    ext = _extension(mime_type)
+    filename = f"{doc_type}_{ts}.{ext}"
 
-    # Upload para Supabase Storage
     try:
         object_path = await upload_bytes(
             user_id=user_id,
             filename=filename,
-            data=imagem_bytes,
+            data=image_bytes,
             content_type=mime_type,
         )
     except Exception as e:
-        logger.error("Falha no upload para Storage (user_id=%s): %s", user_id, e)
+        logger.error("Storage upload failed (user_id=%s): %s", user_id, e)
         raise
 
-    # URL de acesso assinada (1 hora)
     try:
-        url_assinada = await signed_url(object_path, expires_in=3600)
+        signed_url_result = await signed_url(object_path, expires_in=3600)
     except Exception:
-        url_assinada = ""
+        signed_url_result = ""
 
-    # Register in the DB and mark user identity_status as under_review
     doc = None
     if user_repo:
         try:
             doc = await user_repo.register_identity_document(
                 user_id=user_id,
-                image_url=object_path,       # Internal path in the bucket
-                document_type=tipo,
+                image_url=object_path,
+                document_type=doc_type,
                 whatsapp_media_id=media_id,
             )
             logger.info(
-                "Documento registrado: doc_id=%s user_id=%s tipo=%s",
+                "Document registered: doc_id=%s user_id=%s type=%s",
                 doc["id"] if doc else "?",
                 user_id,
-                tipo,
+                doc_type,
             )
         except Exception as e:
-            logger.error("Falha ao registrar documento no banco (user_id=%s): %s", user_id, e)
+            logger.error("Failed to register document in DB (user_id=%s): %s", user_id, e)
 
     return {
         "object_path": object_path,
-        "signed_url": url_assinada,
+        "signed_url": signed_url_result,
         "mime_type": mime_type,
         "doc_id": doc["id"] if doc else None,
     }

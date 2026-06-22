@@ -4,9 +4,9 @@ from storage.base import Storage
 
 class MemoryStorage(Storage):
     """
-    Armazenamento em memória RAM.
-    Usado em desenvolvimento — dados são perdidos ao reiniciar o servidor.
-    Para persistência, configure STORAGE_PROVIDER=supabase.
+    In-memory (RAM) storage.
+    Used in development — data is lost on server restart.
+    For persistence, configure STORAGE_PROVIDER=supabase.
     """
 
     def __init__(self):

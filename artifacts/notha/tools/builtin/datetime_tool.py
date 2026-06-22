@@ -4,10 +4,10 @@ from tools.base import Tool
 
 
 class DateTimeTool(Tool):
-    name = "obter_data_hora"
+    name = "get_datetime"
     description = (
-        "Retorna a data e hora atual. Use quando o usuário perguntar sobre "
-        "data, hora, dia da semana ou qualquer informação temporal."
+        "Returns the current date and time. Use when the user asks about "
+        "the date, time, day of the week, or any other temporal information."
     )
     parameters = {
         "type": "object",
@@ -15,8 +15,8 @@ class DateTimeTool(Tool):
             "timezone": {
                 "type": "string",
                 "description": (
-                    "Fuso horário no formato IANA (ex: 'America/Sao_Paulo', 'UTC'). "
-                    "Padrão: America/Sao_Paulo."
+                    "Timezone in IANA format (e.g. 'America/Sao_Paulo', 'UTC'). "
+                    "Default: America/Sao_Paulo."
                 ),
             }
         },
@@ -27,15 +27,15 @@ class DateTimeTool(Tool):
         try:
             tz = ZoneInfo(timezone)
             now = datetime.now(tz)
-            dias = ["segunda-feira", "terça-feira", "quarta-feira",
-                    "quinta-feira", "sexta-feira", "sábado", "domingo"]
-            dia_semana = dias[now.weekday()]
+            days = ["Monday", "Tuesday", "Wednesday",
+                    "Thursday", "Friday", "Saturday", "Sunday"]
+            day_name = days[now.weekday()]
             return (
-                f"Data: {now.strftime('%d/%m/%Y')}\n"
-                f"Hora: {now.strftime('%H:%M')} ({timezone})\n"
-                f"Dia: {dia_semana}"
+                f"Date: {now.strftime('%Y-%m-%d')}\n"
+                f"Time: {now.strftime('%H:%M')} ({timezone})\n"
+                f"Day: {day_name}"
             )
         except ZoneInfoNotFoundError:
             from datetime import timezone as tz_utc
             now = datetime.now(tz_utc.utc)
-            return f"Data/hora UTC: {now.strftime('%d/%m/%Y %H:%M')}"
+            return f"UTC date/time: {now.strftime('%Y-%m-%d %H:%M')}"
