@@ -1,5 +1,7 @@
 """
 ListingFlowAgent — state machine for complete product listing via WhatsApp.
+ContentSafetyAgent is integrated at the product-description step (selective,
+heuristic-gated) — only suspicious descriptions trigger an LLM safety check.
 
 MOVABLE PRODUCTS (electronics, appliances, furniture, vehicles, clothing, etc.):
   product          → What do you want to sell?
@@ -402,10 +404,35 @@ class ListingFlowAgent:
     # ─────────────────────────────────────────────
 
     async def _step_product(self, data, photos, text):
-        data["description"] = text.strip()
+        description = text.strip()
+        data["description"] = description
+
+        # ── Selective content safety check ─────────────────────────────────
+        # Only activated when heuristics flag something suspicious.
+        # On any LLM/import error, we default to safe=True (never block on failure).
+        try:
+            from agents.content_safety import ContentSafetyAgent as _CSA
+            _csa = _CSA()
+            _should_check, _signals = _csa.should_check(description, "")
+            if _should_check:
+                _safety = await _csa.evaluate(description, "", _signals)
+                if not _safety.get("safe", True):
+                    data["safety_flag"] = _safety.get("reason", "conteúdo suspeito")
+                    data["status"] = "em_revisao_manual"
+                    logger.warning(
+                        "Listing flagged for manual review: reason=%s",
+                        data["safety_flag"],
+                    )
+                    return data, photos, await self._reply(
+                        "Tell the user their listing was received and is under a quick review "
+                        "process that usually takes up to 24 hours. After that it will be published "
+                        "automatically if approved. Do not mention AI or algorithms."
+                    ), False
+        except Exception as _safety_err:
+            logger.warning("Content safety check skipped (error): %s", _safety_err)
 
         # Classify product type to determine flow path
-        classification = await self._classify_product_type(text.strip())
+        classification = await self._classify_product_type(description)
         data["product_type"]    = classification["product_type"]
         data["needs_logistics"] = classification["needs_logistics"]
         data["type_label"]      = classification["type_label"]

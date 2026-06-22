@@ -207,6 +207,34 @@ async def _migrate_sessions_tables() -> None:
     logger.info("Sessions tables ready.")
 
 
+async def _migrate_turn_state_table() -> None:
+    """Creates the turn_state table if it doesn't exist yet.
+
+    Stores one row per phone — the pending field/question NOTHA asked in
+    the previous turn, waiting for the user's reply. Expires after 30 min
+    by default. This is the fix for the 'Oi captured as name' class of bugs.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS turn_state (
+                phone         VARCHAR(20) PRIMARY KEY,
+                pending_field VARCHAR(100) NOT NULL,
+                operation     VARCHAR(100) NOT NULL DEFAULT '',
+                context_data  JSONB        NOT NULL DEFAULT '{}',
+                asked_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                expires_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW() + INTERVAL '30 minutes'
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_turn_state_expires
+            ON turn_state (expires_at)
+        """)
+    logger.info("Turn state table ready.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
@@ -216,6 +244,7 @@ async def lifespan(app: FastAPI):
     await _migrate_phone_info_columns()
     await _init_webhook_dedup_table()
     await _migrate_sessions_tables()
+    await _migrate_turn_state_table()
 
     orchestrator = Orchestrator()
 

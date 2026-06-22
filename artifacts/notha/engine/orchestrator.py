@@ -20,6 +20,7 @@ from agents.listing_flow import ListingFlowAgent, _parse_jsonb
 from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
+from engine.turn_state import TurnStateService
 from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
 from phone_info import parse_phone, get_timezone
 
@@ -440,6 +441,13 @@ class Orchestrator:
             guardrail_context=guardrail_ctx,
         )
 
+        # ── Turn State: check for pending question from previous turn ─────────
+        # Must happen after context is built so we can append the pending note.
+        _ts_service = TurnStateService(db)
+        _pending_turn = await _ts_service.get_pending(phone)
+        if _pending_turn:
+            context = context + "\n\n" + _ts_service.build_context_note(_pending_turn)
+
         # Pending business confirmations (e.g. confirm listing price)
         pending = PENDING_CONFIRMATIONS.get(phone)
         if pending:
@@ -475,6 +483,7 @@ class Orchestrator:
             user_message=text,
             history=history,
             context=context,
+            pending_turn=_pending_turn,
         )
         objective   = understanding.get("objective", text)
         intent      = understanding.get("intent", "other")
@@ -497,50 +506,9 @@ class Orchestrator:
                 await conv_repo.add(user_id, "assistant", neg_reply)
                 return neg_reply
 
-        # ── Phase 1: Plan ─────────────────────────────────────────────────────
-        # Build a compact tool catalog for the planner: name + required params
-        _TOOL_CATALOG: list[dict] = []
-        for t in NOTHA_TOOLS:
-            if t.get("type") != "function":
-                continue
-            fn = t["function"]
-            params = fn.get("parameters", {}).get("properties", {})
-            required = fn.get("parameters", {}).get("required", [])
-            _TOOL_CATALOG.append({
-                "name": fn["name"],
-                "description": fn.get("description", "")[:220],
-                "parameters": {
-                    k: {"type": v.get("type", "string"), "required": k in required}
-                    for k, v in params.items()
-                },
-            })
-        # Add builtin tools from their Tool objects
-        from tools.base import Tool as _BaseTool
-        for _tool_obj in _BUILTIN_TOOL_MAP.values():
-            params = getattr(_tool_obj, "parameters", {}).get("properties", {})
-            required = getattr(_tool_obj, "parameters", {}).get("required", [])
-            _TOOL_CATALOG.append({
-                "name": _tool_obj.name,
-                "description": getattr(_tool_obj, "description", "")[:220],
-                "parameters": {
-                    k: {"type": v.get("type", "string"), "required": k in required}
-                    for k, v in params.items()
-                },
-            })
-
-        steps = await self._conv.plan(
-            objective=objective,
-            intent=intent,
-            history=history,
-            context=context,
-            tool_catalog=_TOOL_CATALOG,
-            needs_tools=needs_tools,
-        )
-
-        # Heuristic merge: always run heuristic for user-data patterns.
-        # Heuristic results take priority over LLM-planned user-data tools
-        # (prevents wrong tool choice like update_location for street addresses).
-        # Non-user-data steps from the LLM plan are preserved.
+        # ── Phase 1: Deterministic routing (replaces LLM plan()) ──────────────
+        # Intent from Phase 0 determines which tools to run — no extra LLM call.
+        # Heuristic merge handles data-update patterns (name, CPF, address, etc.).
         _USER_DATA_TOOL_NAMES = {
             "update_name", "update_nickname", "update_profile",
             "update_full_address", "update_address", "update_location",
@@ -549,24 +517,46 @@ class Orchestrator:
         _VIEW_TOOL_NAMES = {
             "list_my_alerts", "cancel_alert", "cancel_alerts", "get_my_profile",
         }
+
+        steps = self._deterministic_route(
+            intent=intent,
+            flow=understanding.get("flow", ""),
+            understanding=understanding,
+            text=text,
+        )
+
+        # Handle pending turn state resolution:
+        # When understand() flagged that the current message answers a pending
+        # question, inject a synthetic tool step to save the resolved value.
+        if _pending_turn and understanding.get("pending_resolved"):
+            _pending_value = understanding.get("pending_value", "").strip()
+            if _pending_value:
+                _synthetic = self._pending_to_tool_step(
+                    _pending_turn["pending_field"], _pending_value, _pending_turn,
+                )
+                if _synthetic:
+                    steps = [_synthetic] + steps
+                    logger.info(
+                        "Pending turn resolved by understand(): field=%s value=%r",
+                        _pending_turn["pending_field"], _pending_value,
+                    )
+
+        # Heuristic merge: always runs for user-data patterns regardless of intent.
+        # Takes priority over deterministic-route user-data steps.
         heuristic = _heuristic_steps(text)
         if heuristic:
             heuristic_tools = {s["tool"] for s in heuristic}
-            # Keep LLM steps for non-user-data and non-view tools
             llm_non_data = [s for s in steps if s.get("tool") not in _USER_DATA_TOOL_NAMES | _VIEW_TOOL_NAMES]
-            # Also keep LLM view-tool steps not covered by heuristic
             llm_view = [s for s in steps if s.get("tool") in _VIEW_TOOL_NAMES and s.get("tool") not in heuristic_tools]
             steps = heuristic + llm_non_data + llm_view
             logger.info(
-                "plan() → heuristic merge: %d step(s): %s",
+                "Heuristic merge: %d step(s): %s",
                 len(steps), [s.get("tool") for s in steps],
             )
-        elif needs_tools and not steps:
-            logger.info("plan() → 0 steps, no heuristic matches either")
 
         logger.info(
-            "Pipeline: objective=%r intent=%s needs_tools=%s steps=%d",
-            objective, intent, needs_tools, len(steps),
+            "Pipeline: objective=%r intent=%s flow=%s needs_tools=%s steps=%d",
+            objective, intent, understanding.get("flow"), needs_tools, len(steps),
         )
 
         # ── Phase 2: Execute plan ─────────────────────────────────────────────
@@ -624,7 +614,17 @@ class Orchestrator:
             if complex_reply is not None:
                 final_reply = complex_reply
                 outcome = "done"
+                # Clear turn state if this tool resolved the pending field
+                if _pending_turn:
+                    await _ts_service.resolve_if_tool_matches(phone, tool_name)
+                    _pending_turn = None
                 break
+
+            # Clear turn state if this tool resolved the pending field
+            if _pending_turn:
+                _cleared = await _ts_service.resolve_if_tool_matches(phone, tool_name)
+                if _cleared:
+                    _pending_turn = None
 
             # Reload context if user data changed
             if user_data_changed:
@@ -702,6 +702,16 @@ class Orchestrator:
 
         if not final_reply:
             final_reply = "Desculpe, ocorreu um erro interno. Tente novamente em instantes."
+
+        # Set turn state if we just asked for a specific field
+        await self._maybe_set_turn_state(
+            phone=phone,
+            reply=final_reply,
+            intent=intent,
+            flow=understanding.get("flow", ""),
+            ts_service=_ts_service,
+            current_pending=_pending_turn,
+        )
 
         # Persist conversation and pipeline event in DB
         _pipeline_ms = int((_time.monotonic() - _pipeline_start) * 1000)
@@ -1937,13 +1947,172 @@ class Orchestrator:
             [], "",
         )
 
+    # ── Deterministic routing ─────────────────────────────────────────────────
+
+    def _deterministic_route(
+        self,
+        intent: str,
+        flow: str,
+        understanding: dict,
+        text: str,
+    ) -> list[dict]:
+        """Replaces LLM plan() — derives tool steps from intent+flow without LLM.
+
+        Rules (per architecture doc section 6):
+        - buy / product_search   → check_restriction + search_product
+        - sell / listing         → check_restriction + list_product
+        - chitchat/out_of_scope  → [] (no tools)
+        - info with web needed   → web_search
+        - data_update / other    → [] (heuristic merger handles it)
+
+        The heuristic merge runs AFTER this and takes priority for user-data patterns.
+        """
+        objective = understanding.get("objective", text)
+        needs_tools = understanding.get("needs_tools", True)
+
+        if not needs_tools:
+            return []
+
+        if intent == "buy" or flow == "product_search":
+            return [
+                {
+                    "step": 1, "tool": "check_restriction",
+                    "args": {"product_description": objective},
+                    "reason": "mandatory restriction check before search",
+                    "user_message": None,
+                },
+                {
+                    "step": 2, "tool": "search_product",
+                    "args": {"search_description": objective},
+                    "reason": "search for requested product",
+                    "user_message": "🔍 Buscando, um momento...",
+                },
+            ]
+
+        if intent == "sell" or flow == "listing":
+            return [
+                {
+                    "step": 1, "tool": "check_restriction",
+                    "args": {"product_description": objective},
+                    "reason": "mandatory restriction check before listing",
+                    "user_message": None,
+                },
+                {
+                    "step": 2, "tool": "list_product",
+                    "args": {},
+                    "reason": "start listing flow",
+                    "user_message": "📝 Iniciando o cadastro...",
+                },
+            ]
+
+        if intent in ("chitchat", "out_of_scope", "decline") or flow == "greeting":
+            return []
+
+        if intent == "info" and needs_tools:
+            return [
+                {
+                    "step": 1, "tool": "web_search",
+                    "args": {"query": objective},
+                    "reason": "user asked for factual information",
+                    "user_message": None,
+                },
+            ]
+
+        # data_update, onboarding, other — heuristic handles these
+        return []
+
+    def _pending_to_tool_step(
+        self, field: str, value: str, pending: dict,
+    ) -> dict | None:
+        """Creates a synthetic tool step to save the resolved pending turn value.
+
+        Returns None if no tool mapping exists for this field.
+        """
+        _FIELD_TO_TOOL: dict[str, tuple[str, dict]] = {
+            "full_name":      ("update_name",         {"name": value}),
+            "nickname":       ("update_nickname",      {"nickname": value}),
+            "tax_id":         ("update_tax_id",        {"tax_id": value}),
+            "pix_key":        ("update_pix_key",       {"pix_key": value}),
+            "pickup_address": ("update_address",       {"address": value}),
+            "city":           ("update_location",      {"city": value}),
+            "full_address":   ("update_full_address",  {"street": value}),
+        }
+        mapping = _FIELD_TO_TOOL.get(field)
+        if not mapping:
+            return None
+        tool_name, args = mapping
+        return {
+            "step": 0, "tool": tool_name, "args": args,
+            "reason": f"turn state resolution: {field}={value!r}",
+            "user_message": None,
+        }
+
+    async def _maybe_set_turn_state(
+        self,
+        phone: str,
+        reply: str,
+        intent: str,
+        flow: str,
+        ts_service: TurnStateService,
+        current_pending: dict | None,
+    ) -> None:
+        """After synthesis, detect if the reply asks for a specific field and set turn_state.
+
+        Uses lightweight regex — no LLM call. Only sets if no pending already active
+        (don't overwrite an unresolved pending turn state).
+        """
+        if current_pending:
+            return  # still has an unresolved pending — keep it
+
+        text_lower = reply.lower()
+        pending_field: str | None = None
+        operation = f"{flow}/{intent}"
+
+        if re.search(
+            r"\b(nome|name|como\s+(você\s+)?se\s+chama|como\s+te\s+chama"
+            r"|me\s+(diz|diga|fale|conta)\s+o\s+seu\s+nome"
+            r"|qual\s+(é\s+)?o\s+seu\s+nome)\b",
+            text_lower,
+        ):
+            pending_field = "full_name"
+        elif re.search(r"\b(cpf|tax.?id|documento|seu\s+cpf|me\s+passa\s+o\s+cpf)\b", text_lower):
+            pending_field = "tax_id"
+        elif re.search(r"\b(chave\s+pix|pix.?key|sua\s+chave\s+pix)\b", text_lower):
+            pending_field = "pix_key"
+        elif re.search(
+            r"\b(endere[çc]o\s+de\s+retirada|pickup\s+address|onde\s+o\s+produto\s+fica"
+            r"|endere[çc]o\s+para\s+retirada)\b",
+            text_lower,
+        ):
+            pending_field = "pickup_address"
+        elif re.search(
+            r"\b(em\s+qual\s+cidade|de\s+qual\s+cidade|sua\s+cidade|qual\s+é\s+a\s+cidade"
+            r"|cidade\s+em\s+que\s+voc[êe]\s+est[áa])\b",
+            text_lower,
+        ) and "?" in reply:
+            pending_field = "city"
+
+        if pending_field:
+            try:
+                await ts_service.set_pending(phone, pending_field, operation)
+                logger.info(
+                    "Turn state SET after reply: phone=%s field=%s op=%s",
+                    phone, pending_field, operation,
+                )
+            except Exception as e:
+                logger.warning("Failed to set turn state: %s", e)
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
     async def reset(self, phone: str) -> None:
-        """Clears DB history and memory; removes pending confirmations."""
+        """Clears DB history, memory, pending confirmations, and turn state."""
         db = self._db or get_db()
         PENDING_CONFIRMATIONS.pop(phone, None)
         _MEMORY_HISTORY.pop(phone, None)
         if db is None:
             return
+        ts_service = TurnStateService(db)
+        await ts_service.clear(phone)
         user_repo, *_, conv_repo = self._repos(db)
         user = await user_repo.find_by_phone(phone)
         if user:

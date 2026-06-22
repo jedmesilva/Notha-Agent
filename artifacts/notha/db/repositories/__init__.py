@@ -8,6 +8,7 @@ from db.repositories.conversations import ConversationRepository
 from db.repositories.saved_searches import SavedSearchRepository
 from db.repositories.analytics import AnalyticsRepository
 from db.repositories.sessions import SessionRepository
+from db.repositories.turn_state import TurnStateRepository
 
 __all__ = [
     "UserRepository",
@@ -21,4 +22,5 @@ __all__ = [
     "SavedSearchRepository",
     "AnalyticsRepository",
     "SessionRepository",
+    "TurnStateRepository",
 ]

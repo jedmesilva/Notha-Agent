@@ -799,6 +799,7 @@ Read the user message and full conversation history, then return ONLY valid JSON
 ━━━ LATEST USER MESSAGE ━━━
 {message}
 
+{pending_turn_section}
 ━━━ RETURN FORMAT ━━━
 {{
   "objective": "<short English phrase: what the user wants to achieve>",
@@ -807,7 +808,9 @@ Read the user message and full conversation history, then return ONLY valid JSON
   "needs_tools": true|false,
   "confidence": 0.0-1.0,
   "language": "<ISO 639-1 code of the user's language, e.g. 'pt', 'en', 'es', 'fr', 'de'>",
-  "notes": "<any nuance worth noting for the planner, or empty string>"
+  "notes": "<any nuance worth noting for the planner, or empty string>",
+  "pending_resolved": false,
+  "pending_value": ""
 }}
 
 Rules:
@@ -823,6 +826,11 @@ Rules:
   Set needs_tools=false for decline — no tool call needed, just acknowledge the refusal.
 - language: detect from the user's LATEST message. Use prior history if the latest message is ambiguous (e.g. a single emoji).
 - Be concise in objective, e.g. "Find iPhone 14 in São Paulo" or "List used sofa for sale"
+- If a PENDÊNCIA ATIVA section is present above: your FIRST task is to decide if the current message
+  answers that pending question. If yes: set pending_resolved=true and pending_value=<the extracted value>.
+  If the message is clearly about something different, set pending_resolved=false.
+  CRITICAL: pure greetings ("oi", "olá", "hi", "hey"), emojis alone, or single-word non-answers
+  NEVER resolve a pending turn — set pending_resolved=false for those.
 
 Examples of needs_tools=true:
 - "Sou homem, nasci em 15/03/1990" → needs_tools=true (profile data: gender + date_of_birth)
@@ -969,17 +977,47 @@ class ConversationAgent:
         user_message: str,
         history: list[dict],
         context: str,
+        pending_turn: dict | None = None,
     ) -> dict:
         """Phase 0 — Understand the user's intent and objective.
 
-        Returns a dict with: objective, intent, flow, needs_tools, confidence, notes.
-        Fast: no tools, small output, gpt-4o-mini.
+        Returns a dict with: objective, intent, flow, needs_tools, confidence, notes,
+        pending_resolved (bool), pending_value (str).
+        Fast: no tools, small output.
+
+        pending_turn: optional {pending_field, operation} from TurnStateService.
+          When set, the LLM checks whether the current message answers the pending
+          question BEFORE doing any other interpretation.
         """
         history_fmt = _fmt_history(history, max_messages=15)
+
+        if pending_turn:
+            field = pending_turn.get("pending_field", "")
+            operation = pending_turn.get("operation", "")
+            _field_labels = {
+                "full_name": "nome completo", "nickname": "apelido",
+                "tax_id": "CPF", "pix_key": "chave Pix",
+                "pickup_address": "endereço de retirada",
+                "city": "cidade/bairro", "full_address": "endereço completo",
+                "profile": "dados de perfil",
+            }
+            label = _field_labels.get(field, field)
+            pending_turn_section = (
+                f"━━━ PENDÊNCIA ATIVA ━━━\n"
+                f"Na mensagem anterior, NOTHA perguntou pelo(a): {label} "
+                f"(operação pendente: {operation}).\n"
+                f"Avalie PRIMEIRO se a mensagem atual responde a isso:\n"
+                f"- Se sim: pending_resolved=true, pending_value=<valor extraído>\n"
+                f"- Se não (outra conversa, emoji, saudação): pending_resolved=false\n\n"
+            )
+        else:
+            pending_turn_section = ""
+
         prompt = _UNDERSTAND_PROMPT.format(
             context=context or "no context",
             history=history_fmt,
             message=user_message,
+            pending_turn_section=pending_turn_section,
         )
         try:
             resp = await get_provider().complete(
