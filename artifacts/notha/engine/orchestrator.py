@@ -307,6 +307,7 @@ class Orchestrator:
 
         _MAX_STEPS = 8
         steps_executed = 0
+        pipeline_msg_sent = False  # True once any user-facing message is sent this pipeline run
 
         while remaining and steps_executed < _MAX_STEPS:
             step = remaining.pop(0)
@@ -320,6 +321,7 @@ class Orchestrator:
                 try:
                     await send_fn(phone, user_msg)
                     pre_step_msg_sent = True
+                    pipeline_msg_sent = True
                     logger.info("Pre-step message sent (%s): %s", tool_name, user_msg[:80])
                 except Exception as e:
                     logger.warning("Failed to send pre-step message: %s", e)
@@ -367,10 +369,11 @@ class Orchestrator:
             new_steps        = assessment.get("new_steps", [])
 
             # Optional mid-execution progress update to user
-            # Skip if a pre-step message was already sent for this step to avoid duplicates
-            if send_fn and progress_message and not pre_step_msg_sent:
+            # Skip if ANY message was already sent this pipeline run to avoid duplicates
+            if send_fn and progress_message and not pipeline_msg_sent:
                 try:
                     await send_fn(phone, progress_message)
+                    pipeline_msg_sent = True
                     logger.info("Progress message sent (%s): %s", tool_name, progress_message[:80])
                 except Exception as e:
                     logger.warning("Failed to send progress message: %s", e)
