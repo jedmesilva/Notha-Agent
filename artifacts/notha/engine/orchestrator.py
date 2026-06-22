@@ -119,6 +119,46 @@ def _heuristic_steps(text: str) -> list[dict]:
                 "user_message": None,
             })
 
+    # ── Pix key ────────────────────────────────────────────────────────────────
+    # Pix key formats: CPF (111.222.333-44), email (a@b.com), phone (+5511999...),
+    # or random UUID. Capture the full token (including dots/hyphens) after trigger.
+    pix_match = re.search(
+        r"(?:chave\s+pix|pix\s+key|minha\s+(?:chave\s+)?pix)\s*[eé:é\-]?\s*([^\s,;]+)",
+        tl,
+    )
+    if pix_match:
+        pix_val_lower = pix_match.group(1).strip()
+        if len(pix_val_lower) >= 5:
+            # Recover original-casing version from the source text
+            try:
+                orig_idx = tl.index(pix_val_lower)
+                pix_val_orig = t[orig_idx: orig_idx + len(pix_val_lower)]
+            except ValueError:
+                pix_val_orig = pix_val_lower
+            steps.append({
+                "step": len(steps) + 1,
+                "tool": "update_pix_key",
+                "args": {"pix_key": pix_val_orig},
+                "reason": "heuristic: user provided pix key",
+                "user_message": None,
+            })
+
+    # ── Tax ID (CPF) ──────────────────────────────────────────────────────────
+    cpf_match = re.search(
+        r"(?:cpf|meu\s+cpf)\s*[eé:é\-]?\s*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\-\s]?\d{2})",
+        tl,
+    )
+    if cpf_match:
+        cpf_val = re.sub(r"[^\d]", "", cpf_match.group(1))
+        if len(cpf_val) == 11:
+            steps.append({
+                "step": len(steps) + 1,
+                "tool": "update_tax_id",
+                "args": {"tax_id": cpf_val},
+                "reason": "heuristic: user provided CPF",
+                "user_message": None,
+            })
+
     # ── View profile ───────────────────────────────────────────────────────────
     if re.search(r"\b(ver\s+(meu\s+)?perfil|meus\s+dados|my\s+profile|show\s+profile|ver\s+meus\s+dados)\b", tl):
         steps.append({
@@ -601,8 +641,9 @@ class Orchestrator:
                 )
                 break
             elif decision == "replan" and new_steps:
-                logger.info("Replan triggered by %s: %d new steps", tool_name, len(new_steps))
-                remaining = new_steps + remaining
+                valid_new = [s for s in new_steps if s.get("tool")]
+                logger.info("Replan triggered by %s: %d new steps", tool_name, len(valid_new))
+                remaining = valid_new + remaining
             # "continue" → just keep going with remaining steps
 
         # ── Phase 3: Synthesize ───────────────────────────────────────────────
