@@ -372,6 +372,26 @@ class Orchestrator:
         user    = await user_repo.find_or_create_by_phone(phone)
         user_id = user["id"]
 
+        # ── AuthUser: session check + re-authentication ───────────────────────
+        # Must run before any domain agent. Returns (True, None) if session is
+        # valid, or (False, reply) if re-auth is required.
+        from agents.auth_user import AuthUserAgent as _AuthUserAgent
+        from db.repositories.sessions import SessionRepository as _SessionRepo
+        import os as _os
+        _session_repo = _SessionRepo(db)
+        _auth_agent   = _AuthUserAgent()
+        _session_ok, _auth_reply = await _auth_agent.check_and_handle(
+            user=user, phone=phone, text=text,
+            session_repo=_session_repo, user_repo=user_repo,
+            base_url=_os.environ.get("APP_BASE_URL", ""),
+        )
+        if not _session_ok:
+            if _auth_reply:
+                await conv_repo.add(user_id, "user", text)
+                await conv_repo.add(user_id, "assistant", _auth_reply)
+            return _auth_reply or ""
+        await _session_repo.touch(phone)
+
         # Parse phone number info on first contact (runs once, result persisted in DB)
         phone_info_repo = PhoneInfoRepository(db)
         if await phone_info_repo.needs_parsing(phone):
@@ -1751,6 +1771,33 @@ class Orchestrator:
         flow_repo = ListingFlowRepository(db)
 
         user = await user_repo.find_or_create_by_phone(phone)
+
+        # ── AuthUser: check session before routing media ──────────────────────
+        # If session is pending_reauth with tier="selfie", the photo IS the re-auth selfie.
+        # Download bytes eagerly only when selfie re-auth is in progress to avoid
+        # unnecessary bandwidth usage for listing-flow photos.
+        from agents.auth_user import AuthUserAgent as _AuthUserAgentM
+        from db.repositories.sessions import SessionRepository as _SessionRepoM
+        import os as _osM
+        _session_repo_m = _SessionRepoM(db)
+        _session_m = await _session_repo_m.get_session(phone)
+        if _session_m and _session_m.get("status") == "pending_reauth" and _session_m.get("reauth_tier") == "selfie":
+            try:
+                _media_bytes_m, _detected_mime_m = await download_media_bytes(media_id)
+                _effective_mime_m = _detected_mime_m or mime_type
+            except Exception:
+                _media_bytes_m, _effective_mime_m = None, mime_type
+            _auth_m = _AuthUserAgentM()
+            _session_ok_m, _auth_reply_m = await _auth_m.check_and_handle(
+                user=user, phone=phone, text="",
+                session_repo=_session_repo_m, user_repo=user_repo,
+                base_url=_osM.environ.get("APP_BASE_URL", ""),
+                media_bytes=_media_bytes_m,
+                media_mime=_effective_mime_m,
+            )
+            if not _session_ok_m:
+                return _auth_reply_m or ""
+            await _session_repo_m.touch(phone)
 
         active_flow = await flow_repo.get_active(phone)
         if active_flow and active_flow["step"] == "photos_upload":

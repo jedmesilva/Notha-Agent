@@ -2,9 +2,11 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from db.connection import init_pool, close_pool, get_pool
@@ -156,6 +158,55 @@ async def _webhook_dedup_cleanup_loop() -> None:
             logger.error("Webhook dedup cleanup failed: %s", e)
 
 
+async def _migrate_sessions_tables() -> None:
+    """Creates sessions and pending_verifications tables if they don't exist yet."""
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id               SERIAL PRIMARY KEY,
+                user_id          INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                phone            VARCHAR(20) NOT NULL,
+                status           VARCHAR(20) NOT NULL DEFAULT 'active',
+                reauth_tier      VARCHAR(20),
+                reauth_attempts  INT NOT NULL DEFAULT 0,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                reauthed_at      TIMESTAMPTZ
+            )
+        """)
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_phone_live
+                ON sessions(phone)
+                WHERE status IN ('active', 'pending_reauth')
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_phone ON sessions(phone)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user  ON sessions(user_id)")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_verifications (
+                id         SERIAL PRIMARY KEY,
+                session_id INT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                user_id    INT NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+                phone      VARCHAR(20) NOT NULL,
+                token      TEXT NOT NULL,
+                status     VARCHAR(20) NOT NULL DEFAULT 'pending',
+                result     JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMPTZ NOT NULL
+            )
+        """)
+        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_token ON pending_verifications(token)")
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_phone_pending
+                ON pending_verifications(phone)
+                WHERE status = 'pending'
+        """)
+    logger.info("Sessions tables ready.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
@@ -164,6 +215,7 @@ async def lifespan(app: FastAPI):
     await _migrate_user_profile_columns()
     await _migrate_phone_info_columns()
     await _init_webhook_dedup_table()
+    await _migrate_sessions_tables()
 
     orchestrator = Orchestrator()
 
@@ -178,6 +230,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NOTHA", version="2.0.0", lifespan=lifespan)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 async def process_message(phone: str, text: str) -> None:
@@ -344,6 +400,95 @@ async def receive_message(request: Request) -> Response:
                 )
 
     return Response(status_code=200)
+
+
+@app.get("/verificar/{token}")
+async def verification_page(token: str) -> HTMLResponse:
+    """Serves the facial verification page for link-based re-auth."""
+    html_path = Path(__file__).parent / "static" / "verify.html"
+    if not html_path.is_file():
+        raise HTTPException(status_code=404, detail="Página não encontrada")
+    content = html_path.read_text(encoding="utf-8")
+    return HTMLResponse(content=content)
+
+
+@app.get("/verificar/{token}/check")
+async def verification_check(token: str) -> Response:
+    """Returns 200 if the token is still valid, 410 if expired/invalid."""
+    from db.connection import get_db
+    from db.repositories.sessions import SessionRepository
+    db = get_db()
+    if not db:
+        return Response(status_code=503)
+    session_repo = SessionRepository(db)
+    pv = await session_repo.get_pending_verification(token)
+    if not pv:
+        return Response(status_code=410)
+    return Response(status_code=200)
+
+
+@app.post("/verificar/{token}/submit")
+async def verification_submit(token: str, request: Request) -> dict:
+    """Receives selfie image from the browser, runs server-side face comparison."""
+    from db.connection import get_db
+    from db.repositories.sessions import SessionRepository
+    from agents.auth_user import AuthUserAgent
+    import base64
+
+    db = get_db()
+    if not db:
+        return {"ok": False, "message": "Erro interno — tente novamente."}
+
+    session_repo = SessionRepository(db)
+
+    pv = await session_repo.get_pending_verification(token)
+    if not pv:
+        return {"ok": False, "message": "Link inválido ou já utilizado. Solicite um novo link no WhatsApp."}
+
+    try:
+        body      = await request.json()
+        image_b64 = body.get("image", "")
+        mime      = body.get("mime", "image/jpeg")
+        if not image_b64:
+            return {"ok": False, "message": "Imagem não recebida. Tente novamente."}
+        media_bytes = base64.b64decode(image_b64)
+    except Exception:
+        return {"ok": False, "message": "Erro ao processar imagem. Tente novamente."}
+
+    # Load user for face comparison
+    from db.repositories.users import UserRepository
+    user_repo = UserRepository(db)
+    user = await user_repo.find_by_id(pv["user_id"])
+    if not user:
+        return {"ok": False, "message": "Usuário não encontrado."}
+
+    auth  = AuthUserAgent()
+    # Reuse selfie tier logic — passes media_bytes to GPT-4o vision for comparison
+    session = await db.fetch_one("SELECT * FROM sessions WHERE id = $1", pv["session_id"])
+    session = dict(session) if session else {"id": pv["session_id"], "reauth_attempts": 0}
+
+    ok, reply = await auth._handle_selfie_tier(
+        user=dict(user), phone=pv["phone"], session=session,
+        session_repo=session_repo, user_repo=user_repo,
+        media_bytes=media_bytes, media_mime=mime,
+        attempts=session.get("reauth_attempts", 0),
+    )
+
+    await session_repo.complete_verification(token, ok, {"source": "link"})
+
+    if ok:
+        # send WhatsApp confirmation
+        try:
+            name = (dict(user).get("nickname") or (dict(user).get("full_name") or "")).split()[0] or "você"
+            await send_message(
+                pv["phone"],
+                f"✅ Verificação facial concluída! Bem-vindo de volta, {name}! Como posso ajudar?",
+            )
+        except Exception as exc:
+            logger.warning("Could not send re-auth confirmation: %s", exc)
+        return {"ok": True, "message": "✅ Identidade verificada! Volte ao WhatsApp para continuar."}
+
+    return {"ok": False, "message": reply or "❌ Verificação não concluída. Tente novamente."}
 
 
 @app.post("/webhook/asaas")

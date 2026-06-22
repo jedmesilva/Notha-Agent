@@ -366,6 +366,49 @@ INSERT INTO restricted_items (category, keywords, description, reason, created_b
  'Organ trafficking — Lei 9.434/1997', 'system')
 ON CONFLICT DO NOTHING;
 
+-- 14. User sessions
+CREATE TABLE IF NOT EXISTS sessions (
+    id               SERIAL PRIMARY KEY,
+    user_id          INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone            VARCHAR(20) NOT NULL,
+    status           VARCHAR(20) NOT NULL DEFAULT 'active',
+        -- active | pending_reauth | revoked
+    reauth_tier      VARCHAR(20),
+        -- cpf | selfie | link
+    reauth_attempts  INT NOT NULL DEFAULT 0,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_activity_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reauthed_at      TIMESTAMPTZ
+);
+
+-- Only one active/pending_reauth session per phone at a time
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_phone_live
+    ON sessions(phone)
+    WHERE status IN ('active', 'pending_reauth');
+
+CREATE INDEX IF NOT EXISTS idx_sessions_phone  ON sessions(phone);
+CREATE INDEX IF NOT EXISTS idx_sessions_user   ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+
+-- 15. Pending facial verifications (link tier re-auth)
+CREATE TABLE IF NOT EXISTS pending_verifications (
+    id         SERIAL PRIMARY KEY,
+    session_id INT  NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    user_id    INT  NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+    phone      VARCHAR(20) NOT NULL,
+    token      TEXT UNIQUE NOT NULL,
+    status     VARCHAR(20) NOT NULL DEFAULT 'pending',
+        -- pending | completed | failed | expired
+    result     JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL
+    -- one active (pending) verification per phone enforced via partial index below
+);
+
+CREATE INDEX IF NOT EXISTS idx_pv_token  ON pending_verifications(token);
+CREATE INDEX IF NOT EXISTS idx_pv_phone  ON pending_verifications(phone);
+CREATE INDEX IF NOT EXISTS idx_pv_status ON pending_verifications(status);
+
 -- ============================================================
 -- End of schema
 -- ============================================================

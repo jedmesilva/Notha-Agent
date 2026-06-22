@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NOTHA — Verificação de Identidade</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f0f0f;
+    color: #f0f0f0;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+
+  .card {
+    background: #1a1a1a;
+    border-radius: 20px;
+    padding: 28px 24px;
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+    box-shadow: 0 8px 40px rgba(0,0,0,.6);
+  }
+
+  .logo { font-size: 32px; font-weight: 800; letter-spacing: -1px; margin-bottom: 6px; }
+  .logo span { color: #25d366; }
+
+  .subtitle {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 24px;
+  }
+
+  h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .info {
+    font-size: 13px;
+    color: #aaa;
+    line-height: 1.5;
+    margin-bottom: 20px;
+  }
+
+  .video-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3/4;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+    margin-bottom: 20px;
+  }
+
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+
+  canvas { display: none; }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    padding-bottom: 12px;
+    pointer-events: none;
+  }
+
+  .face-guide {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -55%);
+    width: 55%;
+    aspect-ratio: 3/4;
+    border: 3px solid rgba(37,211,102,.7);
+    border-radius: 50% 50% 45% 45%;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.35);
+  }
+
+  .face-status {
+    font-size: 12px;
+    color: #25d366;
+    background: rgba(0,0,0,.7);
+    padding: 4px 12px;
+    border-radius: 20px;
+    backdrop-filter: blur(4px);
+  }
+
+  button {
+    width: 100%;
+    padding: 16px;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s;
+  }
+
+  #btnCapture {
+    background: #25d366;
+    color: #000;
+  }
+  #btnCapture:disabled {
+    background: #2a3d30;
+    color: #555;
+    cursor: not-allowed;
+  }
+  #btnCapture:not(:disabled):hover { background: #20bb59; }
+
+  #btnRetry {
+    background: #2a2a2a;
+    color: #f0f0f0;
+    margin-top: 10px;
+    display: none;
+  }
+
+  .result-screen {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .result-icon { font-size: 64px; }
+
+  .result-title { font-size: 20px; font-weight: 700; }
+
+  .result-msg {
+    font-size: 14px;
+    color: #aaa;
+    line-height: 1.5;
+  }
+
+  .wpp-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #25d366;
+    color: #000;
+    font-weight: 700;
+    font-size: 15px;
+    padding: 14px 24px;
+    border-radius: 12px;
+    text-decoration: none;
+    margin-top: 8px;
+  }
+
+  .loading { display: none; }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid #333;
+    border-top-color: #25d366;
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .step-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: #555;
+    margin-bottom: 4px;
+  }
+
+  #btnRetry { display: none; }
+
+  .expired-msg {
+    background: #2a1010;
+    color: #f87171;
+    border-radius: 10px;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">NO<span>THA</span></div>
+  <div class="subtitle">Plataforma segura de negociação</div>
+
+  <!-- EXPIRED screen -->
+  <div id="screenExpired" style="display:none">
+    <div class="expired-msg">
+      ⏱️ Este link expirou ou já foi utilizado.<br><br>
+      Envie qualquer mensagem no WhatsApp para receber um novo link.
+    </div>
+  </div>
+
+  <!-- CAMERA screen -->
+  <div id="screenCamera">
+    <div class="step-label">Verificação de identidade</div>
+    <h2>Confirmação facial</h2>
+    <p class="info">
+      Segure seu documento de identidade (RG, CNH ou passaporte) próximo ao rosto,
+      com ambos claramente visíveis, e clique em <strong>Capturar foto</strong>.
+    </p>
+
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+      <div class="overlay">
+        <div class="face-guide"></div>
+        <div class="face-status" id="faceStatus">Aguardando câmera…</div>
+      </div>
+    </div>
+
+    <button id="btnCapture" disabled>📸 Capturar foto</button>
+    <button id="btnRetry" onclick="resetCapture()">↩️ Tentar novamente</button>
+  </div>
+
+  <!-- LOADING screen -->
+  <div class="loading" id="screenLoading">
+    <div class="spinner"></div>
+    <p style="color:#aaa;font-size:14px">Verificando sua identidade…<br>Aguarde alguns segundos.</p>
+  </div>
+
+  <!-- RESULT screen -->
+  <div class="result-screen" id="screenResult">
+    <div class="result-icon" id="resultIcon"></div>
+    <div class="result-title" id="resultTitle"></div>
+    <div class="result-msg" id="resultMsg"></div>
+    <a href="whatsapp://" class="wpp-btn" id="backToWpp" style="display:none">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+        <path d="M12 0C5.373 0 0 5.373 0 12c0 2.125.554 4.118 1.522 5.845L.057 23.852l6.163-1.616A11.945 11.945 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 22c-1.847 0-3.574-.475-5.075-1.307l-.364-.215-3.764.987 1.004-3.665-.237-.378A9.963 9.963 0 012 12C2 6.477 6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+      </svg>
+      Voltar ao WhatsApp
+    </a>
+  </div>
+</div>
+
+<script>
+const TOKEN = document.currentScript ? "" : "";
+
+(function() {
+  const token    = new URLSearchParams(location.search).get("t") || location.pathname.split("/").pop();
+  const submitUrl = `/verificar/${token}/submit`;
+
+  const video     = document.getElementById("video");
+  const canvas    = document.getElementById("canvas");
+  const btnCap    = document.getElementById("btnCapture");
+  const btnRetry  = document.getElementById("btnRetry");
+  const faceStatus = document.getElementById("faceStatus");
+
+  const show = id => {
+    ["screenExpired","screenCamera","screenLoading","screenResult"]
+      .forEach(s => {
+        const el = document.getElementById(s);
+        if (el) el.style.display = s === id ? (s === "screenResult" ? "flex" : "block") : "none";
+      });
+  };
+
+  // ── Start camera ──────────────────────────────────────────────────────────
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      faceStatus.textContent = "✅ Câmera ativa — posicione rosto e documento";
+      btnCap.disabled = false;
+    } catch (err) {
+      faceStatus.textContent = "❌ Permissão de câmera negada";
+      console.error(err);
+    }
+  }
+
+  // ── Capture and submit ────────────────────────────────────────────────────
+  btnCap.addEventListener("click", async () => {
+    btnCap.disabled = true;
+    btnRetry.style.display = "none";
+
+    // Draw video frame onto canvas
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    const imageBase64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+
+    // Stop camera
+    const stream = video.srcObject;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    show("screenLoading");
+
+    try {
+      const resp = await fetch(submitUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imageBase64, mime: "image/jpeg" }),
+      });
+      const data = await resp.json();
+      showResult(data.ok, data.message);
+    } catch (err) {
+      showResult(false, "Erro de conexão. Tente novamente.");
+    }
+  });
+
+  function showResult(ok, message) {
+    show("screenResult");
+    document.getElementById("resultIcon").textContent  = ok ? "✅" : "❌";
+    document.getElementById("resultTitle").textContent = ok ? "Identidade verificada!" : "Verificação não concluída";
+    document.getElementById("resultMsg").textContent   = message || "";
+    if (ok) {
+      document.getElementById("backToWpp").style.display = "inline-flex";
+    }
+  }
+
+  function resetCapture() {
+    btnRetry.style.display = "none";
+    show("screenCamera");
+    startCamera();
+  }
+  window.resetCapture = resetCapture;
+
+  // ── Check token validity on load ─────────────────────────────────────────
+  async function init() {
+    if (!token || token.length < 10) {
+      show("screenExpired");
+      return;
+    }
+    try {
+      const check = await fetch(`/verificar/${token}/check`);
+      if (!check.ok) {
+        show("screenExpired");
+        return;
+      }
+    } catch {
+      // If check fails, still try to start camera (offline-tolerant)
+    }
+    show("screenCamera");
+    await startCamera();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
