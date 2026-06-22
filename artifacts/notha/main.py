@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from db.connection import init_pool, close_pool
+from db.connection import init_pool, close_pool, get_pool
 from engine.orchestrator import Orchestrator
 from engine.jobs import start_all_jobs
 from whatsapp import send_message, extract_messages, download_media_bytes
@@ -21,16 +21,95 @@ logger = logging.getLogger("notha")
 
 orchestrator: Orchestrator | None = None
 
+# Per-phone locks — prevent concurrent processing of messages from the same number.
+# If a previous message is still being processed, new ones queue behind the lock.
+_PHONE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _phone_lock(phone: str) -> asyncio.Lock:
+    if phone not in _PHONE_LOCKS:
+        _PHONE_LOCKS[phone] = asyncio.Lock()
+    return _PHONE_LOCKS[phone]
+
+
+async def _init_webhook_dedup_table() -> None:
+    """Creates the webhook dedup table if it doesn't exist.
+
+    Stores processed WhatsApp message IDs for 2 hours so that Meta webhook
+    retries (which happen when the server restarts mid-delivery) are safely
+    ignored without re-processing the same message twice.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_webhook_msgs (
+                msg_id      TEXT        PRIMARY KEY,
+                processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pwm_processed_at
+            ON processed_webhook_msgs (processed_at)
+        """)
+    logger.info("Webhook dedup table ready.")
+
+
+async def _is_duplicate_webhook(msg_id: str) -> bool:
+    """Returns True if this msg_id was already processed (persisted in DB).
+
+    Also inserts the ID so future calls return True for the same ID.
+    Uses ON CONFLICT DO NOTHING so the check+insert is atomic.
+    """
+    pool = get_pool()
+    if not pool or not msg_id:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "INSERT INTO processed_webhook_msgs (msg_id) VALUES ($1) ON CONFLICT DO NOTHING",
+            msg_id,
+        )
+        # If 0 rows inserted → already existed → duplicate
+        inserted = result.split()[-1] if result else "0"
+        return inserted == "0"
+
+
+async def _cleanup_old_webhook_ids() -> None:
+    """Removes webhook IDs older than 2 hours (run periodically by jobs)."""
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        deleted = await conn.execute(
+            "DELETE FROM processed_webhook_msgs WHERE processed_at < NOW() - INTERVAL '2 hours'"
+        )
+        count = deleted.split()[-1] if deleted else "0"
+        if count != "0":
+            logger.info("Cleaned up %s old webhook dedup entries.", count)
+
+
+async def _webhook_dedup_cleanup_loop() -> None:
+    """Runs _cleanup_old_webhook_ids every hour."""
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await _cleanup_old_webhook_ids()
+        except Exception as e:
+            logger.error("Webhook dedup cleanup failed: %s", e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
 
     await init_pool()
+    await _init_webhook_dedup_table()
 
     orchestrator = Orchestrator()
 
     await start_all_jobs()
+    asyncio.create_task(_webhook_dedup_cleanup_loop())
 
     logger.info("NOTHA started and ready to receive WhatsApp messages.")
     yield
@@ -43,89 +122,91 @@ app = FastAPI(title="NOTHA", version="2.0.0", lifespan=lifespan)
 
 
 async def process_message(phone: str, text: str) -> None:
-    if text.lower() in ("/reset", "/limpar", "/clear"):
-        await orchestrator.reset(phone)
-        try:
-            await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
-        except Exception as e:
-            logger.error(f"Error sending reset to {phone}: {e}")
-        return
+    async with _phone_lock(phone):
+        if text.lower() in ("/reset", "/limpar", "/clear"):
+            await orchestrator.reset(phone)
+            try:
+                await send_message(phone, "Conversa reiniciada! Como posso te ajudar?")
+            except Exception as e:
+                logger.error(f"Error sending reset to {phone}: {e}")
+            return
 
-    try:
-        reply = await orchestrator.handle_message(phone, text, send_fn=send_message)
-        await send_message(phone, reply)
-        logger.info(f"Reply sent to {phone}.")
-    except Exception as e:
-        logger.error(f"Error processing message from {phone}: {e}")
         try:
-            await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
-        except Exception:
-            pass
+            reply = await orchestrator.handle_message(phone, text, send_fn=send_message)
+            await send_message(phone, reply)
+            logger.info(f"Reply sent to {phone}.")
+        except Exception as e:
+            logger.error(f"Error processing message from {phone}: {e}")
+            try:
+                await send_message(phone, "Desculpe, ocorreu um erro. Tente novamente em instantes.")
+            except Exception:
+                pass
 
 
 async def process_audio_message(phone: str, media_id: str, mime_type: str) -> None:
     """Downloads audio from WhatsApp, transcribes via Whisper and processes as text."""
-    try:
-        await send_message(phone, "🎙️ Recebi seu áudio, transcrevendo...")
-    except Exception:
-        pass
-
-    try:
-        audio_bytes, detected_mime = await download_media_bytes(media_id)
-        if not audio_bytes:
-            logger.error(f"Failed to download audio from {phone} (media_id={media_id})")
-            await send_message(phone, "Não consegui processar seu áudio. Pode tentar enviar como texto?")
-            return
-
-        effective_mime = detected_mime or mime_type
-        transcribed = await transcribe_audio(audio_bytes, effective_mime)
-
-        if not transcribed:
-            logger.warning(f"Empty transcription for audio from {phone}")
-            await send_message(phone, "Não consegui entender o áudio. Pode tentar enviar como texto?")
-            return
-
-        logger.info(f"Audio transcribed from {phone}: {transcribed[:80]}...")
-
-        reply = await orchestrator.handle_message(phone, transcribed, send_fn=send_message)
-        await send_message(phone, reply)
-        logger.info(f"Audio reply sent to {phone}.")
-
-    except Exception as e:
-        logger.error(f"Error processing audio from {phone}: {e}")
+    async with _phone_lock(phone):
         try:
-            await send_message(phone, "Ocorreu um erro ao processar seu áudio. Tente enviar como texto.")
+            await send_message(phone, "🎙️ Recebi seu áudio, transcrevendo...")
         except Exception:
             pass
 
+        try:
+            audio_bytes, detected_mime = await download_media_bytes(media_id)
+            if not audio_bytes:
+                logger.error(f"Failed to download audio from {phone} (media_id={media_id})")
+                await send_message(phone, "Não consegui processar seu áudio. Pode tentar enviar como texto?")
+                return
+
+            effective_mime = detected_mime or mime_type
+            transcribed = await transcribe_audio(audio_bytes, effective_mime)
+
+            if not transcribed:
+                logger.warning(f"Empty transcription for audio from {phone}")
+                await send_message(phone, "Não consegui entender o áudio. Pode tentar enviar como texto?")
+                return
+
+            logger.info(f"Audio transcribed from {phone}: {transcribed[:80]}...")
+
+            reply = await orchestrator.handle_message(phone, transcribed, send_fn=send_message)
+            await send_message(phone, reply)
+            logger.info(f"Audio reply sent to {phone}.")
+
+        except Exception as e:
+            logger.error(f"Error processing audio from {phone}: {e}")
+            try:
+                await send_message(phone, "Ocorreu um erro ao processar seu áudio. Tente enviar como texto.")
+            except Exception:
+                pass
+
 
 async def process_media(phone: str, media_id: str, mime_type: str, caption: str) -> None:
-    """
-    Routes received image/document.
+    """Routes received image/document.
 
     Priority:
     1. If there is an active product listing flow at the 'photos_upload' step → routes to listing flow
     2. Otherwise → treats as identity document
     """
-    try:
-        reply = await orchestrator.handle_media(
-            phone=phone,
-            media_id=media_id,
-            mime_type=mime_type,
-            caption=caption,
-        )
-        if reply:
-            await send_message(phone, reply)
-        logger.info(f"Media processed for {phone}.")
-    except Exception as e:
-        logger.error(f"Error processing media from {phone}: {e}")
+    async with _phone_lock(phone):
         try:
-            await send_message(
-                phone,
-                "Recebi sua imagem, mas tive um problema técnico ao processá-la. Tenta enviar de novo em instantes.",
+            reply = await orchestrator.handle_media(
+                phone=phone,
+                media_id=media_id,
+                mime_type=mime_type,
+                caption=caption,
             )
-        except Exception:
-            pass
+            if reply:
+                await send_message(phone, reply)
+            logger.info(f"Media processed for {phone}.")
+        except Exception as e:
+            logger.error(f"Error processing media from {phone}: {e}")
+            try:
+                await send_message(
+                    phone,
+                    "Recebi sua imagem, mas tive um problema técnico ao processá-la. Tenta enviar de novo em instantes.",
+                )
+            except Exception:
+                pass
 
 
 @app.get("/webhook")
@@ -153,17 +234,14 @@ async def receive_message(request: Request) -> Response:
     messages = extract_messages(body)
     for msg in messages:
         msg_id = msg.get("id", "")
-        from engine.orchestrator import PROCESSED_MESSAGE_IDS, MAX_PROCESSED_IDS
-        if msg_id and msg_id in PROCESSED_MESSAGE_IDS:
-            logger.info(f"Duplicate message ignored: {msg_id}")
+
+        # DB-based deduplication — survives server restarts (unlike in-memory set).
+        # Meta retries webhook delivery when it doesn't get a 200 quickly enough
+        # (e.g. during server reload). The DB check+insert is atomic so concurrent
+        # requests for the same msg_id are also handled safely.
+        if msg_id and await _is_duplicate_webhook(msg_id):
+            logger.info(f"Duplicate webhook ignored (msg_id={msg_id})")
             continue
-        if msg_id:
-            PROCESSED_MESSAGE_IDS.add(msg_id)
-            if len(PROCESSED_MESSAGE_IDS) > MAX_PROCESSED_IDS:
-                try:
-                    PROCESSED_MESSAGE_IDS.pop()
-                except KeyError:
-                    pass
 
         phone    = msg["from"]
         msg_type = msg.get("type", "text")
