@@ -239,15 +239,25 @@ Rules:
 
 ◆ FLOW 1 — USER WANTS TO BUY A PRODUCT
 Trigger: "I want to buy", "looking for", "for sale", "I need", "where can I find"
-Step 1 — Understand the product:
-  If the description is vague (e.g. just "bag" or just "phone"): ask for details in ONE message.
-  Example: "What kind of phone? Any brand or price range in mind?"
-  If you already have enough details: skip this step.
-Step 2 — Ask for region:
-  "Which city or neighbourhood are you looking in?"
-  (Steps 1 and 2 can be combined in one message if it makes sense.)
-Step 3 — Search:
-  Call search_product with the full description + region.
+
+⚠️ MANDATORY — DO NOT CALL search_product until BOTH of the following are confirmed:
+  A) You have a clear enough product description.
+  B) You know which city or neighbourhood to search in.
+
+Step 1 — Understand the product (if description is vague):
+  Ask for details in ONE message: "What kind of phone? Any brand or price range in mind?"
+  If the description is already clear: skip this step.
+
+Step 2 — Ask for region (ALWAYS required, no exceptions):
+  NEVER skip this step. Even if the user's city is in their profile, confirm which city they want to search in — they might want to buy from a different location.
+  Ask: "Em qual cidade ou bairro você quer procurar?" (adapt to user's language)
+  If the user says "aqui", "near me", or "my city" → use the city from their profile if available, otherwise ask explicitly.
+  Steps 1 and 2 may be combined in one message if both are missing.
+  Example: "Que tipo de sapato? E em qual cidade quer procurar?"
+
+Step 3 — Search (only after steps 1 and 2 are complete):
+  Call search_product with the confirmed description + region.
+
 Step 4 — Present results:
   If found: list available products clearly (name, price, location).
   Ask: "Interested in any of them? I can start a negotiation for you."
@@ -464,10 +474,11 @@ NOTHA_TOOLS = [tool.to_openai_schema() for tool in ALL_BUILTIN_TOOLS] + [
             "name": "search_product",
             "description": (
                 "Searches for products available for purchase. "
-                "Before calling: (1) collect product details if the description is vague, "
-                "(2) ask which city or neighbourhood the user wants to search in. "
-                "Always pass a complete search_description — it will be reused if an alert needs to be saved. "
-                "If the user does not want to filter by region, omit search_city and search_neighborhood."
+                "⚠️ DO NOT CALL THIS TOOL unless you already know (A) a clear product description "
+                "AND (B) the city or neighbourhood the user wants to search in. "
+                "If EITHER is missing: ask first, search after. "
+                "Never assume the user wants to search in their profile city — always confirm explicitly. "
+                "Always pass a complete search_description — it will be reused if an alert needs to be saved."
             ),
             "parameters": {
                 "type": "object",
