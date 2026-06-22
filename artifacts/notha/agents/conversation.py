@@ -610,19 +610,38 @@ class ConversationAgent:
 
         Returns (updated_messages, new_tool_calls).
         If new_tool_calls is empty, the LLM generated a final text response.
+
+        Multi-turn safety: the messages array may already contain role:tool entries
+        injected in a previous iteration of the agentic loop. We check whether the
+        message immediately following an assistant-with-tool_calls is already a tool
+        message; if so, we copy the existing results instead of adding new ones.
+        This prevents duplicate/invalid tool message sequences on iterations 2+.
         """
         msgs: list[dict] = []
-        for msg in messages:
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
             msgs.append(msg)
+
             if msg["role"] == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    tc_id = tc["id"]
-                    result = tool_results.get(tc_id, "no result")
-                    msgs.append({
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "content": result,
-                    })
+                next_is_tool = (
+                    i + 1 < len(messages) and messages[i + 1]["role"] == "tool"
+                )
+                if next_is_tool:
+                    # Tool results for this assistant message are already in the array;
+                    # they will be copied naturally in subsequent iterations of this loop.
+                    pass
+                else:
+                    # This is the latest (unanswered) assistant tool call — inject results.
+                    for tc in msg["tool_calls"]:
+                        tc_id = tc["id"]
+                        result = tool_results.get(tc_id, "no result")
+                        msgs.append({
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": result,
+                        })
+            i += 1
 
         try:
             resp = await get_provider().complete(
