@@ -597,6 +597,64 @@ class ConversationAgent:
 
         return messages, tool_calls
 
+    async def continue_with_results(
+        self,
+        messages: list[dict],
+        tool_results: dict[str, str],
+        tools: list[dict],
+        contexto: str = "",
+    ) -> tuple[list[dict], list[dict]]:
+        """Feeds tool results back to the LLM as role:tool messages and calls it again
+        with tools available — allowing the LLM to chain tool calls (e.g. check_restriction
+        → search_product) rather than stopping at the first round.
+
+        Returns (updated_messages, new_tool_calls).
+        If new_tool_calls is empty, the LLM generated a final text response.
+        """
+        msgs: list[dict] = []
+        for msg in messages:
+            msgs.append(msg)
+            if msg["role"] == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    tc_id = tc["id"]
+                    result = tool_results.get(tc_id, "no result")
+                    msgs.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": result,
+                    })
+
+        try:
+            resp = await get_provider().complete(
+                messages=msgs,
+                tools=tools,
+                temperature=0.6,
+                max_tokens=500,
+            )
+        except Exception as e:
+            logger.error("Error in continue_with_results: %s", e)
+            return msgs, []
+
+        new_tool_calls: list[dict] = [
+            {"id": tc.id, "name": tc.name, "arguments": tc.args}
+            for tc in resp.tool_calls
+        ]
+
+        msgs.append({
+            "role": "assistant",
+            "content": resp.text,
+            **({"tool_calls": [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])},
+                }
+                for tc in new_tool_calls
+            ]} if new_tool_calls else {}),
+        })
+
+        return msgs, new_tool_calls
+
     async def get_reply_after_tools(
         self,
         messages: list[dict],

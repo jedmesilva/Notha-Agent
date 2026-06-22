@@ -203,8 +203,8 @@ class Orchestrator:
             tools=NOTHA_TOOLS,
         )
 
-        # If there are slow tools, send a "please wait" message immediately
-        # before executing them — so the user knows something is happening
+        # Send a single "please wait" message upfront when slow tools are involved.
+        # The interim text comes from the assistant's Phase-1 reply (e.g. "I'll search now…").
         if send_fn and tool_calls:
             slow_tools = [tc for tc in tool_calls if tc["name"] in self._SLOW_TOOLS]
             if slow_tools:
@@ -228,37 +228,71 @@ class Orchestrator:
             "update_pix_key", "update_address", "update_location",
         }
 
-        # Code deterministically executes what the LLM decided
-        # and returns the real DB result for the LLM to generate an accurate response
-        tool_results: dict[str, str] = {}
+        # ── Agentic tool loop ──────────────────────────────────────────────────
+        # Execute tool calls, feed results back to the LLM *with tools still
+        # available*, and repeat until the LLM produces a plain-text reply.
+        #
+        # This fixes the check_restriction → search_product chaining bug:
+        # previously Phase 2 called the LLM WITHOUT tools, so after
+        # check_restriction returned "ALLOWED" the LLM could only generate text
+        # ("I'll search now…") and search_product was never actually executed.
+        # ──────────────────────────────────────────────────────────────────────
+        current_messages = messages
+        current_tool_calls = tool_calls
         override_reply: str | None = None
         user_data_changed = False
+        final_reply: str | None = None
+        _MAX_AGENT_LOOPS = 5
 
-        for tc in tool_calls:
-            if tc["name"] in _USER_DATA_TOOLS:
-                user_data_changed = True
-            result_text, complex_reply = await self._execute_tool(
-                tc, phone, text, user,
-                user_repo, listing_repo, neg_repo, engine, active_negs,
-                history=history, context=context,
+        for _loop in range(_MAX_AGENT_LOOPS):
+            if not current_tool_calls:
+                # LLM produced a plain-text response — extract it
+                final_reply = next(
+                    (m.get("content") for m in reversed(current_messages)
+                     if m["role"] == "assistant" and not m.get("tool_calls")
+                     and m.get("content")),
+                    None,
+                )
+                break
+
+            # Execute all tool calls in this iteration
+            current_tool_results: dict[str, str] = {}
+            for tc in current_tool_calls:
+                if tc["name"] in _USER_DATA_TOOLS:
+                    user_data_changed = True
+                result_text, complex_reply = await self._execute_tool(
+                    tc, phone, text, user,
+                    user_repo, listing_repo, neg_repo, engine, active_negs,
+                    history=history, context=context,
+                )
+                current_tool_results[tc["id"]] = result_text
+                if complex_reply is not None:
+                    override_reply = complex_reply
+
+            # A tool (search/listing) already produced the complete reply
+            if override_reply:
+                final_reply = override_reply
+                break
+
+            # Reload user context if any data-mutation tool ran
+            if user_data_changed:
+                user = await user_repo.find_by_id(user_id) or user
+                seller_profile = await user_repo.get_seller_profile(user_id)
+                context = self._build_context(user, active_negs, seller_profile, phone=phone)
+                user_data_changed = False
+
+            # Feed results back to LLM with tools available — lets it chain calls
+            current_messages, current_tool_calls = await self._conv.continue_with_results(
+                messages=current_messages,
+                tool_results=current_tool_results,
+                tools=NOTHA_TOOLS,
+                contexto=context,
             )
-            tool_results[tc["id"]] = result_text
-            if complex_reply is not None:
-                override_reply = complex_reply
+            # Next iteration: if current_tool_calls is non-empty, execute them;
+            # if empty, extract the text reply at the top of the loop.
 
-        # If any tool updated user data, reload from DB
-        # so the context passed to the LLM in phase 2 reflects the actual state
-        if user_data_changed:
-            user = await user_repo.find_by_id(user_id) or user
-            seller_profile = await user_repo.get_seller_profile(user_id)
-            context = self._build_context(user, active_negs, seller_profile, phone=phone)
-
-        if override_reply:
-            final_reply = override_reply
-        elif tool_calls:
-            # Phase 2: LLM receives real results and generates a natural response
-            final_reply = await self._conv.get_reply_after_tools(messages, tool_results, contexto=context)
-        else:
+        # ── Fallback: Phase 1 produced no tool calls at all ───────────────────
+        if not tool_calls and final_reply is None:
             last_assistant = next(
                 (m["content"] for m in reversed(messages) if m["role"] == "assistant"),
                 None,
@@ -273,7 +307,7 @@ class Orchestrator:
                     tools=None,
                 )
 
-            # If there is an active negotiation, check if this is a confirmation/rejection
+            # Check active negotiations for confirmation / rejection
             if active_negs:
                 neg_reply = await self._check_negotiation_response(
                     phone, text, user, active_negs[0],
@@ -282,6 +316,9 @@ class Orchestrator:
                 )
                 if neg_reply:
                     final_reply = neg_reply
+
+        if final_reply is None:
+            final_reply = "Desculpe, ocorreu um erro interno. Tente novamente em instantes."
 
         # Persist message and reply in DB
         await conv_repo.add(user_id, "user", text)
