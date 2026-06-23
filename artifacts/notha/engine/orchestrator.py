@@ -1953,12 +1953,12 @@ class Orchestrator:
     ) -> str:
         """Handle an image that looks like a product photo (no identity-document signal).
 
-        Passes the image DIRECTLY to the main LLM (GPT-4o vision) so it can see
-        the product itself — no separate vision pre-processing step. This avoids
-        misidentification from lightweight vision calls and prevents the agent from
-        giving contradictory answers about what it can or cannot see.
+        Uses ImageAnalysisAgent as the single vision source of truth to extract all
+        available information from the image (literal + inferences), then passes the
+        structured result to the Conversation Agent so it can respond accurately.
         """
         from whatsapp import download_media_as_base64
+        from agents.vision import ImageAnalysisAgent
 
         history = await conv_repo.get_history(user["id"], limit=10)
         seller_profile = await user_repo.get_seller_profile(user["id"])
@@ -1971,32 +1971,81 @@ class Orchestrator:
             logger.warning("handle_product_photo: download failed: %s", e)
 
         if data_uri:
-            # Build a multimodal user turn so the main LLM can see the image directly.
-            # This is appended to the history ONLY for this call — not persisted to DB.
+            # 1. Run ImageAnalysisAgent — single vision source of truth
+            vision = await ImageAnalysisAgent().analyze(
+                images=[data_uri],
+                context={"purpose": "chat", "declared_product": caption or ""},
+            )
+
+            # 2. Build a structured vision summary for the Conversation Agent
+            if not vision.error:
+                product_line = vision.product_identified or "produto não identificado"
+                confidence_note = {
+                    "high":   "com alta confiança",
+                    "medium": "com confiança moderada",
+                    "low":    "mas com baixa confiança",
+                }.get(vision.confidence, "")
+
+                lit = vision.literal
+                inf = vision.inferences
+                parts = [f"Product identified: {product_line} ({confidence_note})."]
+
+                if lit.get("brand"):
+                    parts.append(f"Brand literally written: {lit['brand']}.")
+                elif inf.get("probable_brand"):
+                    parts.append(f"Probable brand (inferred from appearance): {inf['probable_brand']}.")
+
+                if lit.get("model"):
+                    parts.append(f"Model literally written: {lit['model']}.")
+                elif inf.get("probable_model"):
+                    parts.append(f"Probable model (inferred): {inf['probable_model']}.")
+
+                if inf.get("reasoning"):
+                    parts.append(f"Reasoning: {inf['reasoning']}.")
+
+                if lit.get("details"):
+                    parts.append(f"Technical details read from image: {', '.join(lit['details'][:4])}.")
+
+                if vision.visual_description:
+                    parts.append(f"Visual condition: {vision.visual_description}.")
+
+                if not vision.photos_sufficient:
+                    parts.append("Note: photo quality/angle may be insufficient for full evaluation.")
+
+                if caption:
+                    parts.append(f"User caption: \"{caption}\".")
+
+                vision_summary = " ".join(parts)
+                instruction = (
+                    f"The user sent a product photo. ImageAnalysisAgent result: {vision_summary}\n\n"
+                    "Using this information, greet the product by name, acknowledge what you see "
+                    "(including any visual condition notes), and ask in one short, natural question "
+                    "whether they want to list it for sale on NOTHA. "
+                    "If confidence is low, phrase it as a question ('Parece ser um X — é isso?')."
+                )
+            else:
+                # Vision failed — still send image directly so LLM can try
+                logger.warning("handle_product_photo: ImageAnalysisAgent error: %s", vision.error)
+                instruction = (
+                    "The user sent a product photo (visible above). "
+                    "You CAN see the image. Identify the product and ask in one short, "
+                    "natural question whether they want to list it for sale on NOTHA."
+                )
+
+            # 3. Build augmented history with the image so the LLM also sees it directly
             user_content: list = [
                 {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+                {"type": "text", "text": caption or "Quero vender esse produto."},
             ]
-            if caption:
-                user_content.append({"type": "text", "text": caption})
-            else:
-                user_content.append({"type": "text", "text": "Quero vender esse produto."})
-
             augmented_history = list(history) + [{"role": "user", "content": user_content}]
 
-            instruction = (
-                "The user sent a product photo (visible in the last message above). "
-                "You CAN see the image. "
-                "Identify the product in the photo (name, brand if visible). "
-                "Acknowledge what you see and ask in one short, natural question "
-                "whether they want to list it for sale on NOTHA."
-            )
             try:
                 reply = await self._conv.speak(instruction, augmented_history, context)
                 if reply:
                     await conv_repo.add(user["id"], "assistant", reply)
                 return reply
             except Exception as e:
-                logger.warning("handle_product_photo: multimodal LLM call failed: %s", e)
+                logger.warning("handle_product_photo: LLM call failed: %s", e)
 
         # Fallback: image could not be downloaded
         instruction = (

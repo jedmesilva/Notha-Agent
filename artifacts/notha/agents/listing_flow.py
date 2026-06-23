@@ -698,7 +698,8 @@ class ListingFlowAgent:
         Only advances to 'confirm' after a valid response.
         """
         vision_data = _parse_jsonb(data.get("vision_analysis"), {})
-        visual_desc = vision_data.get("visual_description", "") if vision_data else ""
+        _vis_state  = vision_data.get("visual_state") or {}
+        visual_desc = _vis_state.get("description", "") or vision_data.get("visual_description", "")
         current_condition = data.get("condition", "fair")
 
         valid_options = list(CONDITION_LABEL.keys())
@@ -887,37 +888,46 @@ class ListingFlowAgent:
                     base64_images.append(data_uri)
             logger.info(f"Downloaded {len(base64_images)}/{len(photos[:4])} photos for visual analysis")
 
-        # 3b. Visual analysis of photos (GPT-4o Vision)
-        vision_data: dict | None = None
+        # 3b. Visual analysis of photos — single ImageAnalysisAgent handles all vision
+        from agents.vision import ImageAnalysisAgent
+        vision_result = None
         if base64_images:
-            vision_data = await self._analyze_photos(
-                photos, product_name, condition, base64_images=base64_images
+            vision_result = await ImageAnalysisAgent().analyze(
+                images=base64_images,
+                context={
+                    "declared_product":   product_name,
+                    "declared_condition": condition,
+                    "purpose":            "listing",
+                },
             )
-        data["vision_analysis"] = vision_data
+            if vision_result.error:
+                logger.warning(f"Visual analysis error: {vision_result.error}")
+                vision_result = None
+        data["vision_analysis"] = vision_result.to_dict() if vision_result else None
 
         # 3c. Fill empty fields with visually extracted data
-        if vision_data:
+        if vision_result:
             filled = []
-            if not data.get("brand") and vision_data.get("visible_brand"):
-                data["brand"]        = vision_data["visible_brand"]
+            if not data.get("brand") and vision_result.visible_brand:
+                data["brand"]        = vision_result.visible_brand
                 data["brand_source"] = "vision"
                 filled.append(f"brand='{data['brand']}'")
-            if not data.get("model") and vision_data.get("visible_model"):
-                data["model"]        = vision_data["visible_model"]
+            if not data.get("model") and vision_result.visible_model:
+                data["model"]        = vision_result.visible_model
                 data["model_source"] = "vision"
                 filled.append(f"model='{data['model']}'")
-            if not data.get("version") and vision_data.get("visible_version"):
-                data["version"]        = vision_data["visible_version"]
+            if not data.get("version") and vision_result.visible_version:
+                data["version"]        = vision_result.visible_version
                 data["version_source"] = "vision"
                 filled.append(f"version='{data['version']}'")
-            if vision_data.get("visible_details"):
-                data["vision_technical_details"] = vision_data["visible_details"]
+            if vision_result.visible_details:
+                data["vision_technical_details"] = vision_result.visible_details
             if filled:
                 logger.info(f"Fields filled via vision: {', '.join(filled)}")
-            if not vision_data.get("condition_consistent", True):
+            if not vision_result.condition_consistent:
                 logger.warning(
                     f"Condition inconsistency: seller declared '{condition}' "
-                    f"but vision detected: {vision_data.get('visual_description', '')[:100]}"
+                    f"but vision detected: {vision_result.visual_description[:100]}"
                 )
                 data["_condition_inconsistent"] = True
 
@@ -927,8 +937,8 @@ class ListingFlowAgent:
         version      = data.get("version") or ""
         product_name = " ".join(filter(None, [brand, model, version])) or description
 
-        visual_desc  = (vision_data or {}).get("visual_description", "") if vision_data else ""
-        condition_ok = (vision_data or {}).get("condition_consistent", True) if vision_data else True
+        visual_desc  = vision_result.visual_description if vision_result else ""
+        condition_ok = vision_result.condition_consistent if vision_result else True
         condition_alert = (
             f"WARNING: visual analysis detects inconsistency with declared condition. "
             f"Visual description: {visual_desc}. "
@@ -1000,8 +1010,8 @@ class ListingFlowAgent:
             if origin_vision:
                 lines.append(f"  (detected in photos: {', '.join(origin_vision)})")
 
-        if vision_data and vision_data.get("visible_details"):
-            details = ", ".join(vision_data["visible_details"][:4])
+        if vision_result and vision_result.visible_details:
+            details = ", ".join(vision_result.visible_details[:4])
             lines.append(f"Details read from photos: {details}")
 
         if is_fixed:
@@ -1052,101 +1062,6 @@ class ListingFlowAgent:
         )
         return data, msg
 
-    async def _analyze_photos(
-        self, photos: list, product: str, declared_condition: str,
-        base64_images: list[str] | None = None,
-    ) -> dict | None:
-        """
-        Uses GPT-4o Vision to analyse product photos.
-
-        GUARDRAIL: only extracts text LITERALLY PRINTED in the images.
-        Accepts base64_images (pre-downloaded data URIs) to avoid double download.
-        """
-        from whatsapp import download_media_as_base64
-
-        images = base64_images or []
-        if not images:
-            for photo in photos[:4]:
-                data_uri = await download_media_as_base64(
-                    photo.get("media_id", ""),
-                    photo.get("mime_type", "image/jpeg"),
-                )
-                if data_uri:
-                    images.append(data_uri)
-
-        if not images:
-            return None
-
-        content: list = []
-        for data_uri in images:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": data_uri, "detail": "high"},
-            })
-
-        content.append({
-            "type": "text",
-            "text": (
-                f"Declared product: {product}.\n"
-                f"Condition declared by the seller: {CONDITION_LABEL.get(declared_condition, declared_condition)}.\n\n"
-                "Return ONLY valid JSON with the fields below. No text outside the JSON.\n\n"
-                "FIELD 1 — visual_description (string):\n"
-                "  Objectively describe the visible physical state: finish, scratches, stains, dents, wear.\n"
-                "  If photos are insufficient (blurry, dark), say so.\n\n"
-                "FIELD 2 — condition_consistent (true | false):\n"
-                "  Is the declared condition consistent with what appears in the photos?\n\n"
-                "FIELD 3 — visible_brand (string | null):\n"
-                "  Read the brand ONLY if it is LITERALLY PRINTED/WRITTEN on a label, box, screen or sticker.\n"
-                "  Do NOT infer the brand from the product's shape or appearance. If not written → null.\n\n"
-                "FIELD 4 — visible_model (string | null):\n"
-                "  Read the model/product name ONLY if LITERALLY WRITTEN in the images.\n"
-                "  Do NOT guess from the shape. If not written → null.\n\n"
-                "FIELD 5 — visible_version (string | null):\n"
-                "  Read version/capacity/variant ONLY if WRITTEN in the images.\n"
-                "  Do NOT infer from colour or size. If not written → null.\n\n"
-                "FIELD 6 — visible_details (array of strings):\n"
-                "  List of any technical information READ literally in the images.\n"
-                "  Include only what is written. Empty array [] if nothing is legible.\n\n"
-                "FIELD 7 — photos_sufficient (true | false):\n"
-                "  Do the photos have sufficient quality and angles for a reliable evaluation?\n\n"
-                "CRITICAL RULES:\n"
-                "- NEVER assign market value or suggest prices.\n"
-                "- NEVER make claims about authenticity or provenance.\n"
-                "- For brand/model/version: if not written in the image, return null."
-            ),
-        })
-
-        try:
-            resp = await get_provider().complete(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a visual evaluator of physical products. "
-                            "ALWAYS return valid JSON. "
-                            "Only extract information literally visible in the images."
-                        ),
-                    },
-                    {"role": "user", "content": content},
-                ],
-                model="gpt-4o",
-                max_tokens=600,
-                temperature=0.0,
-                json_mode=True,
-            )
-            raw = json.loads(resp.text or "{}")
-            return {
-                "visual_description":  str(raw.get("visual_description") or ""),
-                "condition_consistent": bool(raw.get("condition_consistent", True)),
-                "visible_brand":        raw.get("visible_brand") or None,
-                "visible_model":        raw.get("visible_model") or None,
-                "visible_version":      raw.get("visible_version") or None,
-                "visible_details":      list(raw.get("visible_details") or []),
-                "photos_sufficient":    bool(raw.get("photos_sufficient", True)),
-            }
-        except Exception as e:
-            logger.warning(f"Visual analysis failed: {e}")
-            return None
 
 
 # ─────────────────────────────────────────────
