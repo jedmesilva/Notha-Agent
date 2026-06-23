@@ -174,8 +174,108 @@ CRITICAL RULES:
 """
 
 
+@dataclass
+class ImageClassification:
+    """Result of a lightweight image pre-classification call.
+
+    Used by the media router to decide whether an image is a document,
+    a product photo, a selfie, or something else — before committing to
+    a heavier analysis pipeline.
+    """
+    image_type: str          # "document" | "product" | "selfie" | "other"
+    doc_type: str | None     # "national_id" | "drivers_license" | "passport" | "other_document" | None
+    confidence: str = "high" # "high" | "medium" | "low"
+    error: str | None = None
+
+    @property
+    def is_document(self) -> bool:
+        return self.image_type == "document"
+
+    @property
+    def is_product(self) -> bool:
+        return self.image_type in ("product", "other")
+
+
+_CLASSIFY_SYSTEM = (
+    "You are an image type classifier. "
+    "Your only job is to look at an image and determine whether it is: "
+    "(1) an identity document (RG, CNH, passport, any government ID), "
+    "(2) a product/item photo (something being sold), "
+    "(3) a selfie/person photo, or (4) something else. "
+    "Return ONLY valid JSON. No explanations."
+)
+
+_CLASSIFY_PROMPT = """Look at this image and return ONLY this JSON:
+
+{
+  "image_type": "document | product | selfie | other",
+  "doc_type": "national_id | drivers_license | passport | other_document | null",
+  "confidence": "high | medium | low"
+}
+
+Rules:
+- image_type "document": any government-issued ID, RG, CNH, passport, residence permit, etc.
+- image_type "product": any physical item, device, clothing, furniture, vehicle part, etc.
+- image_type "selfie": a person's face/body without a visible document in focus.
+- doc_type: fill ONLY when image_type is "document"; otherwise null.
+- national_id: Brazilian RG or any national identity card.
+- drivers_license: Brazilian CNH or any driver's license.
+- passport: any passport.
+- other_document: any other government document.
+"""
+
+
 class ImageAnalysisAgent:
     """Central visual analysis agent. Call analyze() for any image in the system."""
+
+    async def classify(self, images: list[str]) -> "ImageClassification":
+        """Lightweight pre-classification: document, product, selfie, or other.
+
+        This is a fast, cheap LLM call used by the media router before deciding
+        which processing pipeline to invoke. It costs ~150 tokens and returns
+        in under a second.
+
+        Parameters
+        ----------
+        images : list[str]
+            One or more data URIs or HTTPS URLs (only the first is used).
+        """
+        if not images:
+            return ImageClassification(image_type="other", doc_type=None, error="no_images")
+
+        content: list = [
+            {"type": "image_url", "image_url": {"url": images[0], "detail": "low"}},
+            {"type": "text", "text": _CLASSIFY_PROMPT},
+        ]
+        try:
+            resp = await get_provider().complete(
+                messages=[
+                    {"role": "system", "content": _CLASSIFY_SYSTEM},
+                    {"role": "user",   "content": content},
+                ],
+                model="gpt-4o",
+                temperature=0.0,
+                max_tokens=80,
+                json_mode=True,
+            )
+            raw = json.loads(resp.text or "{}")
+            image_type = str(raw.get("image_type", "other")).lower()
+            doc_type    = raw.get("doc_type") or None
+            confidence  = str(raw.get("confidence", "high")).lower()
+            if doc_type == "null":
+                doc_type = None
+            logger.info(
+                "ImageClassifier: image_type=%r doc_type=%r confidence=%s",
+                image_type, doc_type, confidence,
+            )
+            return ImageClassification(
+                image_type=image_type,
+                doc_type=doc_type,
+                confidence=confidence,
+            )
+        except Exception as exc:
+            logger.warning("ImageClassifier: failed: %s", exc)
+            return ImageClassification(image_type="other", doc_type=None, error=str(exc))
 
     async def analyze(
         self,

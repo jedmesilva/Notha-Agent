@@ -1928,24 +1928,88 @@ class Orchestrator:
                 await conv_repo.add(user["id"], "assistant", reply)
             return reply
 
-        # If turn_state is waiting for an identity document (tax_id field),
-        # route ANY image to handle_identity_document — regardless of caption.
-        _ts_media = TurnStateService(db)
-        _pending_media = await _ts_media.get_pending(phone)
-        if _pending_media and _pending_media.get("field") == "tax_id":
-            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+        # ── Visual pre-classification ─────────────────────────────────────────
+        # Download the image once, classify it visually, then route.
+        # This prevents misrouting regardless of what the user types as caption.
+        from whatsapp import download_media_as_base64
+        from agents.vision import ImageAnalysisAgent
 
-        # If the caption/context doesn't signal an identity document, treat as product photo.
-        # Identity document signals: "rg", "cnh", "passaporte", "identidade", "habilitação"
-        if _detect_document_type(caption or "") == "unknown":
-            return await self.handle_product_photo(
-                phone=phone, media_id=media_id, mime_type=mime_type,
-                caption=caption or "", user=user, db=db,
-                user_repo=user_repo, conv_repo=conv_repo,
+        _ts_media   = TurnStateService(db)
+        _pending_media = await _ts_media.get_pending(phone)
+        expecting_document = bool(_pending_media and _pending_media.get("field") == "tax_id")
+
+        _data_uri: str | None = None
+        try:
+            _data_uri = await download_media_as_base64(media_id, mime_type)
+        except Exception as _dl_err:
+            logger.warning("handle_media: download for classification failed: %s", _dl_err)
+
+        clf = None
+        if _data_uri:
+            clf = await ImageAnalysisAgent().classify([_data_uri])
+            logger.info(
+                "handle_media classifier: type=%r doc_type=%r confidence=%s expecting_doc=%s",
+                clf.image_type, clf.doc_type, clf.confidence, expecting_document,
             )
 
-        # Explicit document signal in caption → identity document flow
-        return await self.handle_identity_document(phone, media_id, mime_type, caption)
+        history_ctx  = await conv_repo.get_history(user["id"], limit=10)
+        context_ctx  = self._build_context(user, [], None, phone=phone)
+
+        if clf and not clf.error:
+            if clf.is_document:
+                if expecting_document:
+                    # ✅ User sent a document and we need one — process it
+                    detected_doc_type = clf.doc_type or _detect_document_type(caption or "")
+                    return await self.handle_identity_document(
+                        phone, media_id, mime_type, caption,
+                        detected_doc_type=detected_doc_type,
+                    )
+                else:
+                    # ⚠️ User sent a document but we need a product photo
+                    logger.info("handle_media: document received but product photo expected — instructing user")
+                    reply = await self._conv.speak(
+                        "The user sent what looks like an identity document, but right now "
+                        "we need a product photo (not an ID). Politely tell them this and "
+                        "ask them to send a photo of the product they want to sell instead.",
+                        history_ctx, context_ctx,
+                    )
+                    if reply:
+                        await conv_repo.add(user["id"], "assistant", reply)
+                    return reply
+            else:
+                if expecting_document:
+                    # ⚠️ User sent a product photo but we need their ID
+                    logger.info("handle_media: product photo received but identity document expected — instructing user")
+                    reply = await self._conv.speak(
+                        "The user sent what looks like a product photo, but we are currently "
+                        "waiting for their identity document (RG, CNH, or passport). "
+                        "Politely remind them we need their ID photo to proceed.",
+                        history_ctx, context_ctx,
+                    )
+                    if reply:
+                        await conv_repo.add(user["id"], "assistant", reply)
+                    return reply
+                else:
+                    # ✅ User sent a product photo and that's what we expect
+                    return await self.handle_product_photo(
+                        phone=phone, media_id=media_id, mime_type=mime_type,
+                        caption=caption or "", user=user, db=db,
+                        user_repo=user_repo, conv_repo=conv_repo,
+                        data_uri=_data_uri,
+                    )
+
+        # ── Fallback: classifier failed — use turn_state + caption heuristic ──
+        logger.warning("handle_media: classifier unavailable, falling back to heuristics")
+        if expecting_document:
+            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+        if _detect_document_type(caption or "") != "unknown":
+            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+        return await self.handle_product_photo(
+            phone=phone, media_id=media_id, mime_type=mime_type,
+            caption=caption or "", user=user, db=db,
+            user_repo=user_repo, conv_repo=conv_repo,
+            data_uri=_data_uri,
+        )
 
     async def handle_product_photo(
         self,
@@ -1957,12 +2021,20 @@ class Orchestrator:
         db,
         user_repo,
         conv_repo,
+        data_uri: str | None = None,
     ) -> str:
         """Handle an image that looks like a product photo (no identity-document signal).
 
         Uses ImageAnalysisAgent as the single vision source of truth to extract all
         available information from the image (literal + inferences), then passes the
         structured result to the Conversation Agent so it can respond accurately.
+
+        Parameters
+        ----------
+        data_uri : str | None
+            Pre-downloaded base64 data URI.  When the caller already has the image
+            (e.g. from the pre-classification step in handle_media), pass it here to
+            avoid a redundant download round-trip.
         """
         from whatsapp import download_media_as_base64
         from agents.vision import ImageAnalysisAgent
@@ -1971,11 +2043,11 @@ class Orchestrator:
         seller_profile = await user_repo.get_seller_profile(user["id"])
         context = self._build_context(user, [], seller_profile, phone=phone)
 
-        data_uri = None
-        try:
-            data_uri = await download_media_as_base64(media_id, mime_type)
-        except Exception as e:
-            logger.warning("handle_product_photo: download failed: %s", e)
+        if data_uri is None:
+            try:
+                data_uri = await download_media_as_base64(media_id, mime_type)
+            except Exception as e:
+                logger.warning("handle_product_photo: download failed: %s", e)
 
         if data_uri:
             # 1. Run ImageAnalysisAgent — single vision source of truth
@@ -2071,15 +2143,24 @@ class Orchestrator:
         media_id: str,
         mime_type: str,
         caption: str,
+        detected_doc_type: str | None = None,
     ) -> str:
         """Processes image/document sent by the user as an identity document.
 
         Flow:
         1. Finds user in DB (creates if first contact)
-        2. Detects document type from caption (national_id, drivers_license, passport)
+        2. Determines document type — prefers `detected_doc_type` from ImageClassifier,
+           falls back to caption-keyword detection.
         3. Downloads image from WhatsApp and uploads to Supabase Storage
         4. Registers in DB and updates identity_status to 'under_review'
         5. Returns a natural-language message to the user
+
+        Parameters
+        ----------
+        detected_doc_type : str | None
+            Document type already identified by ImageClassifier (e.g. "national_id",
+            "drivers_license", "passport").  When provided, caption-based detection is
+            skipped, giving a more reliable result.
         """
         from storage.identity import process_identity_document
 
@@ -2095,7 +2176,9 @@ class Orchestrator:
         user_id      = user["id"]
         display_name = user.get("nickname") or (user.get("full_name") or "").split()[0] or ""
 
-        doc_type = _detect_document_type(caption or "")
+        # Prefer classifier result; fall back to caption keywords
+        doc_type = detected_doc_type or _detect_document_type(caption or "")
+        logger.info("handle_identity_document: doc_type=%r (classifier=%r)", doc_type, detected_doc_type)
 
         try:
             result = await process_identity_document(
