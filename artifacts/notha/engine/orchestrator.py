@@ -1953,12 +1953,16 @@ class Orchestrator:
     ) -> str:
         """Handle an image that looks like a product photo (no identity-document signal).
 
-        Downloads the photo, uses a lightweight vision call to identify the product,
-        and asks the user if they want to list it for sale. If vision fails, falls
-        back to asking the user to describe the product in text.
+        Passes the image DIRECTLY to the main LLM (GPT-4o vision) so it can see
+        the product itself — no separate vision pre-processing step. This avoids
+        misidentification from lightweight vision calls and prevents the agent from
+        giving contradictory answers about what it can or cannot see.
         """
-        import json as _json_ph
         from whatsapp import download_media_as_base64
+
+        history = await conv_repo.get_history(user["id"], limit=10)
+        seller_profile = await user_repo.get_seller_profile(user["id"])
+        context = self._build_context(user, [], seller_profile, phone=phone)
 
         data_uri = None
         try:
@@ -1966,53 +1970,40 @@ class Orchestrator:
         except Exception as e:
             logger.warning("handle_product_photo: download failed: %s", e)
 
-        product_description: str | None = None
         if data_uri:
-            vision_text = (
-                "The user sent a photo on a physical-product marketplace (buy and sell via WhatsApp). "
-                "Identify the product visible in the image as concisely as possible.\n\n"
-                "Return ONLY valid JSON:\n"
-                '{"product_description": "<short product name, e.g. USB charger, sofa, iPhone 13>", '
-                '"confidence": "high|medium|low"}\n\n'
-                "If you cannot identify any product, set product_description to null and confidence to low."
+            # Build a multimodal user turn so the main LLM can see the image directly.
+            # This is appended to the history ONLY for this call — not persisted to DB.
+            user_content: list = [
+                {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+            ]
+            if caption:
+                user_content.append({"type": "text", "text": caption})
+            else:
+                user_content.append({"type": "text", "text": "Quero vender esse produto."})
+
+            augmented_history = list(history) + [{"role": "user", "content": user_content}]
+
+            instruction = (
+                "The user sent a product photo (visible in the last message above). "
+                "You CAN see the image. "
+                "Identify the product in the photo (name, brand if visible). "
+                "Acknowledge what you see and ask in one short, natural question "
+                "whether they want to list it for sale on NOTHA."
             )
             try:
-                from llm import get_provider as _get_prov_ph
-                resp = await _get_prov_ph().complete(
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
-                            {"type": "text", "text": vision_text},
-                        ],
-                    }],
-                    temperature=0.0,
-                    max_tokens=80,
-                    json_mode=True,
-                )
-                vision_result = _json_ph.loads(resp.text or "{}")
-                desc = vision_result.get("product_description")
-                if desc and vision_result.get("confidence", "low") != "low":
-                    product_description = desc
+                reply = await self._conv.speak(instruction, augmented_history, context)
+                if reply:
+                    await conv_repo.add(user["id"], "assistant", reply)
+                return reply
             except Exception as e:
-                logger.warning("handle_product_photo: vision call failed: %s", e)
+                logger.warning("handle_product_photo: multimodal LLM call failed: %s", e)
 
-        history = await conv_repo.get_history(user["id"], limit=10)
-        seller_profile = await user_repo.get_seller_profile(user["id"])
-        context = self._build_context(user, [], seller_profile, phone=phone)
-
-        if product_description:
-            instruction = (
-                f"The user sent a photo. Vision identified the product as: '{product_description}'. "
-                "Acknowledge that you can see it clearly. "
-                "Ask if they want to list it for sale — one short, natural question."
-            )
-        else:
-            instruction = (
-                "The user sent a product photo but the image was not clear enough to identify it automatically. "
-                "Tell them you received the photo. Ask what product it is and if they want to list it for sale."
-            )
-
+        # Fallback: image could not be downloaded
+        instruction = (
+            "The user sent a photo but it could not be loaded (technical error). "
+            "Tell them you had trouble accessing the image and ask them to try again, "
+            "or describe the product in text so you can help."
+        )
         reply = await self._conv.speak(instruction, history, context)
         if reply:
             await conv_repo.add(user["id"], "assistant", reply)
