@@ -1971,6 +1971,7 @@ class Orchestrator:
                 return await self.handle_identity_document(
                     phone, media_id, mime_type, caption,
                     detected_doc_type=detected_doc_type,
+                    data_uri=_data_uri,
                 )
             else:
                 # Not a document (product photo, selfie, or other).
@@ -2003,9 +2004,9 @@ class Orchestrator:
         # ── Fallback: classifier failed — use turn_state + caption heuristic ──
         logger.warning("handle_media: classifier unavailable, falling back to heuristics")
         if expecting_document:
-            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+            return await self.handle_identity_document(phone, media_id, mime_type, caption, data_uri=_data_uri)
         if _detect_document_type(caption or "") != "unknown":
-            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+            return await self.handle_identity_document(phone, media_id, mime_type, caption, data_uri=_data_uri)
         return await self.handle_product_photo(
             phone=phone, media_id=media_id, mime_type=mime_type,
             caption=caption or "", user=user, db=db,
@@ -2146,39 +2147,41 @@ class Orchestrator:
         mime_type: str,
         caption: str,
         detected_doc_type: str | None = None,
+        data_uri: str | None = None,
     ) -> str:
-        """Processes image/document sent by the user as an identity document.
+        """Processa imagem/documento enviado pelo usuário como documento de identidade.
 
-        Flow:
-        1. Finds user in DB (creates if first contact)
-        2. Determines document type — prefers `detected_doc_type` from ImageClassifier,
-           falls back to caption-keyword detection.
-        3. Downloads image from WhatsApp and uploads to Supabase Storage
-        4. Registers in DB and updates identity_status to 'under_review'
-        5. Returns a natural-language message to the user
+        Fluxo:
+        1. Encontra usuário no banco (cria se primeiro contato)
+        2. Determina tipo do documento — prefere `detected_doc_type` do ImageClassifier,
+           cai em detecção por palavras-chave da legenda.
+        3. Usa `data_uri` já baixado (se disponível) para evitar download duplo;
+           faz upload para Supabase Storage somente quando configurado.
+        4. Executa OCR via LLM para extrair dados do documento.
+        5. Registra no banco e atualiza identity_status para 'under_review'.
+        6. Retorna mensagem em linguagem natural para o usuário.
 
         Parameters
         ----------
         detected_doc_type : str | None
-            Document type already identified by ImageClassifier (e.g. "national_id",
-            "drivers_license", "passport").  When provided, caption-based detection is
-            skipped, giving a more reliable result.
+            Tipo de documento já identificado pelo ImageClassifier (e.g. "national_id",
+            "drivers_license", "passport"). Quando fornecido, detecção por legenda é ignorada.
+        data_uri : str | None
+            Data URI (base64) já baixado durante a pré-classificação.
+            Evita download duplicado e permite OCR mesmo sem Supabase configurado.
         """
         from storage.identity import process_identity_document
 
         db = self._db or get_db()
         if db is None:
-            return await self._conv.speak(
-                "Tell the user you received their document but are having a technical problem right now — ask them to try again in a moment.",
-                [], "",
-            )
+            return "Recebi seu documento, mas estou com um problema técnico agora. Por favor, tente novamente em instantes."
 
         user_repo, *_ = self._repos(db)
         user = await user_repo.find_or_create_by_phone(phone)
         user_id      = user["id"]
         display_name = user.get("nickname") or (user.get("full_name") or "").split()[0] or ""
 
-        # Prefer classifier result; fall back to caption keywords
+        # Prefere resultado do classifier; cai em palavras-chave da legenda
         doc_type = detected_doc_type or _detect_document_type(caption or "")
         logger.info("handle_identity_document: doc_type=%r (classifier=%r)", doc_type, detected_doc_type)
 
@@ -2189,6 +2192,7 @@ class Orchestrator:
                 doc_type=doc_type,
                 user_repo=user_repo,
                 run_ocr=True,
+                data_uri=data_uri,
             )
             logger.info(
                 "Identity document saved: user_id=%s type=%s doc_id=%s path=%s",
@@ -2196,11 +2200,7 @@ class Orchestrator:
             )
         except Exception as e:
             logger.error("Failed to process identity document (user_id=%s): %s", user_id, e)
-            return await self._conv.speak(
-                "Tell the user you received the image but had a technical problem saving it. "
-                "Ask them to send it again. If the problem persists, suggest JPG or PNG format.",
-                [], "",
-            )
+            return "Recebi sua imagem, mas tive um problema técnico ao salvá-la. Pode enviar novamente? Se o problema persistir, tente enviar em formato JPG ou PNG."
 
         # Auto-fill profile from OCR data extracted during document processing
         extracted = result.get("extracted_data") or {}
@@ -2264,12 +2264,24 @@ class Orchestrator:
         else:
             ocr_hint = " No data could be automatically extracted from the image."
 
-        return await self._conv.speak(
-            f"Tell the user ({name_prefix}if known) that you received their {doc_label} and it is under review. "
-            "Inform that you will notify them when verification is complete (up to 1 business day)."
-            + ocr_hint,
-            [], "",
-        )
+        try:
+            return await self._conv.speak(
+                f"Diga ao usuário ({name_prefix}se conhecido) que você recebeu o {doc_label} dele e está em análise. "
+                "Informe que ele será notificado quando a verificação for concluída (até 1 dia útil)."
+                + ocr_hint,
+                [], "",
+            )
+        except Exception as _speak_err:
+            logger.warning("handle_identity_document: speak() falhou: %s", _speak_err)
+            _doc_label_pt = {
+                "national_id":     "RG",
+                "drivers_license": "CNH",
+                "passport":        "passaporte",
+            }.get(doc_type, "documento")
+            return (
+                f"✅ Recebi seu {_doc_label_pt}! Está em análise e você será notificado "
+                "em até 1 dia útil quando a verificação for concluída."
+            )
 
     # ── Deterministic routing ─────────────────────────────────────────────────
 

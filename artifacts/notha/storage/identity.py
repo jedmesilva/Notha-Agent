@@ -123,52 +123,94 @@ async def extract_document_data(image_url: str, doc_type: str) -> dict:
     return {}
 
 
+def _supabase_configured() -> bool:
+    """Retorna True somente se SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY estão definidos."""
+    from config import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+
+
 async def process_identity_document(
     user_id: int,
     media_id: str,
     doc_type: str = "unknown",
     user_repo=None,
     run_ocr: bool = True,
+    data_uri: str | None = None,
 ) -> dict:
-    """Faz download, armazena, executa OCR e registra um documento de identidade.
+    """Faz download, armazena (se Supabase configurado), executa OCR e registra
+    um documento de identidade.
+
+    Quando `data_uri` é fornecido (base64 data URI já baixado durante a
+    classificação), ele é usado diretamente para OCR, evitando um segundo
+    download. O upload para Supabase é realizado somente quando SUPABASE_URL
+    e SUPABASE_SERVICE_ROLE_KEY estão configurados.
 
     Retorna dict com: object_path, signed_url, doc_id, extracted_data.
     """
-    try:
-        image_bytes, mime_type = await download_whatsapp_media(media_id)
-    except Exception as e:
-        logger.error("Falha ao fazer download da mídia %s: %s", media_id, e)
-        raise
+    mime_type = "image/jpeg"
+    image_bytes: bytes | None = None
 
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    ext = _extension(mime_type)
-    filename = f"{doc_type}_{ts}.{ext}"
+    # Usa data_uri já existente ou baixa novamente
+    if data_uri:
+        # Extrai mime e bytes do data URI: "data:<mime>;base64,<b64>"
+        try:
+            import base64 as _b64
+            header, b64_data = data_uri.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0]
+            image_bytes = _b64.b64decode(b64_data)
+        except Exception as e:
+            logger.warning("Falha ao decodificar data_uri: %s — baixando novamente", e)
+            data_uri = None
 
-    try:
-        object_path = await upload_bytes(
-            user_id=user_id,
-            filename=filename,
-            data=image_bytes,
-            content_type=mime_type,
-        )
-    except Exception as e:
-        logger.error("Falha no upload para storage (user_id=%s): %s", user_id, e)
-        raise
+    if image_bytes is None:
+        try:
+            image_bytes, mime_type = await download_whatsapp_media(media_id)
+        except Exception as e:
+            logger.error("Falha ao fazer download da mídia %s: %s", media_id, e)
+            raise
 
+    # Tenta upload para Supabase apenas quando configurado
+    object_path = f"whatsapp:{media_id}"   # referência fallback
     signed_url_result = ""
-    try:
-        signed_url_result = await signed_url(object_path, expires_in=3600)
-    except Exception:
-        pass
 
-    # OCR — extrai dados do documento para auto-preenchimento do perfil
+    if _supabase_configured():
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ext = _extension(mime_type)
+        filename = f"{doc_type}_{ts}.{ext}"
+        try:
+            object_path = await upload_bytes(
+                user_id=user_id,
+                filename=filename,
+                data=image_bytes,
+                content_type=mime_type,
+            )
+            try:
+                signed_url_result = await signed_url(object_path, expires_in=3600)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(
+                "Upload Supabase falhou (user_id=%s): %s — prosseguindo sem storage externo",
+                user_id, e,
+            )
+            object_path = f"whatsapp:{media_id}"
+    else:
+        logger.info(
+            "Supabase não configurado — OCR será feito via data URI (user_id=%s)",
+            user_id,
+        )
+
+    # OCR — extrai dados do documento para auto-preenchimento do perfil.
+    # Prioridade: data_uri (já em memória) > signed_url do Supabase.
     extracted_data: dict = {}
-    if run_ocr and signed_url_result:
-        extracted_data = await extract_document_data(signed_url_result, doc_type)
-
-        # Se o OCR detectou o tipo de documento, refina doc_type
-        if extracted_data.get("detected_doc_type") and doc_type == "unknown":
-            doc_type = extracted_data["detected_doc_type"]
+    if run_ocr:
+        ocr_source = data_uri or signed_url_result or None
+        if ocr_source:
+            extracted_data = await extract_document_data(ocr_source, doc_type)
+            if extracted_data.get("detected_doc_type") and doc_type == "unknown":
+                doc_type = extracted_data["detected_doc_type"]
+        else:
+            logger.warning("OCR ignorado — nenhuma fonte de imagem disponível (user_id=%s)", user_id)
 
     doc = None
     if user_repo:
