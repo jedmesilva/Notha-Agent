@@ -580,7 +580,7 @@ class ListingFlowAgent:
             user_msg=text,
             validators={"ready": self._val_ready},
         )
-        if not ready.get("ready", True):
+        if not ready.get("ready", False):
             data["photo_notes"] = text
             reply = await self._reply("Got it! Send more photos or type 'done' to continue.")
             return data, photos, reply, False

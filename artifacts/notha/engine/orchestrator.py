@@ -1106,6 +1106,7 @@ class Orchestrator:
                 db=db,
                 history=history or [],
                 context=context,
+                description=args.get("description", ""),
             )
             return "listing flow started", complex_reply
 
@@ -1671,8 +1672,14 @@ class Orchestrator:
     async def _start_listing_flow(
         self, phone: str, text: str, user, user_repo: UserRepository, db: DB,
         history: list[dict] | None = None, context: str = "",
+        description: str = "",
     ) -> str:
-        """Starts the product listing flow (state machine persisted in the DB)."""
+        """Starts the product listing flow (state machine persisted in the DB).
+
+        If `description` contains a product description extracted from the trigger
+        message, the "product" step is pre-filled automatically so the bot skips
+        "What do you want to sell?" and goes straight to the next question.
+        """
         check = await user_repo.check_missing_fields(user["id"], "list_product")
         if check["missing"]:
             missing_fields = ", ".join(check["missing"])
@@ -1686,8 +1693,52 @@ class Orchestrator:
         # Cancel any stuck flow (step != done)
         await flow_repo.cancel(phone)
 
-        # Create new flow
-        await flow_repo.create(user["id"], phone)
+        # Create new flow at step "product"
+        flow_record = await flow_repo.create(user["id"], phone)
+
+        # ── Pre-fill from trigger message ────────────────────────────────────
+        # When the user already named the product in the message that triggered
+        # the listing flow (e.g. "quero vender um iPhone 13 Pro 256GB"), we
+        # process the "product" step immediately so we never ask "What do you
+        # want to sell?" for information the user already provided.
+        #
+        # `description` comes from the Phase-0 objective extracted by the LLM.
+        # We strip common selling-intent words and only pre-fill when there is
+        # a meaningful product name left (≥ 5 chars).
+        _raw = (description or "").strip()
+        if not _raw:
+            _raw = text.strip()
+
+        import re as _re
+        _cleaned = _re.sub(
+            r"(?i)^\s*(quero|queria|gostaria\s+de|preciso|vou|want\s+to|i\s+want\s+to"
+            r"|i(?:'d)?\s+like\s+to|i\s+need\s+to|quiero|quisiera)\s+"
+            r"(vender|sell|anunciar|listing|cadastrar|publicar)\s*",
+            "",
+            _raw,
+        ).strip()
+        # Also strip a bare "vender"/"sell" at the very start (no subject before it)
+        _cleaned = _re.sub(r"(?i)^(vender|sell|anunciar)\s+", "", _cleaned).strip()
+
+        if len(_cleaned) >= 5:
+            # Run the "product" step handler with the extracted description so
+            # the flow advances to brand_model / photos_upload automatically.
+            seller_profile = await user_repo.get_seller_profile(user["id"])
+            sp = dict(seller_profile) if seller_profile else {}
+            try:
+                init_data, init_photos, first_q, _ = await self._listing_flow_agent.handle_message(
+                    flow=dict(flow_record),
+                    text=_cleaned,
+                    seller_profile=sp,
+                    db=db,
+                )
+                if first_q:
+                    next_step = init_data.get("step_next", "brand_model")
+                    await flow_repo.update_step(flow_record["id"], next_step, init_data, init_photos)
+                    return first_q
+            except Exception as _e:
+                logger.warning("Could not pre-fill listing flow from trigger text: %s", _e)
+        # ── Fallback: ask the first question normally ───────────────────────
 
         first_question = await self._listing_flow_agent.start()
         return first_question
@@ -2140,7 +2191,7 @@ class Orchestrator:
                 },
                 {
                     "step": 2, "tool": "list_product",
-                    "args": {},
+                    "args": {"description": objective},
                     "reason": "start listing flow",
                     "user_message": "📝 Iniciando o cadastro...",
                 },
