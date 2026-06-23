@@ -1225,4 +1225,4 @@ class ConversationAgent:
             return await validate_reply(sanitized, history, contexto, last_user_msg)
         except Exception as e:
             logger.error("Error in speak: %s", e)
-            return "Desculpe, tive um problema técnico agora. Pode tentar novamente em instantes?"
+            return "Sorry, I ran into a technical issue. Please try again in a moment."

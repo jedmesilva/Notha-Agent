@@ -120,3 +120,4 @@ Vendedores, compradores e entregadores recebem via chave Pix de qualquer banco, 
 ## User preferences
 
 - Português brasileiro em todo o código e documentação
+- Idioma padrão da plataforma é **inglês** (quando idioma do usuário não detectado, fallback = English)

@@ -2175,7 +2175,7 @@ class Orchestrator:
         db = self._db or get_db()
         if db is None:
             return await localize(
-                "Recebi seu documento, mas estou com um problema técnico agora. Por favor, tente novamente em instantes.",
+                "I received your document, but I'm having a technical issue right now. Please try again in a moment.",
                 phone,
             )
 
@@ -2204,7 +2204,7 @@ class Orchestrator:
         except Exception as e:
             logger.error("Failed to process identity document (user_id=%s): %s", user_id, e)
             return await localize(
-                "Recebi sua imagem, mas tive um problema técnico ao salvá-la. Pode enviar novamente? Se o problema persistir, tente enviar em formato JPG ou PNG.",
+                "I received your image but had a technical problem saving it. Could you send it again? If the issue persists, try sending it as JPG or PNG.",
                 phone,
             )
 
@@ -2279,14 +2279,14 @@ class Orchestrator:
             )
         except Exception as _speak_err:
             logger.warning("handle_identity_document: speak() falhou: %s", _speak_err)
-            _doc_label_pt = {
-                "national_id":     "RG",
-                "drivers_license": "CNH",
-                "passport":        "passaporte",
-            }.get(doc_type, "documento")
+            _doc_label_en = {
+                "national_id":     "national ID",
+                "drivers_license": "driving licence",
+                "passport":        "passport",
+            }.get(doc_type, "document")
             _fallback = (
-                f"✅ Recebi seu {_doc_label_pt}! Está em análise e você será notificado "
-                "em até 1 dia útil quando a verificação for concluída."
+                f"✅ Got your {_doc_label_en}! It's under review and you'll be notified "
+                "within 1 business day once verification is complete."
             )
             return await localize(_fallback, phone)
 
