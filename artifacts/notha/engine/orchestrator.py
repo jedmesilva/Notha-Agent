@@ -2174,7 +2174,10 @@ class Orchestrator:
 
         db = self._db or get_db()
         if db is None:
-            return "Recebi seu documento, mas estou com um problema técnico agora. Por favor, tente novamente em instantes."
+            return await localize(
+                "Recebi seu documento, mas estou com um problema técnico agora. Por favor, tente novamente em instantes.",
+                phone,
+            )
 
         user_repo, *_ = self._repos(db)
         user = await user_repo.find_or_create_by_phone(phone)
@@ -2200,7 +2203,10 @@ class Orchestrator:
             )
         except Exception as e:
             logger.error("Failed to process identity document (user_id=%s): %s", user_id, e)
-            return "Recebi sua imagem, mas tive um problema técnico ao salvá-la. Pode enviar novamente? Se o problema persistir, tente enviar em formato JPG ou PNG."
+            return await localize(
+                "Recebi sua imagem, mas tive um problema técnico ao salvá-la. Pode enviar novamente? Se o problema persistir, tente enviar em formato JPG ou PNG.",
+                phone,
+            )
 
         # Auto-fill profile from OCR data extracted during document processing
         extracted = result.get("extracted_data") or {}
@@ -2278,10 +2284,11 @@ class Orchestrator:
                 "drivers_license": "CNH",
                 "passport":        "passaporte",
             }.get(doc_type, "documento")
-            return (
+            _fallback = (
                 f"✅ Recebi seu {_doc_label_pt}! Está em análise e você será notificado "
                 "em até 1 dia útil quando a verificação for concluída."
             )
+            return await localize(_fallback, phone)
 
     # ── Deterministic routing ─────────────────────────────────────────────────
 
