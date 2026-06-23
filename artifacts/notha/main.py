@@ -225,13 +225,17 @@ async def _migrate_turn_state_table() -> None:
                 operation     VARCHAR(100) NOT NULL DEFAULT '',
                 context_data  JSONB        NOT NULL DEFAULT '{}',
                 asked_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-                expires_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW() + INTERVAL '30 minutes'
+                expires_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW() + INTERVAL '30 minutes',
+                attempt_count INTEGER      NOT NULL DEFAULT 0
             )
         """)
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_turn_state_expires
             ON turn_state (expires_at)
         """)
+        await conn.execute(
+            "ALTER TABLE turn_state ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0"
+        )
     logger.info("Turn state table ready.")
 
 

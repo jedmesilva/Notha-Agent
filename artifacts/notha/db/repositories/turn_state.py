@@ -4,6 +4,10 @@ TurnStateRepository — persistent per-phone turn state.
 Tracks what specific field/question NOTHA last asked the user, waiting for reply.
 This prevents message ambiguity: "Oi" is never mistaken for a name unless
 we explicitly registered that we asked for a name in the previous turn.
+
+Circuit breaker: attempt_count increments on every get() so the orchestrator
+can detect when a field has been asked too many times without a valid answer
+and give up gracefully instead of looping forever.
 """
 import json
 import logging
@@ -26,17 +30,23 @@ class TurnStateRepository:
         context_data: dict | None = None,
         expiry_minutes: int = _EXPIRY_MINUTES,
     ) -> None:
-        """Create or replace the pending turn state for this phone."""
+        """Create or replace the pending turn state for this phone.
+
+        Resets attempt_count to 0 on every explicit set() — the count only
+        accumulates across get() calls for the *same* pending field.
+        """
         await self._db.execute(
             """
-            INSERT INTO turn_state (phone, pending_field, operation, context_data, expires_at)
-            VALUES ($1, $2, $3, $4::jsonb, NOW() + ($5 || ' minutes')::INTERVAL)
+            INSERT INTO turn_state
+                (phone, pending_field, operation, context_data, expires_at, attempt_count)
+            VALUES ($1, $2, $3, $4::jsonb, NOW() + ($5 || ' minutes')::INTERVAL, 0)
             ON CONFLICT (phone) DO UPDATE SET
                 pending_field = EXCLUDED.pending_field,
                 operation     = EXCLUDED.operation,
                 context_data  = EXCLUDED.context_data,
                 asked_at      = NOW(),
-                expires_at    = NOW() + ($5 || ' minutes')::INTERVAL
+                expires_at    = NOW() + ($5 || ' minutes')::INTERVAL,
+                attempt_count = 0
             """,
             phone, pending_field, operation,
             json.dumps(context_data or {}),
@@ -45,12 +55,18 @@ class TurnStateRepository:
         logger.info("Turn state SET: phone=%s field=%s op=%s", phone, pending_field, operation)
 
     async def get(self, phone: str) -> dict | None:
-        """Return the active (non-expired) pending turn state, or None."""
+        """Return the active (non-expired) pending turn state and increment attempt_count.
+
+        Uses UPDATE … RETURNING so the increment and read are atomic.
+        Returns None if no active (non-expired) state exists.
+        """
         row = await self._db.fetch_one(
             """
-            SELECT phone, pending_field, operation, context_data, asked_at, expires_at
-            FROM turn_state
+            UPDATE turn_state
+            SET attempt_count = attempt_count + 1
             WHERE phone = $1 AND expires_at > NOW()
+            RETURNING phone, pending_field, operation, context_data,
+                      asked_at, expires_at, attempt_count
             """,
             phone,
         )

@@ -23,6 +23,8 @@ from engine.negotiation import NegotiationEngine
 from engine.turn_state import TurnStateService
 from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
 from phone_info import parse_phone, get_timezone
+from agents.reviewer import ScopeReviewerAgent
+from tools.schema_validator import validate_understand, validate_assess
 
 
 def _heuristic_steps(text: str) -> list[dict]:
@@ -330,6 +332,7 @@ class Orchestrator:
         self._conv = ConversationAgent()
         self._pricing = PricingAgent(db)
         self._listing_flow_agent = ListingFlowAgent()
+        self._reviewer = ScopeReviewerAgent()
 
     def _repos(self, db: DB):
         return (
@@ -445,6 +448,18 @@ class Orchestrator:
         # Must happen after context is built so we can append the pending note.
         _ts_service = TurnStateService(db)
         _pending_turn = await _ts_service.get_pending(phone)
+        _exhausted_field: str | None = None
+
+        if _pending_turn and _ts_service.is_exhausted(_pending_turn):
+            logger.info(
+                "Circuit breaker: field=%s exhausted after %d attempt(s) — clearing",
+                _pending_turn["pending_field"],
+                _pending_turn.get("attempt_count", 0),
+            )
+            await _ts_service.clear(phone)
+            _exhausted_field = _pending_turn["pending_field"]
+            _pending_turn = None
+
         if _pending_turn:
             context = context + "\n\n" + _ts_service.build_context_note(_pending_turn)
 
@@ -485,6 +500,7 @@ class Orchestrator:
             context=context,
             pending_turn=_pending_turn,
         )
+        understanding = validate_understand(understanding)
         objective   = understanding.get("objective", text)
         intent      = understanding.get("intent", "other")
         needs_tools = understanding.get("needs_tools", True)
@@ -525,10 +541,11 @@ class Orchestrator:
             text=text,
         )
 
-        # Handle pending turn state resolution:
-        # When understand() flagged that the current message answers a pending
-        # question, inject a synthetic tool step to save the resolved value.
-        if _pending_turn and understanding.get("pending_resolved"):
+        # Handle pending turn state resolution (3-state: yes / no / ambiguous).
+        _pending_resolution = understanding.get("pending_resolution", "no")
+
+        if _pending_turn and _pending_resolution == "yes":
+            # Clear answer — inject synthetic tool step to auto-save the value.
             _pending_value = understanding.get("pending_value", "").strip()
             if _pending_value:
                 _synthetic = self._pending_to_tool_step(
@@ -537,9 +554,24 @@ class Orchestrator:
                 if _synthetic:
                     steps = [_synthetic] + steps
                     logger.info(
-                        "Pending turn resolved by understand(): field=%s value=%r",
+                        "Pending turn resolved (yes): field=%s value=%r",
                         _pending_turn["pending_field"], _pending_value,
                     )
+
+        elif _pending_turn and _pending_resolution == "ambiguous":
+            # Ambiguous — do NOT auto-save; ask for explicit confirmation.
+            _tentative = understanding.get("pending_value", "").strip()
+            _confirm_q = understanding.get("confirmation_question", "").strip()
+            if _tentative and _confirm_q:
+                steps = []
+                needs_tools = False
+                synthesis_instruction = (
+                    f"Ask the user to confirm this before saving: {_confirm_q}"
+                )
+                logger.info(
+                    "Pending turn ambiguous: field=%s tentative=%r — requesting confirmation",
+                    _pending_turn["pending_field"], _tentative,
+                )
 
         # Heuristic merge: always runs for user-data patterns regardless of intent.
         # Takes priority over deterministic-route user-data steps.
@@ -639,6 +671,7 @@ class Orchestrator:
                 result=result_text,
                 remaining_steps=remaining,
             )
+            assessment = validate_assess(assessment)
             decision         = assessment.get("decision", "continue")
             progress_message = assessment.get("progress_message")
             new_steps        = assessment.get("new_steps", [])
@@ -703,6 +736,14 @@ class Orchestrator:
         if not final_reply:
             final_reply = "Desculpe, ocorreu um erro interno. Tente novamente em instantes."
 
+        # ── Scope/Safety Review — last guard before reply reaches the user ────
+        final_reply = await self._reviewer.review(
+            reply=final_reply,
+            context=context,
+            user_message=text,
+            history=history,
+        )
+
         # Set turn state if we just asked for a specific field
         await self._maybe_set_turn_state(
             phone=phone,
@@ -711,6 +752,7 @@ class Orchestrator:
             flow=understanding.get("flow", ""),
             ts_service=_ts_service,
             current_pending=_pending_turn,
+            exhausted_field=_exhausted_field,
         )
 
         # Persist conversation and pipeline event in DB
@@ -1823,8 +1865,95 @@ class Orchestrator:
                 await conv_repo.add(user["id"], "assistant", reply)
             return reply
 
-        # Fallback: treat as identity document
+        # If the caption/context doesn't signal an identity document, treat as product photo.
+        # Identity document signals: "rg", "cnh", "passaporte", "identidade", "habilitação"
+        if _detect_document_type(caption or "") == "unknown":
+            return await self.handle_product_photo(
+                phone=phone, media_id=media_id, mime_type=mime_type,
+                caption=caption or "", user=user, db=db,
+                user_repo=user_repo, conv_repo=conv_repo,
+            )
+
+        # Explicit document signal in caption → identity document flow
         return await self.handle_identity_document(phone, media_id, mime_type, caption)
+
+    async def handle_product_photo(
+        self,
+        phone: str,
+        media_id: str,
+        mime_type: str,
+        caption: str,
+        user,
+        db,
+        user_repo,
+        conv_repo,
+    ) -> str:
+        """Handle an image that looks like a product photo (no identity-document signal).
+
+        Downloads the photo, uses a lightweight vision call to identify the product,
+        and asks the user if they want to list it for sale. If vision fails, falls
+        back to asking the user to describe the product in text.
+        """
+        import json as _json_ph
+        from whatsapp import download_media_as_base64
+
+        data_uri = None
+        try:
+            data_uri = await download_media_as_base64(media_id, mime_type)
+        except Exception as e:
+            logger.warning("handle_product_photo: download failed: %s", e)
+
+        product_description: str | None = None
+        if data_uri:
+            vision_text = (
+                "The user sent a photo on a physical-product marketplace (buy and sell via WhatsApp). "
+                "Identify the product visible in the image as concisely as possible.\n\n"
+                "Return ONLY valid JSON:\n"
+                '{"product_description": "<short product name, e.g. USB charger, sofa, iPhone 13>", '
+                '"confidence": "high|medium|low"}\n\n'
+                "If you cannot identify any product, set product_description to null and confidence to low."
+            )
+            try:
+                from llm import get_provider as _get_prov_ph
+                resp = await _get_prov_ph().complete(
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_uri, "detail": "low"}},
+                            {"type": "text", "text": vision_text},
+                        ],
+                    }],
+                    temperature=0.0,
+                    max_tokens=80,
+                    json_mode=True,
+                )
+                vision_result = _json_ph.loads(resp.text or "{}")
+                desc = vision_result.get("product_description")
+                if desc and vision_result.get("confidence", "low") != "low":
+                    product_description = desc
+            except Exception as e:
+                logger.warning("handle_product_photo: vision call failed: %s", e)
+
+        history = await conv_repo.get_history(user["id"], limit=10)
+        seller_profile = await user_repo.get_seller_profile(user["id"])
+        context = self._build_context(user, [], seller_profile, phone=phone)
+
+        if product_description:
+            instruction = (
+                f"The user sent a photo. Vision identified the product as: '{product_description}'. "
+                "Acknowledge that you can see it clearly. "
+                "Ask if they want to list it for sale — one short, natural question."
+            )
+        else:
+            instruction = (
+                "The user sent a product photo but the image was not clear enough to identify it automatically. "
+                "Tell them you received the photo. Ask what product it is and if they want to list it for sale."
+            )
+
+        reply = await self._conv.speak(instruction, history, context)
+        if reply:
+            await conv_repo.add(user["id"], "assistant", reply)
+        return reply
 
     async def handle_identity_document(
         self,
@@ -2055,11 +2184,13 @@ class Orchestrator:
         flow: str,
         ts_service: TurnStateService,
         current_pending: dict | None,
+        exhausted_field: str | None = None,
     ) -> None:
         """After synthesis, detect if the reply asks for a specific field and set turn_state.
 
         Uses lightweight regex — no LLM call. Only sets if no pending already active
         (don't overwrite an unresolved pending turn state).
+        exhausted_field: when set, do NOT re-register that same field (circuit breaker).
         """
         if current_pending:
             return  # still has an unresolved pending — keep it
@@ -2093,14 +2224,20 @@ class Orchestrator:
             pending_field = "city"
 
         if pending_field:
-            try:
-                await ts_service.set_pending(phone, pending_field, operation)
+            if pending_field == exhausted_field:
                 logger.info(
-                    "Turn state SET after reply: phone=%s field=%s op=%s",
-                    phone, pending_field, operation,
+                    "Circuit breaker: skipping re-set of exhausted field=%s phone=%s",
+                    pending_field, phone,
                 )
-            except Exception as e:
-                logger.warning("Failed to set turn state: %s", e)
+            else:
+                try:
+                    await ts_service.set_pending(phone, pending_field, operation)
+                    logger.info(
+                        "Turn state SET after reply: phone=%s field=%s op=%s",
+                        phone, pending_field, operation,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to set turn state: %s", e)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

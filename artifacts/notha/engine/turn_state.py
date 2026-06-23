@@ -6,12 +6,20 @@ field was asked in the previous turn, and after a data save to clear it.
 
 This is the piece described in section 4 of the architecture document:
 "There is something specific we asked in the previous message, still unanswered."
+
+Circuit breaker (doc section 12):
+  MAX_ATTEMPTS controls how many times the system will ask for the same pending
+  field before giving up. Once is_exhausted() returns True, the orchestrator
+  clears the pending state and does not re-set it for that field — breaking the
+  loop and letting the conversation move forward naturally.
 """
 import logging
 from db.connection import DB
 from db.repositories.turn_state import TurnStateRepository
 
 logger = logging.getLogger("notha.engine.turn_state")
+
+MAX_ATTEMPTS = 3
 
 # Maps tool_name → pending_field it resolves
 _TOOL_RESOLVES_FIELD: dict[str, str] = {
@@ -42,7 +50,11 @@ class TurnStateService:
         self._repo = TurnStateRepository(db)
 
     async def get_pending(self, phone: str) -> dict | None:
-        """Returns {pending_field, operation, context_data, asked_at} or None."""
+        """Returns {pending_field, operation, context_data, asked_at, attempt_count} or None.
+
+        Each call atomically increments attempt_count — this is how the circuit
+        breaker tracks how many times the pending question has been presented.
+        """
         return await self._repo.get(phone)
 
     async def set_pending(
@@ -52,7 +64,9 @@ class TurnStateService:
         operation: str,
         context_data: dict | None = None,
     ) -> None:
-        """Record that we just asked the user for a specific field."""
+        """Record that we just asked the user for a specific field.
+        Resets attempt_count to 0.
+        """
         await self._repo.set(phone, pending_field, operation, context_data)
 
     async def clear(self, phone: str) -> None:
@@ -67,13 +81,26 @@ class TurnStateService:
             return False
         return await self._repo.clear_if_field(phone, resolved_field)
 
+    def is_exhausted(self, pending: dict) -> bool:
+        """Returns True when a pending field has been attempted too many times.
+
+        Checked BEFORE setting a new pending state — if exhausted, the orchestrator
+        should not re-set the same field and instead let the conversation continue
+        without a pending expectation (breaking the loop).
+        """
+        return (pending.get("attempt_count") or 0) >= MAX_ATTEMPTS
+
     def build_context_note(self, pending: dict) -> str:
         """Returns a context string injected into the LLM context when pending."""
         field = pending.get("pending_field", "")
         operation = pending.get("operation", "")
         label = _FIELD_LABELS.get(field, field)
-        return (
+        attempt = pending.get("attempt_count", 1)
+        note = (
             f"PENDÊNCIA ATIVA: Na mensagem anterior NOTHA perguntou pelo(a) {label} "
             f"(operação pendente: {operation}). "
             f"Avalie primeiro se a mensagem atual responde a isso antes de interpretar livremente."
         )
+        if attempt >= 2:
+            note += f" [tentativa {attempt}/{MAX_ATTEMPTS}]"
+        return note
