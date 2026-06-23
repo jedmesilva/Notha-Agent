@@ -1957,32 +1957,34 @@ class Orchestrator:
 
         if clf and not clf.error:
             if clf.is_document:
-                if expecting_document:
-                    # ✅ User sent a document and we need one — process it
-                    detected_doc_type = clf.doc_type or _detect_document_type(caption or "")
-                    return await self.handle_identity_document(
-                        phone, media_id, mime_type, caption,
-                        detected_doc_type=detected_doc_type,
-                    )
-                else:
-                    # ⚠️ User sent a document but we need a product photo
-                    logger.info("handle_media: document received but product photo expected — instructing user")
-                    reply = await self._conv.speak(
-                        "The user sent what looks like an identity document, but right now "
-                        "we need a product photo (not an ID). Politely tell them this and "
-                        "ask them to send a photo of the product they want to sell instead.",
-                        history_ctx, context_ctx,
-                    )
-                    if reply:
-                        await conv_repo.add(user["id"], "assistant", reply)
-                    return reply
+                # Always route identity documents to the identity pipeline —
+                # regardless of what turn_state says we were expecting.
+                # turn_state can be cleared by the circuit breaker or not yet
+                # written when the image arrives; the visual classifier result
+                # (high/medium confidence) is the authoritative signal here.
+                detected_doc_type = clf.doc_type or _detect_document_type(caption or "")
+                logger.info(
+                    "handle_media: routing document → identity handler "
+                    "(doc_type=%r was_expected=%s)",
+                    detected_doc_type, expecting_document,
+                )
+                return await self.handle_identity_document(
+                    phone, media_id, mime_type, caption,
+                    detected_doc_type=detected_doc_type,
+                )
             else:
+                # Not a document (product photo, selfie, or other).
                 if expecting_document:
-                    # ⚠️ User sent a product photo but we need their ID
-                    logger.info("handle_media: product photo received but identity document expected — instructing user")
+                    # ⚠️ We need an ID but user sent something else — ask again
+                    logger.info(
+                        "handle_media: non-document received while expecting ID "
+                        "(image_type=%r) — instructing user",
+                        clf.image_type,
+                    )
                     reply = await self._conv.speak(
-                        "The user sent what looks like a product photo, but we are currently "
-                        "waiting for their identity document (RG, CNH, or passport). "
+                        "The user sent what looks like a product photo or other image, "
+                        "but we are currently waiting for their identity document "
+                        "(RG, CNH, or passport). "
                         "Politely remind them we need their ID photo to proceed.",
                         history_ctx, context_ctx,
                     )
@@ -1990,7 +1992,7 @@ class Orchestrator:
                         await conv_repo.add(user["id"], "assistant", reply)
                     return reply
                 else:
-                    # ✅ User sent a product photo and that's what we expect
+                    # ✅ Product/other photo and no ID pending — process normally
                     return await self.handle_product_photo(
                         phone=phone, media_id=media_id, mime_type=mime_type,
                         caption=caption or "", user=user, db=db,
