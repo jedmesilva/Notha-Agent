@@ -207,6 +207,34 @@ async def _migrate_sessions_tables() -> None:
     logger.info("Sessions tables ready.")
 
 
+async def _migrate_pending_confirmations_table() -> None:
+    """Creates the pending_confirmations table if it doesn't exist yet.
+
+    Persistent replacement for the in-memory PENDING_CONFIRMATIONS dict.
+    Stores one row per phone — the business confirmation NOTHA is awaiting
+    (e.g. the seller confirming a suggested listing price). Expires after
+    2 hours if never resolved.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_confirmations (
+                phone      VARCHAR(20) PRIMARY KEY,
+                type       VARCHAR(100) NOT NULL,
+                data       JSONB        NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMPTZ  NOT NULL DEFAULT NOW() + INTERVAL '2 hours'
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_confirmations_expires
+            ON pending_confirmations (expires_at)
+        """)
+    logger.info("Pending confirmations table ready.")
+
+
 async def _migrate_turn_state_table() -> None:
     """Creates the turn_state table if it doesn't exist yet.
 
@@ -248,6 +276,7 @@ async def lifespan(app: FastAPI):
     await _migrate_phone_info_columns()
     await _init_webhook_dedup_table()
     await _migrate_sessions_tables()
+    await _migrate_pending_confirmations_table()
     await _migrate_turn_state_table()
 
     orchestrator = Orchestrator()

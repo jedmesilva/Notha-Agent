@@ -21,6 +21,7 @@ from agents.pricing import PricingAgent
 from agents.logistics import LogisticsAgent
 from engine.negotiation import NegotiationEngine
 from engine.turn_state import TurnStateService
+from db.repositories.pending_confirmations import PendingConfirmationsRepository
 from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
 from phone_info import parse_phone, get_timezone
 from agents.reviewer import ScopeReviewerAgent
@@ -217,7 +218,6 @@ logger = logging.getLogger("notha.orchestrator")
 _MEMORY_HISTORY: dict[str, list[dict]] = {}
 _MAX_MEMORY = 20
 
-PENDING_CONFIRMATIONS: dict[str, dict] = {}
 PROCESSED_MESSAGE_IDS: set[str] = set()
 MAX_PROCESSED_IDS = 1000
 
@@ -464,11 +464,13 @@ class Orchestrator:
             context = context + "\n\n" + _ts_service.build_context_note(_pending_turn)
 
         # Pending business confirmations (e.g. confirm listing price)
-        pending = PENDING_CONFIRMATIONS.get(phone)
+        _pc_repo = PendingConfirmationsRepository(db) if db else None
+        pending = await _pc_repo.get(phone) if _pc_repo else None
         if pending:
             reply = await self._handle_confirmation(
                 phone, text, pending, user, user_repo, listing_repo,
                 neg_repo, tx_repo, delivery_repo, engine,
+                pc_repo=_pc_repo,
                 history=history, context=context,
             )
             await conv_repo.add(user_id, "user", text)
@@ -1408,14 +1410,19 @@ class Orchestrator:
             similar_history=similar_history,
         )
 
-        PENDING_CONFIRMATIONS[phone] = {
-            "type":         "confirm_listing_price",
-            "appraisal":    appraisal,
-            "description":  description,
-            "category":     category,
-            "asking_price": informed_price,
-            "seller_id":    user["id"],
-        }
+        _db_lp = self._db or get_db()
+        if _db_lp:
+            await PendingConfirmationsRepository(_db_lp).set(
+                phone,
+                "confirm_listing_price",
+                {
+                    "appraisal":    appraisal,
+                    "description":  description,
+                    "category":     category,
+                    "asking_price": informed_price,
+                    "seller_id":    user["id"],
+                },
+            )
 
         price_alert = ""
         if appraisal.get("seller_price_alert"):
@@ -1613,6 +1620,7 @@ class Orchestrator:
     async def _handle_confirmation(
         self, phone, text, pending, user, user_repo, listing_repo,
         neg_repo, tx_repo, delivery_repo, engine,
+        pc_repo: "PendingConfirmationsRepository | None" = None,
         history: list[dict] | None = None, context: str = "",
     ) -> str:
         history   = history or []
@@ -1620,8 +1628,12 @@ class Orchestrator:
         intent    = await self._conv.extract_intent(text, contexto="confirmation")
         accepted  = intent.get("accepted", False)
 
+        async def _clear() -> None:
+            if pc_repo:
+                await pc_repo.clear(phone)
+
         if conf_type == "confirm_listing_price":
-            PENDING_CONFIRMATIONS.pop(phone, None)
+            await _clear()
             if not accepted:
                 return await self._conv.speak(
                     "User did not confirm the price. Naturally ask them to provide the price they prefer to list at.",
@@ -1649,7 +1661,7 @@ class Orchestrator:
                 history, context,
             )
 
-        PENDING_CONFIRMATIONS.pop(phone, None)
+        await _clear()
         return await self._conv.speak("Action cancelled. Inform naturally.", history, context)
 
     # ─────────────────────────────────────────────
@@ -2244,10 +2256,10 @@ class Orchestrator:
     async def reset(self, phone: str) -> None:
         """Clears DB history, memory, pending confirmations, and turn state."""
         db = self._db or get_db()
-        PENDING_CONFIRMATIONS.pop(phone, None)
         _MEMORY_HISTORY.pop(phone, None)
         if db is None:
             return
+        await PendingConfirmationsRepository(db).clear(phone)
         ts_service = TurnStateService(db)
         await ts_service.clear(phone)
         user_repo, *_, conv_repo = self._repos(db)
