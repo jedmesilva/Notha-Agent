@@ -1928,6 +1928,13 @@ class Orchestrator:
                 await conv_repo.add(user["id"], "assistant", reply)
             return reply
 
+        # If turn_state is waiting for an identity document (tax_id field),
+        # route ANY image to handle_identity_document — regardless of caption.
+        _ts_media = TurnStateService(db)
+        _pending_media = await _ts_media.get_pending(phone)
+        if _pending_media and _pending_media.get("field") == "tax_id":
+            return await self.handle_identity_document(phone, media_id, mime_type, caption)
+
         # If the caption/context doesn't signal an identity document, treat as product photo.
         # Identity document signals: "rg", "cnh", "passaporte", "identidade", "habilitação"
         if _detect_document_type(caption or "") == "unknown":

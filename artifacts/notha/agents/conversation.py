@@ -1202,9 +1202,17 @@ class ConversationAgent:
             messages.append(h)
 
         has_history = len(history) > 0
-        last_user_msg = next(
+        _raw_last = next(
             (m["content"] for m in reversed(history) if m["role"] == "user"), ""
         )
+        # Multimodal content arrives as a list of parts — extract text safely
+        if isinstance(_raw_last, list):
+            last_user_msg = " ".join(
+                p.get("text", "") for p in _raw_last
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        else:
+            last_user_msg = _raw_last or ""
         user_greeted = _is_pure_greeting(last_user_msg)
         try:
             resp = await get_provider().complete(
