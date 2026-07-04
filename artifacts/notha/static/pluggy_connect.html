@@ -2,20 +2,26 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Conectar conta bancária</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
+    html, body {
+      height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f0f4f8;
+    }
+
+    /* ── Telas de estado (antes e depois do widget) ── */
+    .screen {
+      display: none;
       min-height: 100vh;
-      display: flex;
       align-items: center;
       justify-content: center;
       padding: 16px;
     }
+    .screen.active { display: flex; }
 
     .card {
       background: #fff;
@@ -27,263 +33,182 @@
       text-align: center;
     }
 
-    .logo {
-      width: 56px;
-      height: 56px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, #1a56e8, #0ea5e9);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 24px;
-      font-size: 28px;
+    .icon {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px;
+      font-size: 32px;
     }
+    .icon-bank  { background: linear-gradient(135deg,#1a56e8,#0ea5e9); }
+    .icon-ok    { background: #dcfce7; }
+    .icon-err   { background: #fee2e2; }
+    .icon-exp   { background: #fef9c3; }
 
-    h1 {
-      font-size: 22px;
-      font-weight: 700;
-      color: #0f172a;
-      margin-bottom: 8px;
-    }
+    h1 { font-size: 22px; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
 
     .subtitle {
-      font-size: 14px;
-      color: #64748b;
-      line-height: 1.6;
-      margin-bottom: 32px;
+      font-size: 14px; color: #64748b; line-height: 1.6; margin-bottom: 28px;
     }
 
-    .security-badges {
-      display: flex;
-      justify-content: center;
-      gap: 16px;
-      margin-bottom: 32px;
-      flex-wrap: wrap;
+    .badges {
+      display: flex; justify-content: center; gap: 12px;
+      flex-wrap: wrap; margin-bottom: 28px;
     }
-
     .badge {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: #475569;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 20px;
-      padding: 6px 12px;
+      font-size: 12px; color: #475569;
+      background: #f8fafc; border: 1px solid #e2e8f0;
+      border-radius: 20px; padding: 6px 12px;
     }
 
-    .btn-connect {
-      display: block;
-      width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #1a56e8, #0ea5e9);
-      color: #fff;
-      font-size: 16px;
-      font-weight: 600;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      transition: opacity 0.2s, transform 0.1s;
-      margin-bottom: 16px;
+    .btn {
+      display: block; width: 100%; padding: 16px;
+      background: linear-gradient(135deg,#1a56e8,#0ea5e9);
+      color: #fff; font-size: 16px; font-weight: 600;
+      border: none; border-radius: 12px; cursor: pointer;
+      transition: opacity .2s, transform .1s; margin-bottom: 16px;
     }
+    .btn:hover  { opacity: .92; }
+    .btn:active { transform: scale(.98); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
 
-    .btn-connect:hover { opacity: 0.92; }
-    .btn-connect:active { transform: scale(0.98); }
-    .btn-connect:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-title { font-size: 20px; font-weight: 700; color: #0f172a; margin-bottom: 10px; }
+    .status-text  { font-size: 14px; color: #64748b; line-height: 1.6; }
 
-    .footer-note {
-      font-size: 12px;
-      color: #94a3b8;
-      line-height: 1.5;
-    }
+    .footer-note { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+    .footer-note a { color: #1a56e8; text-decoration: none; }
 
-    .footer-note a {
-      color: #1a56e8;
-      text-decoration: none;
-    }
+    .powered { margin-top: 28px; font-size: 11px; color: #cbd5e1; }
 
-    /* Estados */
-    .state { display: none; }
-    .state.active { display: block; }
-
-    /* Loading */
+    /* Spinner */
     .spinner {
-      width: 48px;
-      height: 48px;
-      border: 4px solid #e2e8f0;
-      border-top-color: #1a56e8;
+      width: 48px; height: 48px;
+      border: 4px solid #e2e8f0; border-top-color: #1a56e8;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      animation: spin .8s linear infinite;
       margin: 0 auto 20px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Sucesso */
-    .icon-success {
-      width: 64px;
-      height: 64px;
-      background: #dcfce7;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 20px;
-      font-size: 32px;
+    /* ── Tela do widget Pluggy (iframe full-screen) ── */
+    #screen-widget {
+      display: none;
+      position: fixed; inset: 0;
+      background: #fff;
+      flex-direction: column;
     }
+    #screen-widget.active { display: flex; }
 
-    /* Erro */
-    .icon-error {
-      width: 64px;
-      height: 64px;
-      background: #fee2e2;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 20px;
-      font-size: 32px;
-    }
-
-    /* Expirado */
-    .icon-expired {
-      width: 64px;
-      height: 64px;
-      background: #fef9c3;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 20px;
-      font-size: 32px;
-    }
-
-    .status-title {
-      font-size: 20px;
-      font-weight: 700;
-      color: #0f172a;
-      margin-bottom: 10px;
-    }
-
-    .status-text {
-      font-size: 14px;
-      color: #64748b;
-      line-height: 1.6;
-    }
-
-    .powered {
-      margin-top: 32px;
-      font-size: 11px;
-      color: #cbd5e1;
-    }
-
-    .powered img {
-      height: 18px;
-      vertical-align: middle;
-      opacity: 0.5;
+    #pluggy-iframe {
+      flex: 1;
+      border: none;
+      width: 100%; height: 100%;
     }
   </style>
 </head>
 <body>
 
-<div class="card">
-
-  <!-- Estado: Inicial (pronto para conectar) -->
-  <div id="state-ready" class="state active">
-    <div class="logo">🏦</div>
+<!-- Tela inicial -->
+<div id="screen-ready" class="screen active">
+  <div class="card">
+    <div class="icon icon-bank" style="font-size:28px">🏦</div>
     <h1>Conectar conta bancária</h1>
     <p class="subtitle">
       Conecte sua conta de forma segura via <strong>Open Finance</strong>,
       o sistema regulamentado pelo Banco Central do Brasil.
       Seus dados são protegidos e você pode revogar o acesso a qualquer momento.
     </p>
-
-    <div class="security-badges">
+    <div class="badges">
       <div class="badge">🔒 Criptografado</div>
       <div class="badge">🏛️ Regulado pelo BCB</div>
       <div class="badge">✅ Somente leitura</div>
     </div>
-
-    <button class="btn-connect" id="btn-start">
-      Conectar agora
-    </button>
-
+    <button class="btn" id="btn-start">Conectar agora</button>
     <p class="footer-note">
       Ao conectar, você autoriza o compartilhamento de dados bancários
       conforme a <a href="https://www.bcb.gov.br/estabilidadefinanceira/openfinance" target="_blank">resolução do Banco Central</a>.
     </p>
+    <div class="powered">Conexão bancária processada por Pluggy &amp; Open Finance Brasil</div>
   </div>
+</div>
 
-  <!-- Estado: Carregando widget -->
-  <div id="state-loading" class="state">
+<!-- Tela do widget Pluggy (iframe full-screen) -->
+<div id="screen-widget">
+  <iframe
+    id="pluggy-iframe"
+    allow="camera; microphone"
+    title="Pluggy Connect"
+  ></iframe>
+</div>
+
+<!-- Tela de carregando -->
+<div id="screen-loading" class="screen">
+  <div class="card">
     <div class="spinner"></div>
     <p class="status-title">Carregando...</p>
     <p class="status-text">Preparando a conexão segura com seu banco.</p>
   </div>
+</div>
 
-  <!-- Estado: Sucesso -->
-  <div id="state-success" class="state">
-    <div class="icon-success">✅</div>
+<!-- Tela de sucesso -->
+<div id="screen-success" class="screen">
+  <div class="card">
+    <div class="icon icon-ok">✅</div>
     <p class="status-title">Conta conectada!</p>
     <p class="status-text">
       Sua conta foi conectada com sucesso.<br/>
       Volte ao WhatsApp para continuar.
     </p>
+    <div class="powered">Pluggy &amp; Open Finance Brasil</div>
   </div>
+</div>
 
-  <!-- Estado: Erro -->
-  <div id="state-error" class="state">
-    <div class="icon-error">❌</div>
+<!-- Tela de erro -->
+<div id="screen-error" class="screen">
+  <div class="card">
+    <div class="icon icon-err">❌</div>
     <p class="status-title">Não foi possível conectar</p>
     <p class="status-text" id="error-detail">
       Ocorreu um erro ao conectar sua conta. Volte ao WhatsApp e tente novamente.
     </p>
+    <div class="powered">Pluggy &amp; Open Finance Brasil</div>
   </div>
+</div>
 
-  <!-- Estado: Link expirado -->
-  <div id="state-expired" class="state">
-    <div class="icon-expired">⏰</div>
+<!-- Tela de link expirado -->
+<div id="screen-expired" class="screen">
+  <div class="card">
+    <div class="icon icon-exp">⏰</div>
     <p class="status-title">Link expirado</p>
     <p class="status-text">
       Este link não é mais válido.<br/>
       Volte ao WhatsApp e solicite um novo link.
     </p>
   </div>
-
-  <div class="powered">
-    Conexão bancária processada por Pluggy &amp; Open Finance Brasil
-  </div>
-
 </div>
 
-<!-- Pluggy Connect Widget SDK -->
-<script src="https://cdn.pluggy.ai/pluggy-connect/v2/pluggy-connect.js"></script>
-
 <script>
-  const TOKEN_INTERNAL = "{{INTERNAL_TOKEN}}";
+  const INTERNAL_TOKEN       = "{{INTERNAL_TOKEN}}";
   const PLUGGY_CONNECT_TOKEN = "{{PLUGGY_CONNECT_TOKEN}}";
-  const BASE_URL = "{{BASE_URL}}";
+  const BASE_URL             = "{{BASE_URL}}";
 
-  function showState(id) {
-    document.querySelectorAll(".state").forEach(el => el.classList.remove("active"));
+  function showScreen(id) {
+    document.querySelectorAll(".screen, #screen-widget").forEach(el => el.classList.remove("active"));
     document.getElementById(id).classList.add("active");
   }
 
   async function checkTokenValid() {
     try {
-      const resp = await fetch(`${BASE_URL}/pluggy/connect/${TOKEN_INTERNAL}/check`);
-      // 410 = explicitamente expirado/inválido. Qualquer outro erro (rede, CORS) = assumir válido.
-      if (resp.status === 410) return false;
-      return true;
+      const resp = await fetch(`${BASE_URL}/pluggy/connect/${INTERNAL_TOKEN}/check`);
+      return resp.status !== 410;
     } catch {
-      // Erro de rede (CORS no preview, offline, etc.) — assume válido e deixa o widget tentar
-      return true;
+      return true; // assume válido em caso de erro de rede
     }
   }
 
   async function notifyBackend(status, itemId, errorDetail) {
     try {
-      await fetch(`${BASE_URL}/pluggy/connect/${TOKEN_INTERNAL}/callback`, {
+      await fetch(`${BASE_URL}/pluggy/connect/${INTERNAL_TOKEN}/callback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, itemId: itemId || null, error: errorDetail || null }),
@@ -293,52 +218,58 @@
     }
   }
 
-  document.getElementById("btn-start").addEventListener("click", async () => {
-    showState("state-loading");
+  // Escuta eventos do iframe Pluggy Connect
+  window.addEventListener("message", async (event) => {
+    // Aceita apenas mensagens do domínio Pluggy
+    if (!event.origin.includes("pluggy.ai")) return;
 
-    const valid = await checkTokenValid();
-    if (!valid) {
-      showState("state-expired");
-      return;
-    }
+    const { type, payload } = event.data || {};
+    console.log("Pluggy message:", type, payload);
 
-    try {
-      const pluggyConnect = new PluggyConnect({
-        connectToken: PLUGGY_CONNECT_TOKEN,
-        onSuccess: async (itemData) => {
-          await notifyBackend("connected", itemData?.item?.id, null);
-          showState("state-success");
-        },
-        onError: async (error) => {
-          const detail = error?.message || "Erro desconhecido.";
-          document.getElementById("error-detail").textContent = detail;
-          await notifyBackend("error", null, detail);
-          showState("state-error");
-        },
-        onClose: () => {
-          // Usuário fechou sem completar — volta para o estado inicial
-          if (document.getElementById("state-loading").classList.contains("active")) {
-            showState("state-ready");
-          }
-        },
-      });
-
-      pluggyConnect.init();
-    } catch (e) {
-      console.error("Erro ao inicializar Pluggy Connect:", e);
-      document.getElementById("error-detail").textContent =
-        "Erro ao carregar o widget de conexão. Tente novamente.";
-      await notifyBackend("error", null, String(e));
-      showState("state-error");
+    if (type === "pluggy:connect:success" || type === "success") {
+      const itemId = payload?.item?.id || payload?.itemId || null;
+      await notifyBackend("connected", itemId, null);
+      showScreen("screen-success");
+    } else if (type === "pluggy:connect:error" || type === "error") {
+      const detail = payload?.message || payload?.error || "Erro desconhecido.";
+      document.getElementById("error-detail").textContent = detail;
+      await notifyBackend("error", null, detail);
+      showScreen("screen-error");
+    } else if (type === "pluggy:connect:close" || type === "close") {
+      // Usuário fechou sem completar
+      showScreen("screen-ready");
     }
   });
 
-  // Verifica validade do link ao carregar a página
-  (async () => {
+  document.getElementById("btn-start").addEventListener("click", async () => {
+    showScreen("screen-loading");
+
     const valid = await checkTokenValid();
     if (!valid) {
-      showState("state-expired");
+      showScreen("screen-expired");
+      return;
     }
+
+    // Carrega o widget Pluggy hospedado via iframe
+    const iframe = document.getElementById("pluggy-iframe");
+    iframe.src = `https://connect.pluggy.ai?connectToken=${encodeURIComponent(PLUGGY_CONNECT_TOKEN)}`;
+    iframe.onload = () => showScreen("screen-widget");
+    iframe.onerror = async () => {
+      await notifyBackend("error", null, "Falha ao carregar widget Pluggy.");
+      showScreen("screen-error");
+    };
+    // Mostra o widget após um breve delay para evitar flash
+    setTimeout(() => {
+      if (document.getElementById("screen-loading").classList.contains("active")) {
+        showScreen("screen-widget");
+      }
+    }, 3000);
+  });
+
+  // Verifica validade ao carregar a página
+  (async () => {
+    const valid = await checkTokenValid();
+    if (!valid) showScreen("screen-expired");
   })();
 </script>
 
