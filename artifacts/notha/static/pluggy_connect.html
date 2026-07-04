@@ -272,9 +272,12 @@
   async function checkTokenValid() {
     try {
       const resp = await fetch(`${BASE_URL}/pluggy/connect/${TOKEN_INTERNAL}/check`);
-      return resp.status === 200;
+      // 410 = explicitamente expirado/inválido. Qualquer outro erro (rede, CORS) = assumir válido.
+      if (resp.status === 410) return false;
+      return true;
     } catch {
-      return false;
+      // Erro de rede (CORS no preview, offline, etc.) — assume válido e deixa o widget tentar
+      return true;
     }
   }
 

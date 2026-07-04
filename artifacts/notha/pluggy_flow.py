@@ -45,32 +45,42 @@ async def init_pluggy_tables() -> None:
     if not db:
         return
 
-    async with db.pool.acquire() as conn:
-        await conn.execute("""
+    try:
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS pluggy_connections (
-                id                  SERIAL PRIMARY KEY,
-                user_id             INT,
-                phone               VARCHAR(20) NOT NULL,
-                token               TEXT NOT NULL UNIQUE,
-                pluggy_item_id      TEXT,
+                id                   SERIAL PRIMARY KEY,
+                user_id              INT,
+                phone                VARCHAR(20) NOT NULL,
+                token                TEXT NOT NULL UNIQUE,
+                pluggy_item_id       TEXT,
                 pluggy_connect_token TEXT,
-                status              VARCHAR(30) NOT NULL DEFAULT 'pending',
-                connectors          JSONB,
-                error_message       TEXT,
-                created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                expires_at          TIMESTAMPTZ NOT NULL,
-                completed_at        TIMESTAMPTZ
+                status               VARCHAR(30) NOT NULL DEFAULT 'pending',
+                connectors           JSONB,
+                error_message        TEXT,
+                created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at           TIMESTAMPTZ NOT NULL,
+                completed_at         TIMESTAMPTZ
             )
         """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pluggy_connections_phone
-            ON pluggy_connections (phone)
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pluggy_connections_item_id
-            ON pluggy_connections (pluggy_item_id)
-            WHERE pluggy_item_id IS NOT NULL
-        """)
+    except Exception as e:
+        if "already exists" in str(e):
+            logger.debug("pluggy_connections table already exists — skipping.")
+        else:
+            raise
+
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_pluggy_connections_phone ON pluggy_connections (phone)",
+        """CREATE INDEX IF NOT EXISTS idx_pluggy_connections_item_id
+           ON pluggy_connections (pluggy_item_id) WHERE pluggy_item_id IS NOT NULL""",
+    ]:
+        try:
+            await db.execute(stmt)
+        except Exception as e:
+            if "already exists" in str(e):
+                pass
+            else:
+                raise
+
     logger.info("Pluggy connections table ready.")
 
 

@@ -55,3 +55,4 @@ packages = ["glibcLocales", "postgresql"]
 [userenv]
 
 [userenv.shared]
+BASE_URL = "https://472ff88f-a230-4388-a4a6-551ba10b6b5c-00-heh69bl0ofov.worf.replit.dev"

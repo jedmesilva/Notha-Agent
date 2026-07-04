@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import PlainTextResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from db.connection import init_pool, close_pool, get_pool
@@ -296,6 +297,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NOTHA", version="2.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
