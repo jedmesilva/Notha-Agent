@@ -396,6 +396,39 @@ class Orchestrator:
             return _auth_reply or ""
         await _session_repo.touch(phone)
 
+        # ── Pluggy: Open Finance trigger ──────────────────────────────────────
+        # Detects when the user wants to connect their bank account and sends
+        # the Pluggy link. Runs before any other domain agent.
+        #
+        # Strategy: exact phrases OR (action word + target word) anywhere in message.
+        _PLUGGY_EXACT = ("open finance", "openfinance", "open banking")
+        _PLUGGY_ACTIONS = ("conectar", "vincular", "ligar", "autorizar", "connect", "link")
+        _PLUGGY_TARGETS = ("banco", "conta", "bancária", "bancario", "bank", "financeiro")
+        _text_lower = text.strip().lower()
+        _has_action = any(a in _text_lower for a in _PLUGGY_ACTIONS)
+        _has_target = any(t in _text_lower for t in _PLUGGY_TARGETS)
+        _pluggy_triggered = (
+            any(kw in _text_lower for kw in _PLUGGY_EXACT)
+            or (_has_action and _has_target)
+        )
+        if _pluggy_triggered:
+            try:
+                from pluggy_flow import initiate_bank_connection
+                _pluggy_token = await initiate_bank_connection(
+                    phone=phone,
+                    user_id=user_id,
+                )
+                _pluggy_reply = (
+                    "🏦 Vou te enviar um link agora mesmo para conectar sua conta bancária!\n\n"
+                    "_Aguarde a mensagem com o link logo abaixo_ 👇"
+                )
+                await conv_repo.add(user_id, "user", text)
+                await conv_repo.add(user_id, "assistant", _pluggy_reply)
+                return _pluggy_reply
+            except Exception as _e:
+                logger.error("Pluggy trigger failed for phone=%s: %s", phone, _e)
+                # Fall through to normal conversation flow on error
+
         # Parse phone number info on first contact (runs once, result persisted in DB)
         phone_info_repo = PhoneInfoRepository(db)
         if await phone_info_repo.needs_parsing(phone):

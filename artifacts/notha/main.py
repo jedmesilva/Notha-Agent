@@ -911,6 +911,30 @@ async def pluggy_iniciar_conexao(request: Request) -> dict:
     return {"ok": True, "token": token}
 
 
+@app.get("/pluggy/demo")
+async def pluggy_demo() -> Response:
+    """
+    Endpoint de demo/teste — gera um token Pluggy e redireciona direto para a
+    página de conexão, sem precisar de WhatsApp.
+
+    Acesse no navegador: /pluggy/demo
+    """
+    from pluggy_flow import initiate_bank_connection, get_connection_by_token, create_connection_record
+    from pluggy import get_pluggy_client
+    import os
+
+    phone = "demo_test"
+    pluggy = get_pluggy_client()
+    connect_token = await pluggy.create_connect_token(client_user_id=phone)
+    token = await create_connection_record(phone=phone, user_id=None, pluggy_connect_token=connect_token)
+
+    base_url = os.environ.get("BASE_URL", "").rstrip("/")
+    redirect_url = f"{base_url}/pluggy/connect/{token}" if base_url else f"/pluggy/connect/{token}"
+
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
 @app.get("/admin/pluggy/conexoes")
 async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> dict:
     """Admin endpoint: lista conexões Pluggy registradas."""
