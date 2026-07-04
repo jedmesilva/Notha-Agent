@@ -733,15 +733,16 @@ async def aprovar_documento(doc_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.get("/pluggy/connect/{token}")
-async def pluggy_connect_page(token: str) -> HTMLResponse:
+async def pluggy_connect_page(token: str):
     """
-    Serve a página de conexão bancária Pluggy para o usuário.
+    Redireciona o usuário direto para o widget oficial da Pluggy.
 
-    O token interno é validado, o connect token da Pluggy é injetado na página
-    e o usuário inicia o fluxo sem precisar sair do navegador para uma etapa diferente.
+    Valida o token interno e, se válido, faz redirect para
+    https://connect.pluggy.ai?connect_token=<pluggy_token>.
     """
     from pluggy_flow import get_connection_by_token
-    import os
+    from fastapi.responses import RedirectResponse
+    from datetime import datetime, timezone
 
     record = await get_connection_by_token(token)
     if not record:
@@ -750,7 +751,6 @@ async def pluggy_connect_page(token: str) -> HTMLResponse:
             status_code=404,
         )
 
-    from datetime import datetime, timezone
     if record["expires_at"] < datetime.now(timezone.utc):
         return HTMLResponse(
             content="<h2>Este link expirou. Volte ao WhatsApp e solicite um novo link.</h2>",
@@ -763,17 +763,9 @@ async def pluggy_connect_page(token: str) -> HTMLResponse:
             status_code=410,
         )
 
-    html_path = Path(__file__).parent / "static" / "pluggy_connect.html"
-    if not html_path.is_file():
-        raise HTTPException(status_code=500, detail="Página de conexão não encontrada.")
-
-    base_url = os.environ.get("BASE_URL", "").rstrip("/")
-    content = html_path.read_text(encoding="utf-8")
-    content = content.replace("{{INTERNAL_TOKEN}}", token)
-    content = content.replace("{{PLUGGY_CONNECT_TOKEN}}", record["pluggy_connect_token"] or "")
-    content = content.replace("{{BASE_URL}}", base_url)
-
-    return HTMLResponse(content=content)
+    pluggy_token = record["pluggy_connect_token"] or ""
+    pluggy_url = f"https://connect.pluggy.ai?connect_token={pluggy_token}"
+    return RedirectResponse(url=pluggy_url, status_code=302)
 
 
 @app.get("/pluggy/connect/{token}/check")
