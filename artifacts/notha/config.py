@@ -24,3 +24,11 @@ MAX_ALLOWED_ADJUSTMENT: float = float(os.environ.get("MAX_ALLOWED_ADJUSTMENT", "
 ROUND_TIMEOUT_MINUTES: int = int(os.environ.get("ROUND_TIMEOUT_MINUTES", "30"))
 TOTAL_EXPIRATION_HOURS: int = int(os.environ.get("TOTAL_EXPIRATION_HOURS", "24"))
 REFUND_DEADLINE_AFTER_FAILURE_DAYS: int = int(os.environ.get("REFUND_DEADLINE_DAYS", "3"))
+
+# Pluggy — Open Finance
+PLUGGY_CLIENT_ID: str = os.environ.get("PLUGGY_CLIENT_ID", "")
+PLUGGY_CLIENT_SECRET: str = os.environ.get("PLUGGY_CLIENT_SECRET", "")
+
+# URL base da plataforma (ex: https://seu-dominio.railway.app)
+# Usada para gerar links enviados no WhatsApp.
+BASE_URL: str = os.environ.get("BASE_URL", "")

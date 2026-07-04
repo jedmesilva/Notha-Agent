@@ -279,6 +279,10 @@ async def lifespan(app: FastAPI):
     await _migrate_pending_confirmations_table()
     await _migrate_turn_state_table()
 
+    # Pluggy — Open Finance
+    from pluggy_flow import init_pluggy_tables
+    await init_pluggy_tables()
+
     orchestrator = Orchestrator()
 
     await start_all_jobs()
@@ -714,6 +718,211 @@ async def aprovar_documento(doc_id: int) -> dict:
     await user_repo.update_identity_status(doc["user_id"], "verified")
 
     return {"ok": True, "doc_id": doc_id, "user_id": doc["user_id"]}
+
+
+# ---------------------------------------------------------------------------
+# Pluggy — Open Finance: fluxo de conexão bancária
+# ---------------------------------------------------------------------------
+
+@app.get("/pluggy/connect/{token}")
+async def pluggy_connect_page(token: str) -> HTMLResponse:
+    """
+    Serve a página de conexão bancária Pluggy para o usuário.
+
+    O token interno é validado, o connect token da Pluggy é injetado na página
+    e o usuário inicia o fluxo sem precisar sair do navegador para uma etapa diferente.
+    """
+    from pluggy_flow import get_connection_by_token
+    import os
+
+    record = await get_connection_by_token(token)
+    if not record:
+        return HTMLResponse(
+            content="<h2>Link inválido ou expirado. Volte ao WhatsApp e solicite um novo link.</h2>",
+            status_code=404,
+        )
+
+    from datetime import datetime, timezone
+    if record["expires_at"] < datetime.now(timezone.utc):
+        return HTMLResponse(
+            content="<h2>Este link expirou. Volte ao WhatsApp e solicite um novo link.</h2>",
+            status_code=410,
+        )
+
+    if record["status"] not in ("pending",):
+        return HTMLResponse(
+            content="<h2>Este link já foi utilizado. Volte ao WhatsApp para continuar.</h2>",
+            status_code=410,
+        )
+
+    html_path = Path(__file__).parent / "static" / "pluggy_connect.html"
+    if not html_path.is_file():
+        raise HTTPException(status_code=500, detail="Página de conexão não encontrada.")
+
+    base_url = os.environ.get("BASE_URL", "").rstrip("/")
+    content = html_path.read_text(encoding="utf-8")
+    content = content.replace("{{INTERNAL_TOKEN}}", token)
+    content = content.replace("{{PLUGGY_CONNECT_TOKEN}}", record["pluggy_connect_token"] or "")
+    content = content.replace("{{BASE_URL}}", base_url)
+
+    return HTMLResponse(content=content)
+
+
+@app.get("/pluggy/connect/{token}/check")
+async def pluggy_connect_check(token: str) -> Response:
+    """
+    Verifica se um token de conexão ainda é válido.
+    Usado pelo frontend JavaScript para detectar links expirados antes de iniciar o fluxo.
+
+    Returns 200 se válido, 410 se expirado/inválido.
+    """
+    from pluggy_flow import get_connection_by_token
+    from datetime import datetime, timezone
+
+    record = await get_connection_by_token(token)
+    if not record:
+        return Response(status_code=410)
+    if record["expires_at"] < datetime.now(timezone.utc):
+        return Response(status_code=410)
+    if record["status"] != "pending":
+        return Response(status_code=410)
+    return Response(status_code=200)
+
+
+@app.post("/pluggy/connect/{token}/callback")
+async def pluggy_connect_callback(token: str, request: Request) -> dict:
+    """
+    Recebe o resultado do fluxo de conexão diretamente do frontend (Pluggy Connect Widget).
+
+    Chamado pelo JavaScript da página após onSuccess ou onError do widget.
+    Atualiza o status no banco e notifica o usuário via WhatsApp.
+
+    Body JSON:
+      status  — "connected" | "error"
+      itemId  — ID do item Pluggy (quando status=connected)
+      error   — Mensagem de erro (quando status=error)
+    """
+    from pluggy_flow import (
+        get_connection_by_token,
+        update_connection_status,
+        _on_connection_success,
+        _on_connection_error,
+    )
+    from pluggy import get_pluggy_client
+    from datetime import datetime, timezone
+
+    record = await get_connection_by_token(token)
+    if not record:
+        return {"ok": False, "message": "Token inválido."}
+
+    if record["expires_at"] < datetime.now(timezone.utc):
+        return {"ok": False, "message": "Token expirado."}
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "message": "Corpo inválido."}
+
+    status  = body.get("status", "")
+    item_id = body.get("itemId")
+    error   = body.get("error")
+
+    if status == "connected" and item_id:
+        pluggy = get_pluggy_client()
+        try:
+            item = await pluggy.get_item(item_id)
+        except Exception as e:
+            logger.warning("Não foi possível consultar item %s: %s", item_id, e)
+            item = {"id": item_id, "connector": {}, "executionStatus": "SUCCESS"}
+
+        await update_connection_status(token=token, status="connected", item_id=item_id)
+        asyncio.create_task(_on_connection_success(record, item))
+        return {"ok": True}
+
+    elif status == "error":
+        await update_connection_status(token=token, status="error", error_message=error or "")
+        asyncio.create_task(_on_connection_error(record, {}, error or "ERROR"))
+        return {"ok": True}
+
+    return {"ok": False, "message": "Status desconhecido."}
+
+
+@app.post("/webhook/pluggy")
+async def pluggy_webhook(request: Request) -> Response:
+    """
+    Recebe notificações de eventos da Pluggy (item criado, erro, aguardando ação do usuário, etc.).
+
+    Registre esta URL no painel Pluggy como webhook endpoint.
+    URL: https://<SEU_DOMINIO>/webhook/pluggy
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=200)
+
+    event = body.get("event", "")
+    logger.info("Pluggy webhook recebido: event=%s", event)
+
+    from pluggy_flow import handle_pluggy_webhook
+    asyncio.create_task(handle_pluggy_webhook(body))
+
+    return Response(status_code=200)
+
+
+@app.post("/pluggy/iniciar")
+async def pluggy_iniciar_conexao(request: Request) -> dict:
+    """
+    Endpoint de teste/admin para iniciar o fluxo de conexão bancária via WhatsApp.
+
+    Body JSON:
+      phone    — Número do usuário (ex: "5511999999999")
+      user_id  — ID do usuário no banco (opcional)
+      message  — Mensagem customizada (opcional)
+
+    Returns o token interno da conexão para rastreamento.
+    """
+    from pluggy_flow import initiate_bank_connection
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Corpo JSON inválido.")
+
+    phone = body.get("phone", "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="Campo 'phone' é obrigatório.")
+
+    user_id = body.get("user_id")
+    message = body.get("message")
+
+    token = await initiate_bank_connection(
+        phone=phone,
+        user_id=user_id,
+        message_override=message,
+    )
+    return {"ok": True, "token": token}
+
+
+@app.get("/admin/pluggy/conexoes")
+async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> dict:
+    """Admin endpoint: lista conexões Pluggy registradas."""
+    from db.connection import get_db
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    if phone:
+        rows = await db.fetch_all(
+            "SELECT * FROM pluggy_connections WHERE phone = $1 ORDER BY created_at DESC LIMIT $2",
+            phone, limit,
+        )
+    else:
+        rows = await db.fetch_all(
+            "SELECT * FROM pluggy_connections ORDER BY created_at DESC LIMIT $1",
+            limit,
+        )
+
+    return {"conexoes": [dict(r) for r in rows], "total": len(rows)}
 
 
 @app.post("/admin/identidade/{doc_id}/rejeitar")
