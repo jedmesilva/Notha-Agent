@@ -928,6 +928,361 @@ async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> d
     return {"conexoes": [dict(r) for r in rows], "total": len(rows)}
 
 
+# ---------------------------------------------------------------------------
+# Grupos — CRUD completo
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/grupos")
+async def criar_grupo(payload: dict) -> dict:
+    """
+    Cria um grupo completo em uma única chamada.
+
+    Body JSON:
+    {
+      "name": "Grupo Seed SP",
+      "description": "Tomadores iniciantes — São Paulo",
+      "max_aggregate_exposure": 50000.00,
+      "max_per_user_limit": 2000.00,
+      "base_borrowing_rate": 0.04,
+      "base_investment_rate": 0.025,
+      "min_spread": 0.01,
+      "spread_violation_strategy": "reject_investment",
+      "term_curve": [
+        {"min_term_days": 1,  "max_term_days": 30,  "adjustment_bps": 0},
+        {"min_term_days": 31, "max_term_days": 90,  "adjustment_bps": 50},
+        {"min_term_days": 91, "max_term_days": 180, "adjustment_bps": 100}
+      ],
+      "score_bands": [
+        {"min_score": 0,   "max_score": 300,  "limit_percentage": 0.20, "label": "Iniciante"},
+        {"min_score": 300, "max_score": 500,  "limit_percentage": 0.35, "label": "Bronze"},
+        {"min_score": 500, "max_score": 700,  "limit_percentage": 0.55, "label": "Prata"},
+        {"min_score": 700, "max_score": 850,  "limit_percentage": 0.75, "label": "Ouro"},
+        {"min_score": 850, "max_score": 1001, "limit_percentage": 1.00, "label": "Elite"}
+      ]
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    required = ["name", "max_aggregate_exposure",
+                "base_borrowing_rate", "base_investment_rate", "min_spread"]
+    missing = [f for f in required if f not in payload]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
+
+    try:
+        result = await GroupRepository(db).create_full(payload)
+        return {"ok": True, "grupo": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/grupos")
+async def listar_grupos(status: str | None = None) -> dict:
+    """Lista todos os grupos. Filtro opcional: ?status=active|inactive"""
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    grupos = await GroupRepository(db).list_all(status=status)
+    return {"grupos": [dict(g) for g in grupos], "total": len(grupos)}
+
+
+@app.get("/admin/grupos/{group_id}")
+async def detalhe_grupo(group_id: int) -> dict:
+    """
+    Retorna perfil completo do grupo:
+    dados base + pool_limit + rate_policy + term_curve + score_bands + membros + saldo da wallet.
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    profile = await GroupRepository(db).get_full_profile(group_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+    return profile
+
+
+@app.patch("/admin/grupos/{group_id}/status")
+async def atualizar_status_grupo(group_id: int, payload: dict) -> dict:
+    """Ativa ou desativa um grupo. Body: {"status": "active" | "inactive"}"""
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    status = payload.get("status")
+    if status not in ("active", "inactive"):
+        raise HTTPException(status_code=422, detail="status deve ser 'active' ou 'inactive'")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    await repo.update_status(group_id, status)
+    return {"ok": True, "group_id": group_id, "status": status}
+
+
+@app.put("/admin/grupos/{group_id}/taxas")
+async def atualizar_taxas_grupo(group_id: int, payload: dict) -> dict:
+    """
+    Atualiza política de taxas do grupo (insere novo registro com effective_from=agora).
+
+    Body: {
+      "base_borrowing_rate": 0.04,
+      "base_investment_rate": 0.025,
+      "min_spread": 0.01,
+      "spread_violation_strategy": "reject_investment"
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    required = ["base_borrowing_rate", "base_investment_rate", "min_spread"]
+    missing = [f for f in required if f not in payload]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
+
+    policy_id = await repo.set_rate_policy(
+        group_id=group_id,
+        base_borrowing_rate=payload["base_borrowing_rate"],
+        base_investment_rate=payload["base_investment_rate"],
+        min_spread=payload["min_spread"],
+        spread_violation_strategy=payload.get("spread_violation_strategy", "reject_investment"),
+    )
+    return {"ok": True, "group_id": group_id, "rate_policy_id": policy_id}
+
+
+@app.put("/admin/grupos/{group_id}/limites")
+async def atualizar_limites_grupo(group_id: int, payload: dict) -> dict:
+    """
+    Adiciona novo pool limit para o grupo.
+
+    Body: {
+      "max_aggregate_exposure": 100000.00,
+      "max_per_user_limit": 5000.00
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    if "max_aggregate_exposure" not in payload:
+        raise HTTPException(status_code=422, detail="max_aggregate_exposure é obrigatório")
+
+    pool_id = await repo.set_pool_limit(
+        group_id=group_id,
+        max_aggregate_exposure=payload["max_aggregate_exposure"],
+        max_per_user_limit=payload.get("max_per_user_limit"),
+    )
+    return {"ok": True, "group_id": group_id, "pool_limit_id": pool_id}
+
+
+@app.put("/admin/grupos/{group_id}/curva-prazo")
+async def atualizar_curva_prazo(group_id: int, payload: dict) -> dict:
+    """
+    Recria a curva de ajuste de taxa por prazo.
+
+    Body: {
+      "bands": [
+        {"min_term_days": 1,  "max_term_days": 30,  "adjustment_bps": 0},
+        {"min_term_days": 31, "max_term_days": 90,  "adjustment_bps": 50},
+        {"min_term_days": 91, "max_term_days": 180, "adjustment_bps": 100}
+      ]
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    bands = payload.get("bands", [])
+    await repo.set_term_curve(group_id, bands)
+    return {"ok": True, "group_id": group_id, "bands_configuradas": len(bands)}
+
+
+@app.put("/admin/grupos/{group_id}/faixas-score")
+async def atualizar_faixas_score(group_id: int, payload: dict) -> dict:
+    """
+    Recria as faixas de score → percentual do teto de crédito.
+
+    Body: {
+      "bands": [
+        {"min_score": 0,   "max_score": 300,  "limit_percentage": 0.20, "label": "Iniciante"},
+        {"min_score": 300, "max_score": 500,  "limit_percentage": 0.35, "label": "Bronze"},
+        {"min_score": 500, "max_score": 700,  "limit_percentage": 0.55, "label": "Prata"},
+        {"min_score": 700, "max_score": 850,  "limit_percentage": 0.75, "label": "Ouro"},
+        {"min_score": 850, "max_score": 1001, "limit_percentage": 1.00, "label": "Elite"}
+      ]
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    bands = payload.get("bands", [])
+    await repo.set_score_bands(group_id, bands)
+    return {"ok": True, "group_id": group_id, "faixas_configuradas": len(bands)}
+
+
+@app.get("/admin/grupos/{group_id}/membros")
+async def listar_membros(group_id: int, todos: bool = False) -> dict:
+    """Lista membros do grupo. ?todos=true inclui histórico de saídas."""
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    membros = await repo.list_members(group_id, active_only=not todos)
+    return {"group_id": group_id, "membros": [dict(m) for m in membros], "total": len(membros)}
+
+
+@app.post("/admin/grupos/{group_id}/membros")
+async def adicionar_membro(group_id: int, payload: dict) -> dict:
+    """
+    Adiciona um usuário ao grupo.
+    Body: {"user_id": 42, "allocation_reason": "Onboarding manual"}
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id é obrigatório")
+
+    repo = GroupRepository(db)
+    if not await repo.get_by_id(group_id):
+        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+
+    ug_id = await repo.add_member(
+        group_id=group_id,
+        user_id=user_id,
+        allocation_reason=payload.get("allocation_reason"),
+    )
+    return {"ok": True, "user_group_id": ug_id, "group_id": group_id, "user_id": user_id}
+
+
+@app.delete("/admin/grupos/{group_id}/membros/{user_id}")
+async def remover_membro(group_id: int, user_id: int) -> dict:
+    """Remove (marca left_at) um usuário do grupo."""
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    removed = await GroupRepository(db).remove_member(group_id, user_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Membro ativo não encontrado neste grupo")
+    return {"ok": True, "group_id": group_id, "user_id": user_id}
+
+
+@app.get("/admin/upgrades")
+async def listar_upgrades(status: str = "suggested") -> dict:
+    """
+    Lista candidatos a upgrade de grupo.
+    ?status=suggested|accepted|rejected
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    eventos = await GroupRepository(db).list_upgrade_candidates(status=status)
+    return {"upgrades": [dict(e) for e in eventos], "total": len(eventos)}
+
+
+@app.post("/admin/upgrades/{event_id}/resolver")
+async def resolver_upgrade(event_id: int, payload: dict) -> dict:
+    """
+    Aceita ou rejeita uma sugestão de upgrade de grupo.
+    Se aceito, move o usuário para o novo grupo automaticamente.
+
+    Body: {
+      "resolution": "accepted",
+      "to_group_id": 2,
+      "allocation_reason": "Upgrade por score Elite"
+    }
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    resolution = payload.get("resolution")
+    if resolution not in ("accepted", "rejected"):
+        raise HTTPException(status_code=422, detail="resolution deve ser 'accepted' ou 'rejected'")
+
+    result = await GroupRepository(db).resolve_upgrade(
+        event_id=event_id,
+        resolution=resolution,
+        to_group_id=payload.get("to_group_id"),
+        allocation_reason=payload.get("allocation_reason"),
+    )
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/admin/usuarios/{user_id}/grupos")
+async def grupos_do_usuario(user_id: int, todos: bool = False) -> dict:
+    """
+    Retorna os grupos de um usuário.
+    ?todos=true inclui grupos que o usuário já saiu.
+    """
+    from db.connection import get_db
+    from db.repositories.groups import GroupRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    grupos = await GroupRepository(db).get_user_groups(user_id, active_only=not todos)
+    return {"user_id": user_id, "grupos": [dict(g) for g in grupos], "total": len(grupos)}
+
+
 @app.post("/admin/identidade/{doc_id}/rejeitar")
 async def rejeitar_documento(doc_id: int, motivo: str = "") -> dict:
     """Admin endpoint: rejects a document and marks the user as rejected."""
