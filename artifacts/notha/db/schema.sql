@@ -10,16 +10,24 @@
 
 -- 1.1 Users (identity)
 CREATE TABLE IF NOT EXISTS users (
-    id               SERIAL PRIMARY KEY,
-    tax_id           VARCHAR(14) UNIQUE,
-    full_name        VARCHAR(200),
-    nickname         VARCHAR(60),
-    identity_status  VARCHAR(20) NOT NULL DEFAULT 'unverified',
+    id                  SERIAL PRIMARY KEY,
+    tax_id              VARCHAR(14) UNIQUE,
+    full_name           VARCHAR(200),
+    nickname            VARCHAR(60),
+    identity_status     VARCHAR(20) NOT NULL DEFAULT 'unverified',
         -- unverified | under_review | verified | rejected
-    city             VARCHAR(100),
-    neighborhood     VARCHAR(100),
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    city                VARCHAR(100),
+    neighborhood        VARCHAR(100),
+    street              VARCHAR(200),
+    street_number       VARCHAR(20),
+    state               VARCHAR(100),
+    country             VARCHAR(100),
+    zip_code            VARCHAR(20),
+    gender              VARCHAR(30),
+    date_of_birth       DATE,
+    preferred_language  VARCHAR(10) DEFAULT 'pt',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_identity_status
         CHECK (identity_status IN ('unverified', 'under_review', 'verified', 'rejected'))
 );
