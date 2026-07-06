@@ -1,20 +1,5 @@
 """
 Output guardrail — validates the agent's response before sending to the user.
-
-Flow:
-  1. Agent generates a reply
-  2. Guardrail evaluates the reply against the full conversation context
-     and NOTHA's scope of operation
-  3. If approved → sends normally
-  4. If rejected → attempts one correction with a specific instruction
-  5. If still rejected → returns a generic safe fallback
-
-Criteria (in order of severity):
-  - Incoherence with the full conversation thread (not just the last message)
-  - Out of scope relative to NOTHA's purpose
-  - Sensitive data leakage (seller's floor price, buyer's ceiling limit)
-  - Forbidden terms that reveal the underlying AI technology
-  - Nonsense / truncated / broken text
 """
 import json
 import logging
@@ -28,19 +13,13 @@ _SAFE_FALLBACK = (
 
 # ── NOTHA scope description (reused in both prompts) ─────────────────────────
 _NOTHA_SCOPE = """
-NOTHA is a WhatsApp agent that facilitates buying and selling physical products
-(furniture, electronics, vehicles, appliances, real estate items, etc.).
+NOTHA is a WhatsApp agent for a financial and lending platform.
 Its full scope includes:
-  • Searching for products available near the user
-  • Listing products for sale (photos, description, pricing, condition)
-  • Price negotiation between buyer and seller via proxy agents
-  • Payment coordination (Pix via Asaas, held in escrow until delivery confirmed)
-  • Delivery and pickup logistics
-  • User identification and basic profile management
-
-NOTHA does NOT engage with: politics, religion, medical advice, financial
-speculation, entertainment content, or any topic unrelated to physical product
-trading. Politely redirecting off-topic requests is correct behaviour.
+  • User identification and identity verification
+  • Bank account connection via Pluggy (Open Finance)
+  • Credit limit assessment and risk scoring
+  • Loan requests and debt management
+  • Wallet transactions and payments
 """
 
 _GUARDRAIL_PROMPT = """You are a quality and security auditor for NOTHA.
@@ -62,52 +41,27 @@ _GUARDRAIL_PROMPT = """You are a quality and security auditor for NOTHA.
 
 ━━━ EVALUATION INSTRUCTIONS ━━━
 Evaluate the REPLY against the FULL CONVERSATION above, not just the last
-message in isolation. A user may send several short messages, each with a
-single word, abbreviation, or fragment — these must be interpreted together
-with everything that was discussed before.
-
-When an OBJECTIVE is provided, also verify the reply is consistent with
-that objective — not perfectly complete, just not contradictory.
+message in isolation.
 
 Reject (approved: false) if ANY of these unambiguous violations apply:
 
 1. INCOHERENCE
    The reply makes no sense when read against the full conversation thread.
-   • Abbreviations, slang, emojis, and single-word replies MUST be interpreted
-     in the context of the whole conversation before judging coherence.
-   • Only reject if the reply is CLEARLY unrelated to the entire thread —
-     not because of imperfect phrasing, tone differences, or a short user message.
-   • Example of a correct rejection: user is negotiating a sofa price and
-     the agent suddenly responds about the weather with no transition.
 
 2. OUT_OF_SCOPE
-   The reply engages substantively with a topic entirely outside NOTHA's purpose
-   (e.g. gives political opinions, medical diagnoses, stock tips, or detailed
-   content unrelated to physical product trading).
-   • Politely declining such requests is NOT a violation.
-   • Brief small-talk while steering back to NOTHA's purpose is NOT a violation.
+   The reply engages substantively with a topic entirely outside NOTHA's purpose.
 
 3. DATA_LEAK
-   The reply explicitly reveals to one party a value that is confidential to
-   the other:
-   • Reveals the seller's private minimum/floor price to the buyer, OR
-   • Reveals the buyer's private maximum/ceiling limit to the seller.
-   Stating the listed/asking price is fine — only leaking the private limit
-   is a violation.
+   The reply explicitly reveals confidential financial information between parties.
 
 4. FORBIDDEN_TERM
-   The reply mentions "GPT", "OpenAI", "Anthropic", "Claude", "Gemini", "LLM",
-   "large language model", "artificial intelligence", "machine learning", or
-   "algorithm" in a way that reveals the underlying AI technology to the user.
+   The reply mentions internal AI details (GPT, LLM, OpenAI, etc.).
 
 5. NONSENSE
-   The reply is severely truncated mid-sentence, consists of random characters,
-   or is entirely unintelligible. Informal language, abbreviations, regional
-   slang, and emojis are NOT nonsense.
+   The reply is severely truncated or unintelligible.
 
 ━━━ WHEN IN DOUBT, APPROVE ━━━
-Only reject on clear, unambiguous violations. A borderline reply should be
-approved — the agent's main system prompt already enforces quality.
+Only reject on clear, unambiguous violations.
 
 ━━━ RETURN FORMAT ━━━
 Return ONLY valid JSON, no extra text:
@@ -168,11 +122,7 @@ async def _call_guardrail_llm(messages: list[dict]) -> dict:
 
 
 async def _call_correction_llm(messages: list[dict]) -> str:
-    """Asks the LLM to correct the rejected response.
-
-    Returns an empty string on failure so the caller can fall through
-    to the localized safe fallback rather than sending an English string.
-    """
+    """Asks the LLM to correct the rejected response."""
     from llm import get_provider
     try:
         resp = await get_provider().complete(
@@ -187,12 +137,6 @@ async def _call_correction_llm(messages: list[dict]) -> str:
 
 
 def _format_history(history: list[dict], max_messages: int = 30) -> str:
-    """Formats the last N user/assistant messages in a readable form.
-
-    Uses 30 messages by default so the guardrail sees as much context as
-    possible — the whole point is to evaluate coherence against the full
-    thread, not just the tail end.
-    """
     recent = [m for m in history if m.get("role") in ("user", "assistant")][-max_messages:]
     lines = []
     for m in recent:
@@ -213,40 +157,19 @@ async def validate_reply(
     phone: str | None = None,
     user_id: int | None = None,
 ) -> str:
-    """Validates the generated response before sending to the user.
-
-    Parameters:
-      reply        — text generated by the agent
-      history      — full conversation history (roles: user/assistant)
-      context      — user context string (name, role, product, negotiation)
-      user_message — last user message; if provided, appended to history for
-                     the guardrail so the full thread is always complete
-      objective    — what the agent was trying to achieve (from understand());
-                     improves coherence checking precision
-
-    Returns the original reply if approved, a corrected version if the
-    correction passes, or a safe fallback if both attempts fail.
-    """
     if not reply or not reply.strip():
-        logger.warning("Guardrail: empty reply received — using fallback.")
         from engine.orchestrator import localize
         return await localize(_SAFE_FALLBACK, phone or "")
 
-    # Build a complete history for the guardrail that always ends with the
-    # user's latest message, even if the caller already appended it.
     guardrail_history = [m for m in history if m.get("role") in ("user", "assistant")]
     if user_message:
-        last_user = next(
-            (m["content"] for m in reversed(guardrail_history) if m["role"] == "user"),
-            None,
-        )
+        last_user = next((m["content"] for m in reversed(guardrail_history) if m["role"] == "user"), None)
         if last_user != user_message:
             guardrail_history = guardrail_history + [{"role": "user", "content": user_message}]
 
     history_fmt = _format_history(guardrail_history)
     objective_fmt = objective or "(not specified)"
 
-    # ── Phase 1: Evaluation ──────────────────────────────────────────────────
     evaluation_prompt = _GUARDRAIL_PROMPT.format(
         scope=_NOTHA_SCOPE,
         context=context or "não disponível",
@@ -263,7 +186,6 @@ async def validate_reply(
     reason = result.get("reason", "sem motivo especificado")
     logger.warning("Guardrail REJEITOU — category=%s | reason=%s", category, reason)
 
-    # ── Phase 2: Correction attempt ──────────────────────────────────────────
     correction_prompt = _CORRECTION_PROMPT.format(
         scope=_NOTHA_SCOPE,
         context=context or "não disponível",
@@ -275,13 +197,10 @@ async def validate_reply(
     )
     corrected_reply = await _call_correction_llm([{"role": "user", "content": correction_prompt}])
 
-    # If correction produced nothing, skip Phase 3 and go straight to fallback
     if not corrected_reply or not corrected_reply.strip():
-        logger.error("Guardrail: correction returned empty — using localized fallback.")
         from engine.orchestrator import localize
         return await localize(_SAFE_FALLBACK, phone or "")
 
-    # ── Phase 3: Re-evaluate the corrected reply ─────────────────────────────
     re_evaluation_prompt = _GUARDRAIL_PROMPT.format(
         scope=_NOTHA_SCOPE,
         context=context or "não disponível",
@@ -292,32 +211,7 @@ async def validate_reply(
     final_result = await _call_guardrail_llm([{"role": "user", "content": re_evaluation_prompt}])
 
     if final_result.get("approved", True):
-        logger.info("Guardrail: resposta corrigida aprovada na segunda tentativa.")
-        if analytics_repo:
-            try:
-                await analytics_repo.log_guardrail_event(
-                    category=category, reason=reason,
-                    was_corrected=True, used_fallback=False,
-                    objective=objective or None, phone=phone, user_id=user_id,
-                )
-            except Exception:
-                pass
         return corrected_reply
 
-    logger.error(
-        "Guardrail: resposta corrigida também rejeitada — usando fallback seguro. "
-        "category=%s | reason=%s",
-        final_result.get("category"),
-        final_result.get("reason"),
-    )
-    if analytics_repo:
-        try:
-            await analytics_repo.log_guardrail_event(
-                category=category, reason=reason,
-                was_corrected=False, used_fallback=True,
-                objective=objective or None, phone=phone, user_id=user_id,
-            )
-        except Exception:
-            pass
     from engine.orchestrator import localize
     return await localize(_SAFE_FALLBACK, phone or "")

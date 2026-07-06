@@ -586,7 +586,6 @@ async def asaas_webhook(request: Request) -> Response:
 async def _handle_payment_confirmed(payment: dict) -> None:
     """Marks transaction as paid and notifies parties."""
     from db.connection import get_db
-    from db.repositories import TransactionRepository, NegotiationRepository
     db = get_db()
     if not db:
         return
@@ -595,19 +594,8 @@ async def _handle_payment_confirmed(payment: dict) -> None:
     if not charge_id:
         return
 
-    tx_repo  = TransactionRepository(db)
-    neg_repo = NegotiationRepository(db)
-
-    row = await db.fetch_one(
-        "SELECT * FROM transactions WHERE asaas_charge_id = $1", charge_id
-    )
-    if not row:
-        logger.warning(f"Charge {charge_id} not found in database.")
-        return
-
-    await tx_repo.set_paid(row["id"])
-    await neg_repo.update_status(row["negotiation_id"], "paid")
-    logger.info(f"Payment confirmed: transaction_id={row['id']}, negotiation_id={row['negotiation_id']}")
+    # TODO: Refactor for financial domain debts/wallet_transactions
+    logger.info(f"Payment confirmed for charge_id={charge_id} - Logic needs update for new domain.")
 
 
 class TestMessage(BaseModel):
@@ -629,7 +617,6 @@ async def test_chat(body: TestMessage) -> dict:
 @app.get("/health")
 async def health() -> dict:
     from db.connection import get_pool
-    from db.repositories import TransactionRepository
     db_ok = get_pool() is not None
 
     retained = None
@@ -638,8 +625,11 @@ async def health() -> dict:
             from db.connection import get_db
             db = get_db()
             if db:
-                tx_repo  = TransactionRepository(db)
-                retained = await tx_repo.get_total_retained()
+                row = await db.fetch_one(
+                    "SELECT COALESCE(SUM(balance_cache), 0) AS total "
+                    "FROM wallets WHERE owner_type = 'platform'"
+                )
+                retained = float(row["total"]) if row else None
         except Exception:
             pass
 
@@ -651,29 +641,18 @@ async def health() -> dict:
     }
 
 
-@app.get("/admin/listings")
-async def list_listings(status: str = "available", limit: int = 20) -> dict:
-    """Admin endpoint: lists products by status."""
-    from db.connection import get_db
-    from db.repositories import ListingRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-    repo = ListingRepository(db)
-    rows = await repo.find_available(limit=limit) if status == "available" else []
-    return {"listings": [dict(r) for r in rows], "total": len(rows)}
-
-
 @app.get("/admin/conciliacao")
 async def conciliacao() -> dict:
-    """Admin endpoint: total retained balance for financial reconciliation."""
+    """Admin endpoint: platform wallet balance for financial reconciliation."""
     from db.connection import get_db
-    from db.repositories import TransactionRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-    tx_repo = TransactionRepository(db)
-    total   = await tx_repo.get_total_retained()
+    row = await db.fetch_one(
+        "SELECT COALESCE(SUM(balance_cache), 0) AS total "
+        "FROM wallets WHERE owner_type = 'platform'"
+    )
+    total = float(row["total"]) if row else 0.0
     return {
         "saldo_retido_total_notha": total,
         "nota": "Compare este valor com o saldo real da conta Asaas da MAISOR CAPITAL. Divergência é bug crítico.",

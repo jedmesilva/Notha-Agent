@@ -210,13 +210,10 @@ class UserRepository:
         if not user:
             return {}
 
-        seller = await self.get_seller_profile(user_id)
-        buyer  = await self.get_buyer_profile(user_id)
+        bank_account = await self.get_primary_bank_account(user_id)
 
         profile = dict(user)
-        profile["pix_key"]         = seller["pix_key"]         if seller else None
-        profile["pickup_address"]  = seller["pickup_address"]  if seller else None
-        profile["delivery_address"] = buyer["delivery_address"] if buyer else None
+        profile["pix_key"] = bank_account["pix_key"] if bank_account else None
         return profile
 
     async def update_identity_status(self, user_id: int, status: str) -> None:
@@ -309,79 +306,24 @@ class UserRepository:
                 )
                 return user
 
-    async def get_seller_profile(self, user_id: int) -> asyncpg.Record | None:
+    async def get_primary_bank_account(self, user_id: int) -> asyncpg.Record | None:
+        """Retorna a conta bancária mais recente vinculada ao usuário (via Pluggy)."""
         return await self._db.fetch_one(
-            "SELECT * FROM seller_profile WHERE user_id = $1", user_id
-        )
-
-    async def get_buyer_profile(self, user_id: int) -> asyncpg.Record | None:
-        return await self._db.fetch_one(
-            "SELECT * FROM buyer_profile WHERE user_id = $1", user_id
-        )
-
-    async def get_courier_profile(self, user_id: int) -> asyncpg.Record | None:
-        return await self._db.fetch_one(
-            "SELECT * FROM courier_profile WHERE user_id = $1", user_id
-        )
-
-    async def upsert_seller_profile(
-        self,
-        user_id: int,
-        pickup_address: str | None = None,
-        available_hours=None,
-        pix_key: str | None = None,
-        pix_holder_name: str | None = None,
-    ) -> None:
-        import json
-        await self._db.execute(
             """
-            INSERT INTO seller_profile (user_id, pickup_address, available_hours, pix_key, pix_holder_name)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (user_id) DO UPDATE SET
-                pickup_address  = COALESCE($2, seller_profile.pickup_address),
-                available_hours = COALESCE($3, seller_profile.available_hours),
-                pix_key         = COALESCE($4, seller_profile.pix_key),
-                pix_holder_name = COALESCE($5, seller_profile.pix_holder_name)
+            SELECT * FROM bank_accounts
+            WHERE user_id = $1
+            ORDER BY synced_at DESC
+            LIMIT 1
             """,
             user_id,
-            pickup_address,
-            json.dumps(available_hours) if available_hours else None,
+        )
+
+    async def update_pix_key(self, user_id: int, pix_key: str) -> None:
+        """Atualiza a chave Pix informada manualmente pelo usuário."""
+        await self._db.execute(
+            "UPDATE users SET pix_key = $1, updated_at = now() WHERE id = $2",
             pix_key,
-            pix_holder_name,
-        )
-
-    async def upsert_buyer_profile(self, user_id: int, delivery_address: str | None = None) -> None:
-        await self._db.execute(
-            """
-            INSERT INTO buyer_profile (user_id, delivery_address)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id) DO UPDATE SET
-                delivery_address = COALESCE($2, buyer_profile.delivery_address)
-            """,
             user_id,
-            delivery_address,
-        )
-
-    async def upsert_courier_profile(
-        self,
-        user_id: int,
-        pix_key: str | None = None,
-        pix_holder_name: str | None = None,
-        service_area: str | None = None,
-    ) -> None:
-        await self._db.execute(
-            """
-            INSERT INTO courier_profile (user_id, pix_key, pix_holder_name, service_area)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id) DO UPDATE SET
-                pix_key         = COALESCE($2, courier_profile.pix_key),
-                pix_holder_name = COALESCE($3, courier_profile.pix_holder_name),
-                service_area    = COALESCE($4, courier_profile.service_area)
-            """,
-            user_id,
-            pix_key,
-            pix_holder_name,
-            service_area,
         )
 
     async def check_missing_fields(self, user_id: int, operation: str) -> dict:
@@ -397,7 +339,6 @@ class UserRepository:
             return {"missing": ["full_name", "tax_id"], "reason": "user_not_found"}
 
         # Monta o perfil para verificação
-        seller  = await self.get_seller_profile(user_id)
         profile = {
             "full_name":         user.get("full_name") or "",
             "nickname":          user.get("nickname")  or "",
@@ -411,8 +352,7 @@ class UserRepository:
             "date_of_birth":     user.get("date_of_birth"),
             "preferred_language": user.get("preferred_language") or "",
             "identity_status":   user.get("identity_status") or "unverified",
-            "pix_key":           (seller["pix_key"]        if seller else "") or "",
-            "pickup_address":    (seller["pickup_address"] if seller else "") or "",
+            "pix_key":           user.get("pix_key") or "",
             "phone_valid":       True,  # telefone sempre existe (é por onde vieram)
         }
 
@@ -434,8 +374,7 @@ class UserRepository:
         """
         from guardrails import check_requirements, OPERATION_REQUIREMENTS, FIELD_LABELS
 
-        user   = await self.find_by_id(user_id)
-        seller = await self.get_seller_profile(user_id)
+        user = await self.find_by_id(user_id)
         if not user:
             return "perfil: não encontrado"
 
@@ -451,17 +390,12 @@ class UserRepository:
             "gender":           user.get("gender")       or "",
             "date_of_birth":    user.get("date_of_birth"),
             "identity_status":  user.get("identity_status") or "unverified",
-            "pix_key":          (seller["pix_key"]        if seller else "") or "",
-            "pickup_address":   (seller["pickup_address"] if seller else "") or "",
+            "pix_key":          user.get("pix_key") or "",
             "phone_valid":      True,
         }
 
         lines = []
-        # list_product is intentionally excluded: the listing flow guides the user
-        # through its own data collection — the agent must NOT pre-collect listing
-        # fields before calling list_product. Showing them here causes the agent to
-        # dump multiple field requests at once, violating the "one field at a time" rule.
-        key_ops = ["search_product", "save_alert", "buy_product", "receive_payment"]
+        key_ops = ["identity_verification"]
         for op in key_ops:
             missing = check_requirements(op, profile)
             label   = OPERATION_REQUIREMENTS[op]["label"]
@@ -474,17 +408,5 @@ class UserRepository:
                 lines.append(f"para {label}: falta {first_missing}{suffix} — peça um de cada vez")
             else:
                 lines.append(f"para {label}: ok")
-
-        # For list_product: only show critical blockers (identity + pix_key)
-        list_missing = check_requirements("list_product", profile)
-        if list_missing:
-            blockers = [FIELD_LABELS.get(f, f) for f in list_missing]
-            lines.append(
-                f"para anunciar: pendências de perfil ({len(list_missing)}) — "
-                f"o fluxo de cadastro coleta os dados; só mencione se o usuário não conseguir prosseguir. "
-                f"Bloqueadores: {', '.join(blockers)}"
-            )
-        else:
-            lines.append("para anunciar: perfil ok")
 
         return "completude_perfil: " + " | ".join(lines)

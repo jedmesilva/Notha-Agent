@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
     gender              VARCHAR(30),
     date_of_birth       DATE,
     preferred_language  VARCHAR(10) DEFAULT 'pt',
+    pix_key             TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_identity_status
