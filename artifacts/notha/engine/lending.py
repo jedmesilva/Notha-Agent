@@ -185,6 +185,25 @@ async def approve_loan(
         loan_request_id, "approved", decided_by=approved_by
     )
 
+    # ── Gera oportunidade de captação para repor saldo do fundo ──────────────
+    try:
+        from engine.investment_engine import create_opportunity
+        opp_result = await create_opportunity(
+            db=db,
+            group_id=group_id,
+            amount_needed=requested_amount,
+            debt_id=debt_id,
+        )
+        opportunity_id = opp_result["opportunity_id"]
+        logger.info(
+            "Oportunidade de captação gerada: opp_id=%d amount=R$%.2f",
+            opportunity_id, float(requested_amount),
+        )
+    except Exception as e:
+        # Falha na oportunidade NÃO reverte o empréstimo — apenas loga
+        opportunity_id = None
+        logger.error("Erro ao criar oportunidade de captação (loan=%d): %s", loan_request_id, e)
+
     # ── Detecta candidato a upgrade ───────────────────────────────────────────
     upgrade_candidate = limit_ctx.get("upgrade_candidate", False)
     if upgrade_candidate:
@@ -218,7 +237,8 @@ async def approve_loan(
         "effective_limit":  limit_ctx.get("effective_limit"),
         "limit_mode":       limit_ctx.get("mode"),
         "limit_pct":        limit_ctx.get("pct"),
-        "upgrade_candidate": upgrade_candidate,
+        "upgrade_candidate":  upgrade_candidate,
+        "opportunity_id":     opportunity_id,
     }
 
 

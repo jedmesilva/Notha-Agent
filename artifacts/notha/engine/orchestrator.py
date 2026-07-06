@@ -21,6 +21,7 @@ from tools.builtin import (
     solicitar_emprestimo, consultar_extrato, consultar_dividas,
     registrar_pagamento, consultar_limite, calcular_cotacao_taxa,
     aprovar_emprestimo,
+    listar_oportunidades, investir, consultar_investimentos,
 )
 from phone_info import parse_phone, get_timezone
 from agents.reviewer import ScopeReviewerAgent
@@ -142,7 +143,7 @@ _BUILTIN_TOOL_MAP = {
     units.name:                units,
     datetime_tool.name:        datetime_tool,
     restriction_check.name:    restriction_check,
-    # Ferramentas financeiras
+    # Ferramentas financeiras — tomador
     solicitar_emprestimo.name:  solicitar_emprestimo,
     consultar_extrato.name:     consultar_extrato,
     consultar_dividas.name:     consultar_dividas,
@@ -150,6 +151,10 @@ _BUILTIN_TOOL_MAP = {
     consultar_limite.name:      consultar_limite,
     calcular_cotacao_taxa.name: calcular_cotacao_taxa,
     aprovar_emprestimo.name:    aprovar_emprestimo,
+    # Ferramentas financeiras — investidor
+    listar_oportunidades.name:    listar_oportunidades,
+    investir.name:                investir,
+    consultar_investimentos.name: consultar_investimentos,
 }
 
 logger = logging.getLogger("notha.orchestrator")

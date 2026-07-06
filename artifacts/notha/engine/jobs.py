@@ -230,6 +230,37 @@ async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
         await asyncio.sleep(interval_seconds)
 
 
+async def expire_opportunities() -> None:
+    """Marca investment_opportunities abertas que passaram do prazo como 'expired'."""
+    db = get_db()
+    if not db:
+        return
+    try:
+        from db.repositories.opportunities import OpportunityRepository
+        count = await OpportunityRepository(db).expire_stale()
+        if count:
+            logger.info("expire_opportunities: %d oportunidade(s) expirada(s).", count)
+    except Exception as e:
+        logger.error("Error in expire_opportunities: %s", e)
+
+
+async def distribute_investment_payouts() -> None:
+    """Processa rendimentos de investimento com scheduled_date <= hoje."""
+    db = get_db()
+    if not db:
+        return
+    try:
+        from engine.investment_engine import distribute_payouts
+        result = await distribute_payouts(db)
+        if result["paid_count"] or result["errors"]:
+            logger.info(
+                "distribute_investment_payouts: %d pago(s), R$%.2f distribuído(s), %d erro(s).",
+                result["paid_count"], float(result["total_distributed"]), len(result["errors"]),
+            )
+    except Exception as e:
+        logger.error("Error in distribute_investment_payouts: %s", e)
+
+
 async def start_all_jobs() -> None:
     """Inicia todos os jobs periódicos como asyncio tasks."""
     logger.info("Iniciando jobs periódicos da NOTHA...")
@@ -239,10 +270,14 @@ async def start_all_jobs() -> None:
     asyncio.create_task(_run_job("check_expired_loan_requests", check_expired_loan_requests, 3600))
     asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,          21600))
 
-    # Novos jobs — scoring e reconciliação
+    # Scoring e reconciliação
     asyncio.create_task(_run_job("recalculate_behavior_metrics", recalculate_behavior_metrics, 86400))
     asyncio.create_task(_run_job("recalculate_risk_scores",      recalculate_risk_scores,      86400))
     asyncio.create_task(_run_job("recalculate_location_metrics", recalculate_location_metrics, 14400))
     asyncio.create_task(_run_job("reconcile_wallet_caches",      reconcile_wallet_caches,      86400))
 
-    logger.info("Jobs periódicos iniciados: 7 jobs ativos.")
+    # Investimentos
+    asyncio.create_task(_run_job("expire_opportunities",           expire_opportunities,           3600))
+    asyncio.create_task(_run_job("distribute_investment_payouts",  distribute_investment_payouts,  86400))
+
+    logger.info("Jobs periódicos iniciados: 9 jobs ativos.")

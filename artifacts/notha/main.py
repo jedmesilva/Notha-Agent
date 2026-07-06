@@ -932,6 +932,237 @@ async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> d
 # Grupos — CRUD completo
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Investimentos — fluxo de captação
+# ---------------------------------------------------------------------------
+
+@app.get("/oportunidades")
+async def listar_oportunidades_endpoint(group_id: int | None = None, limit: int = 20) -> dict:
+    """
+    Lista oportunidades de investimento abertas.
+    Filtro opcional: ?group_id=1
+    """
+    from db.connection import get_db
+    from db.repositories.opportunities import OpportunityRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    opps = await OpportunityRepository(db).list_open(group_id=group_id, limit=limit)
+    return {
+        "oportunidades": [dict(o) for o in opps],
+        "total": len(opps),
+    }
+
+
+@app.get("/oportunidades/{opp_id}")
+async def detalhe_oportunidade(opp_id: int) -> dict:
+    """Detalhes de uma oportunidade específica."""
+    from db.connection import get_db
+    from db.repositories.opportunities import OpportunityRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    opp = await OpportunityRepository(db).get_by_id(opp_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
+    return dict(opp)
+
+
+@app.post("/investir")
+async def aceitar_investimento(payload: dict) -> dict:
+    """
+    Registra um investimento de um usuário em uma oportunidade.
+
+    Body: {
+      "investor_user_id": 42,
+      "opportunity_id": 7,
+      "amount": 1500.00
+    }
+    """
+    from db.connection import get_db
+    from engine.investment_engine import accept_investment
+    from decimal import Decimal
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    required = ["investor_user_id", "opportunity_id", "amount"]
+    missing = [f for f in required if f not in payload]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
+
+    result = await accept_investment(
+        db=db,
+        opportunity_id=int(payload["opportunity_id"]),
+        investor_user_id=int(payload["investor_user_id"]),
+        amount=Decimal(str(payload["amount"])),
+    )
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+
+    return result
+
+
+@app.get("/investimentos/{user_id}")
+async def investimentos_do_usuario(user_id: int, group_id: int | None = None) -> dict:
+    """
+    Posição consolidada de um investidor.
+    ?group_id=1 filtra por grupo específico.
+    """
+    from db.connection import get_db
+    from db.repositories.investments import InvestmentRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    inv_repo = InvestmentRepository(db)
+    if group_id:
+        position = await inv_repo.get_investor_position(user_id, group_id)
+        active   = await inv_repo.list_by_investor(user_id, status="active")
+        return {
+            "user_id":  user_id,
+            "group_id": group_id,
+            "position": position,
+            "investments": [dict(i) for i in active],
+        }
+
+    # Sem filtro de grupo: lista todos os investimentos
+    all_inv = await inv_repo.list_by_investor(user_id)
+    return {
+        "user_id": user_id,
+        "investments": [dict(i) for i in all_inv],
+        "total": len(all_inv),
+    }
+
+
+@app.post("/admin/oportunidades")
+async def criar_oportunidade_manual(payload: dict) -> dict:
+    """
+    Cria uma oportunidade de captação manualmente (sem empréstimo vinculado).
+    Útil para captação geral de liquidez do fundo.
+
+    Body: {
+      "group_id": 1,
+      "amount_needed": 10000.00,
+      "ttl_days": 30
+    }
+    """
+    from db.connection import get_db
+    from engine.investment_engine import create_opportunity
+    from decimal import Decimal
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    required = ["group_id", "amount_needed"]
+    missing = [f for f in required if f not in payload]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
+
+    result = await create_opportunity(
+        db=db,
+        group_id=int(payload["group_id"]),
+        amount_needed=Decimal(str(payload["amount_needed"])),
+        ttl_days=int(payload.get("ttl_days", 30)),
+    )
+    return {"ok": True, **result}
+
+
+@app.get("/admin/grupos/{group_id}/oportunidades")
+async def oportunidades_do_grupo(group_id: int, limit: int = 50) -> dict:
+    """Lista todas as oportunidades de um grupo (todos os status)."""
+    from db.connection import get_db
+    from db.repositories.opportunities import OpportunityRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    opps = await OpportunityRepository(db).list_by_group(group_id, limit=limit)
+    return {"group_id": group_id, "oportunidades": [dict(o) for o in opps], "total": len(opps)}
+
+
+@app.delete("/admin/oportunidades/{opp_id}")
+async def cancelar_oportunidade(opp_id: int) -> dict:
+    """Cancela uma oportunidade de investimento aberta."""
+    from db.connection import get_db
+    from db.repositories.opportunities import OpportunityRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    opp = await OpportunityRepository(db).get_by_id(opp_id)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
+    if opp["status"] not in ("open", "partially_funded"):
+        raise HTTPException(status_code=400, detail=f"Oportunidade não pode ser cancelada (status={opp['status']})")
+
+    await OpportunityRepository(db).cancel(opp_id)
+    return {"ok": True, "opp_id": opp_id}
+
+
+@app.post("/admin/payouts/distribuir")
+async def distribuir_payouts_manual() -> dict:
+    """Job manual: processa todos os rendimentos de investimento vencidos."""
+    from db.connection import get_db
+    from engine.investment_engine import distribute_payouts
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    result = await distribute_payouts(db)
+    return result
+
+
+@app.get("/admin/grupos/{group_id}/posicao")
+async def posicao_do_grupo(group_id: int) -> dict:
+    """
+    Visão financeira completa do grupo:
+    saldo real, exposição, total investido, oportunidades abertas.
+    """
+    from db.connection import get_db
+    from db.repositories.wallets import WalletRepository
+    from db.repositories.opportunities import OpportunityRepository
+    from db.repositories.investments import InvestmentRepository
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    wallet_repo = WalletRepository(db)
+    opp_repo    = OpportunityRepository(db)
+    inv_repo    = InvestmentRepository(db)
+
+    wallet = await wallet_repo.get_by_owner("group", group_id)
+    balance = await wallet_repo.true_balance(wallet["id"]) if wallet else 0
+
+    open_opps      = await opp_repo.list_open(group_id=group_id)
+    total_invested = await inv_repo.total_active_by_group(group_id)
+
+    pool = await db.fetch_one(
+        "SELECT * FROM group_pool_limits WHERE group_id=$1 ORDER BY effective_from DESC LIMIT 1",
+        group_id,
+    )
+
+    return {
+        "group_id":            group_id,
+        "wallet_balance":      float(balance),
+        "total_active_invested": float(total_invested),
+        "current_exposure":    float(pool["current_exposure_cache"]) if pool else 0,
+        "max_exposure":        float(pool["max_aggregate_exposure"]) if pool else None,
+        "max_per_user":        float(pool["max_per_user_limit"]) if pool and pool["max_per_user_limit"] else None,
+        "open_opportunities":  len(open_opps),
+        "open_opp_total_needed": float(sum(
+            float(o["amount_needed"]) - float(o["amount_committed"]) for o in open_opps
+        )),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Grupos — CRUD completo
+# ---------------------------------------------------------------------------
+
 @app.post("/admin/grupos")
 async def criar_grupo(payload: dict) -> dict:
     """
