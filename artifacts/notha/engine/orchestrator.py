@@ -16,7 +16,12 @@ from db.repositories import (
 from agents.conversation import ConversationAgent, NOTHA_TOOLS
 from engine.turn_state import TurnStateService
 from db.repositories.pending_confirmations import PendingConfirmationsRepository
-from tools.builtin import web_search, currency, math, units, datetime_tool, restriction_check
+from tools.builtin import (
+    web_search, currency, math, units, datetime_tool, restriction_check,
+    solicitar_emprestimo, consultar_extrato, consultar_dividas,
+    registrar_pagamento, consultar_limite, calcular_cotacao_taxa,
+    aprovar_emprestimo,
+)
 from phone_info import parse_phone, get_timezone
 from agents.reviewer import ScopeReviewerAgent
 from tools.schema_validator import validate_understand, validate_assess
@@ -131,12 +136,20 @@ def _heuristic_steps(text: str) -> list[dict]:
 
 
 _BUILTIN_TOOL_MAP = {
-    web_search.name:        web_search,
-    currency.name:          currency,
-    math.name:              math,
-    units.name:             units,
-    datetime_tool.name:     datetime_tool,
-    restriction_check.name: restriction_check,
+    web_search.name:           web_search,
+    currency.name:             currency,
+    math.name:                 math,
+    units.name:                units,
+    datetime_tool.name:        datetime_tool,
+    restriction_check.name:    restriction_check,
+    # Ferramentas financeiras
+    solicitar_emprestimo.name:  solicitar_emprestimo,
+    consultar_extrato.name:     consultar_extrato,
+    consultar_dividas.name:     consultar_dividas,
+    registrar_pagamento.name:   registrar_pagamento,
+    consultar_limite.name:      consultar_limite,
+    calcular_cotacao_taxa.name: calcular_cotacao_taxa,
+    aprovar_emprestimo.name:    aprovar_emprestimo,
 }
 
 logger = logging.getLogger("notha.orchestrator")
