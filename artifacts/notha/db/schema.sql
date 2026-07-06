@@ -605,13 +605,6 @@ CREATE TABLE IF NOT EXISTS pending_confirmations (
 
 CREATE INDEX IF NOT EXISTS idx_pending_confirmations_expires ON pending_confirmations(expires_at);
 
--- 11.4 Key-value store genérico para o agente
-CREATE TABLE IF NOT EXISTS agent_store (
-    key        TEXT PRIMARY KEY,
-    value      JSONB NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- ============================================================
 -- MÓDULO 12 — CONTROLE E COMPLIANCE
 -- ============================================================

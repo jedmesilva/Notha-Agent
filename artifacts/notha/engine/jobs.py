@@ -1,168 +1,87 @@
 """
-NOTHA periodic background jobs.
+NOTHA periodic background jobs — financial platform.
 
-- check_round_timeouts: expired negotiation rounds (every 60s)
-- check_overdue_pickups: unconfirmed pickups (every 5min)
-- check_automatic_refunds: automatic refund after deadline (every 5min)
-- check_total_expirations: fully expired negotiations (every 5min)
-
-All run as asyncio tasks, no Celery required.
+- check_overdue_installments : marks debt installments past due_date as 'overdue' (every hour)
+- check_expired_loan_requests: marks loan requests pending > 7 days as 'expired' (every hour)
+- snapshot_liquidity         : records a liquidity snapshot per group (every 6 hours)
 """
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+
 from db.connection import get_db
-from db.repositories import (
-    NegotiationRepository, ListingRepository,
-    TransactionRepository, DeliveryRepository,
-)
-from asaas import AsaasClient
-from config import REFUND_DEADLINE_AFTER_FAILURE_DAYS
 
 logger = logging.getLogger("notha.jobs")
 
-_whatsapp_sender = None
 
-
-def set_whatsapp_sender(sender) -> None:
-    global _whatsapp_sender
-    _whatsapp_sender = sender
-
-
-async def _notify(user_id: int, message: str) -> None:
-    if _whatsapp_sender and user_id:
-        try:
-            await _whatsapp_sender(str(user_id), message)
-        except Exception as e:
-            logger.error(f"Failed to notify user_id={user_id}: {e}")
-
-
-async def check_round_timeouts() -> None:
+async def check_overdue_installments() -> None:
+    """Marks any debt installment whose due_date has passed and status is still 'pending'."""
     db = get_db()
     if not db:
         return
-
-    neg_repo     = NegotiationRepository(db)
-    listing_repo = ListingRepository(db)
-
     try:
-        timed_out = await neg_repo.find_timed_out()
-        for neg in timed_out:
-            await neg_repo.update_status(neg["id"], "timed_out")
-            logger.info(f"Negotiation {neg['id']} expired by round timeout.")
-
-            await listing_repo.add_to_interest_queue(
-                listing_id=neg["listing_id"],
-                buyer_id=neg["buyer_id"],
-                initial_offer=neg["current_price"],
-            )
-
-            next_in_queue = await listing_repo.next_in_queue(neg["listing_id"])
-            if next_in_queue:
-                await listing_repo.remove_from_queue(next_in_queue["id"])
-                from engine.negotiation import NegotiationEngine
-                NegotiationEngine(db)
-                await neg_repo.create(
-                    listing_id=neg["listing_id"],
-                    buyer_id=next_in_queue["buyer_id"],
-                    buyer_limits={
-                        "maximum": next_in_queue["initial_offer"],
-                        "target":  next_in_queue["initial_offer"],
-                    },
-                )
-                logger.info(
-                    f"Next in queue: buyer_id={next_in_queue['buyer_id']} "
-                    f"for listing={neg['listing_id']}"
-                )
-            else:
-                await listing_repo.set_status(neg["listing_id"], "available")
-
+        result = await db.execute("""
+            UPDATE debt_installments
+               SET status   = 'overdue'
+             WHERE status   = 'pending'
+               AND due_date < CURRENT_DATE
+        """)
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            logger.info("check_overdue_installments: %d installment(s) marked overdue.", count)
     except Exception as e:
-        logger.error(f"Error in check_round_timeouts: {e}")
+        logger.error("Error in check_overdue_installments: %s", e)
 
 
-async def check_total_expirations() -> None:
+async def check_expired_loan_requests() -> None:
+    """Marks loan requests that have been pending for more than 7 days as 'expired'."""
     db = get_db()
     if not db:
         return
-
-    neg_repo     = NegotiationRepository(db)
-    listing_repo = ListingRepository(db)
-
     try:
-        expired = await neg_repo.find_totally_expired()
-        for neg in expired:
-            queue_count = await listing_repo.get_queue_count(neg["listing_id"])
-            if queue_count == 0:
-                await neg_repo.update_status(neg["id"], "expired")
-                await listing_repo.set_status(neg["listing_id"], "available")
-                logger.info(f"Negotiation {neg['id']} fully expired. Listing returned to catalog.")
+        result = await db.execute("""
+            UPDATE loan_requests
+               SET status       = 'expired',
+                   decided_at   = NOW(),
+                   decided_by   = 'system'
+             WHERE status       = 'pending'
+               AND requested_at < NOW() - INTERVAL '7 days'
+        """)
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            logger.info("check_expired_loan_requests: %d request(s) expired.", count)
     except Exception as e:
-        logger.error(f"Error in check_total_expirations: {e}")
+        logger.error("Error in check_expired_loan_requests: %s", e)
 
 
-async def check_overdue_pickups() -> None:
+async def snapshot_liquidity() -> None:
+    """Records a liquidity snapshot for every active group."""
     db = get_db()
     if not db:
         return
-
-    delivery_repo = DeliveryRepository(db)
-    listing_repo  = ListingRepository(db)
-    neg_repo      = NegotiationRepository(db)
-    tx_repo       = TransactionRepository(db)
-
     try:
-        overdue = await delivery_repo.find_overdue_pickups()
-        for pickup in overdue:
-            await delivery_repo.relist(pickup["id"])
-            logger.info(f"Pickup {pickup['id']} unconfirmed — initiating post-deadline handling.")
-
-            neg = await neg_repo.find_by_id(pickup["negotiation_id"])
-            if not neg:
-                continue
-
-            await listing_repo.set_status(neg["listing_id"], "available")
-
-            tx = await tx_repo.find_by_negotiation(neg["id"])
-            if tx:
-                deadline = datetime.utcnow() + timedelta(days=REFUND_DEADLINE_AFTER_FAILURE_DAYS)
-                await tx_repo.set_retention_status(
-                    tx["id"],
-                    "held_pending_decision",
-                    auto_refund_deadline=deadline,
-                )
-                logger.info(
-                    f"Transaction {tx['id']} scheduled for automatic refund "
-                    f"in {REFUND_DEADLINE_AFTER_FAILURE_DAYS} days."
-                )
-
+        await db.execute("""
+            INSERT INTO liquidity_snapshots
+                        (group_id, total_available_investment, total_active_loan_demand, captured_at)
+            SELECT
+                g.id,
+                COALESCE(SUM(w.balance_cache) FILTER (WHERE w.owner_type = 'group'), 0),
+                COALESCE((
+                    SELECT SUM(d.principal)
+                    FROM   debts d
+                    JOIN   loan_requests lr ON lr.id = d.loan_request_id
+                    WHERE  lr.group_id = g.id
+                      AND  d.status   = 'active'
+                ), 0),
+                NOW()
+            FROM groups g
+            LEFT JOIN wallets w ON w.owner_id = g.id AND w.owner_type = 'group'
+            WHERE g.status = 'active'
+            GROUP BY g.id
+        """)
+        logger.info("snapshot_liquidity: liquidity snapshot recorded.")
     except Exception as e:
-        logger.error(f"Error in check_overdue_pickups: {e}")
-
-
-async def check_automatic_refunds() -> None:
-    db = get_db()
-    if not db:
-        return
-
-    tx_repo = TransactionRepository(db)
-    asaas   = AsaasClient()
-
-    try:
-        pending = await tx_repo.find_pending_refunds()
-        for tx in pending:
-            try:
-                if tx["asaas_charge_id"]:
-                    await asaas.refund(
-                        charge_id=tx["asaas_charge_id"],
-                        idempotency_key=f"refund-{tx['id']}",
-                    )
-                await tx_repo.set_retention_status(tx["id"], "auto_refunded")
-                logger.info(f"Automatic refund executed for transaction {tx['id']}.")
-            except Exception as e:
-                logger.error(f"Automatic refund failed tx={tx['id']}: {e}")
-    except Exception as e:
-        logger.error(f"Error in check_automatic_refunds: {e}")
+        logger.error("Error in snapshot_liquidity: %s", e)
 
 
 async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
@@ -170,15 +89,14 @@ async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
         try:
             await coro_fn()
         except Exception as e:
-            logger.error(f"Job '{name}' failed unexpectedly: {e}")
+            logger.error("Job '%s' failed unexpectedly: %s", name, e)
         await asyncio.sleep(interval_seconds)
 
 
 async def start_all_jobs() -> None:
     """Starts all periodic jobs as asyncio tasks."""
     logger.info("Starting NOTHA periodic jobs...")
-    asyncio.create_task(_run_job("check_round_timeouts",   check_round_timeouts,   60))
-    asyncio.create_task(_run_job("check_total_expirations", check_total_expirations, 300))
-    asyncio.create_task(_run_job("check_overdue_pickups",  check_overdue_pickups,  300))
-    asyncio.create_task(_run_job("check_automatic_refunds", check_automatic_refunds, 300))
+    asyncio.create_task(_run_job("check_overdue_installments",  check_overdue_installments,  3600))
+    asyncio.create_task(_run_job("check_expired_loan_requests", check_expired_loan_requests, 3600))
+    asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,          21600))
     logger.info("Periodic jobs started.")
