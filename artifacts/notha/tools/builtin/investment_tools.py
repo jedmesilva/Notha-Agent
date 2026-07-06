@@ -110,7 +110,8 @@ class InvestirTool(Tool):
     description = (
         "Registra o investimento de um usuário em uma oportunidade de captação do fundo. "
         "Debita o valor da wallet do investidor e credita no fundo. "
-        "Use quando o investidor confirmar que quer investir um valor específico."
+        "Use quando o investidor confirmar que quer investir um valor específico em uma oportunidade. "
+        "Sempre pergunte o prazo/vencimento desejado antes de chamar esta tool — é obrigatório."
     )
     parameters = {
         "type": "object",
@@ -127,8 +128,16 @@ class InvestirTool(Tool):
                 "type": "number",
                 "description": "Valor a investir em BRL",
             },
+            "maturity_at": {
+                "type": "string",
+                "description": (
+                    "Vencimento do investimento em ISO-8601. Pode ser curto (minutos, horas) "
+                    "ou longo (dias, meses). Exemplos: '2025-03-01T10:00:00Z', '2025-06-30', "
+                    "'2025-01-01T00:30:00Z'. Sempre pergunte ao investidor o prazo desejado."
+                ),
+            },
         },
-        "required": ["investor_user_id", "opportunity_id", "amount"],
+        "required": ["investor_user_id", "opportunity_id", "amount", "maturity_at"],
     }
 
     async def execute(
@@ -136,9 +145,11 @@ class InvestirTool(Tool):
         investor_user_id: int,
         opportunity_id: int,
         amount: float,
+        maturity_at: str,
     ) -> str:
         from db.connection import get_db
         from engine.investment_engine import accept_investment
+        from datetime import datetime, timezone
 
         db = get_db()
         if not db:
@@ -148,12 +159,25 @@ class InvestirTool(Tool):
         if inv_amount <= Decimal("0"):
             return "❌ Valor de investimento inválido."
 
+        # Parse maturity_at
+        try:
+            mat_str = maturity_at.strip().replace(" ", "T")
+            if "T" in mat_str:
+                mat_dt = datetime.fromisoformat(mat_str.replace("Z", "+00:00"))
+            else:
+                from datetime import date as _date, time as _time
+                d = _date.fromisoformat(mat_str)
+                mat_dt = datetime.combine(d, _time.max, tzinfo=timezone.utc)
+        except ValueError as exc:
+            return f"❌ Vencimento inválido — use formato ISO-8601 (ex: '2025-12-31T23:59:00Z'): {exc}"
+
         try:
             result = await accept_investment(
                 db=db,
                 opportunity_id=opportunity_id,
                 investor_user_id=investor_user_id,
                 amount=inv_amount,
+                maturity_at=mat_dt,
             )
 
             if not result.get("ok"):
@@ -161,7 +185,8 @@ class InvestirTool(Tool):
 
             inv_id      = result["investment_id"]
             rate        = result["rate_agreed"]
-            monthly     = result["monthly_return"]
+            interest    = result["interest_at_maturity"]
+            maturity    = result["maturity_at"]
             opp_status  = result["new_opportunity_status"]
 
             status_msg = {
@@ -173,11 +198,12 @@ class InvestirTool(Tool):
             return (
                 f"✅ *Investimento confirmado!*\n\n"
                 f"  Investimento #{inv_id}\n"
-                f"  Valor: {_fmt_brl(inv_amount)}\n"
-                f"  Taxa: {_fmt_rate(rate)}\n"
-                f"  Rendimento mensal estimado: {_fmt_brl(monthly)}\n\n"
+                f"  Valor investido: {_fmt_brl(inv_amount)}\n"
+                f"  Taxa acordada: {_fmt_rate(rate)}\n"
+                f"  Juros no vencimento: {_fmt_brl(interest)}\n"
+                f"  Vencimento: {maturity[:10]}\n\n"
                 f"{status_msg}\n\n"
-                f"O rendimento será creditado mensalmente na sua carteira. "
+                f"No vencimento, você receberá o principal + juros automaticamente na sua carteira. "
                 f"Use *consultar_investimentos* para acompanhar sua posição. 📊"
             )
         except Exception as e:

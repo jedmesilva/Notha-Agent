@@ -185,24 +185,48 @@ async def approve_loan(
         loan_request_id, "approved", decided_by=approved_by
     )
 
-    # ── Gera oportunidade de captação para repor saldo do fundo ──────────────
+    # ── Snapshot de liquidez em tempo real ────────────────────────────────────
+    # Fire-and-forget: atualiza liquidity_snapshots agora que o saldo do grupo mudou.
+    # O multiplicador de liquidez das próximas cotações refletirá o desembolso imediatamente.
     try:
-        from engine.investment_engine import create_opportunity
-        opp_result = await create_opportunity(
-            db=db,
-            group_id=group_id,
-            amount_needed=requested_amount,
-            debt_id=debt_id,
-        )
-        opportunity_id = opp_result["opportunity_id"]
-        logger.info(
-            "Oportunidade de captação gerada: opp_id=%d amount=R$%.2f",
-            opportunity_id, float(requested_amount),
-        )
+        import asyncio as _asyncio
+        from engine.jobs import snapshot_liquidity_for_group
+        _asyncio.create_task(snapshot_liquidity_for_group(db, group_id))
+    except Exception:
+        pass  # nunca bloqueia a aprovação
+
+    # ── Gera oportunidade de captação para repor saldo do fundo ──────────────
+    # Fire-and-forget: o empréstimo já está concedido; a captação ocorre em
+    # background para não adicionar latência ao fluxo de aprovação.
+    opportunity_id: int | None = None
+    try:
+        import asyncio as _asyncio
+        from engine.investment_engine import create_opportunity as _create_opp
+
+        _db_ref = db  # captura para o closure
+
+        async def _create_opp_bg() -> None:
+            nonlocal opportunity_id
+            try:
+                opp_result = await _create_opp(
+                    db=_db_ref,
+                    group_id=group_id,
+                    amount_needed=requested_amount,
+                    debt_id=debt_id,
+                )
+                logger.info(
+                    "Oportunidade de captação gerada: opp_id=%d amount=R$%.2f",
+                    opp_result["opportunity_id"], float(requested_amount),
+                )
+            except Exception as _e:
+                logger.error(
+                    "Erro ao criar oportunidade de captação (loan=%d): %s",
+                    loan_request_id, _e,
+                )
+
+        _asyncio.create_task(_create_opp_bg())
     except Exception as e:
-        # Falha na oportunidade NÃO reverte o empréstimo — apenas loga
-        opportunity_id = None
-        logger.error("Erro ao criar oportunidade de captação (loan=%d): %s", loan_request_id, e)
+        logger.error("Erro ao agendar oportunidade de captação (loan=%d): %s", loan_request_id, e)
 
     # ── Detecta candidato a upgrade ───────────────────────────────────────────
     upgrade_candidate = limit_ctx.get("upgrade_candidate", False)

@@ -95,6 +95,23 @@ async def recalculate_behavior_metrics(db, user_id: int) -> dict:
         user_id,
     ) or 0
 
+    # Total investido e frequência de investimentos nos últimos 90 dias
+    inv_row = await db.fetch_one(
+        """
+        SELECT
+            COALESCE(SUM(i.amount_invested), 0) AS total_invested,
+            COUNT(*) FILTER (
+                WHERE i.invested_at >= NOW() - INTERVAL '90 days'
+            ) AS inv_freq_90d
+        FROM investments i
+        WHERE i.investor_user_id = $1
+          AND i.status IN ('active', 'matured')
+        """,
+        user_id,
+    )
+    total_invested_amount    = Decimal(str(inv_row["total_invested"]  if inv_row else 0))
+    investment_frequency_90d = int(inv_row["inv_freq_90d"]            if inv_row else 0)
+
     metrics = {
         "total_borrowed_amount":      Decimal(str(row_amounts["total_borrowed"] if row_amounts else 0)),
         "total_repaid_amount":        Decimal(str(row_amounts["total_repaid"]   if row_amounts else 0)),
@@ -102,8 +119,8 @@ async def recalculate_behavior_metrics(db, user_id: int) -> dict:
         "payment_frequency_score":    payment_frequency_score.quantize(Decimal("0.0001")),
         "late_payments_count":        int(late_count),
         "defaults_count":             int(defaults_count),
-        "total_invested_amount":      _ZERO,
-        "investment_frequency_90d":   0,
+        "total_invested_amount":      total_invested_amount,
+        "investment_frequency_90d":   investment_frequency_90d,
     }
 
     await scoring_repo.upsert_behavior_metrics(user_id, metrics)

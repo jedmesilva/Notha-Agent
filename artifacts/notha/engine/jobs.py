@@ -94,6 +94,49 @@ async def snapshot_liquidity() -> None:
         logger.error("Error in snapshot_liquidity: %s", e)
 
 
+async def snapshot_liquidity_for_group(db, group_id: int) -> None:
+    """
+    Snapshot pontual de liquidez para um grupo específico.
+
+    Chamado de forma fire-and-forget via asyncio.create_task() pelos engines
+    logo após qualquer evento que mude a liquidez do grupo (desembolso de
+    empréstimo, aporte de investimento, pagamento recebido).  Isso torna o
+    liquidity_multiplier das cotações praticamente em tempo real, sem depender
+    exclusivamente do job periódico de 5 min.
+    """
+    if not db:
+        return
+    try:
+        await db.execute(
+            """
+            INSERT INTO liquidity_snapshots
+                        (group_id, total_available_investment, total_active_loan_demand, captured_at)
+            SELECT
+                g.id,
+                COALESCE((
+                    SELECT SUM(wt.amount)
+                    FROM   wallet_transactions wt
+                    JOIN   wallets w ON w.id = wt.wallet_id
+                    WHERE  w.owner_type = 'group' AND w.owner_id = g.id
+                ), 0),
+                COALESCE((
+                    SELECT SUM(d.principal)
+                    FROM   debts d
+                    JOIN   loan_requests lr ON lr.id = d.loan_request_id
+                    WHERE  lr.group_id = g.id
+                      AND  d.status   = 'active'
+                ), 0),
+                NOW()
+            FROM groups g
+            WHERE g.id = $1
+            """,
+            group_id,
+        )
+        logger.debug("snapshot_liquidity_for_group: grupo %d atualizado.", group_id)
+    except Exception as e:
+        logger.error("snapshot_liquidity_for_group group_id=%d: %s", group_id, e)
+
+
 # ── Novos jobs — Scoring ──────────────────────────────────────────────────────
 
 async def recalculate_behavior_metrics() -> None:
@@ -268,7 +311,8 @@ async def start_all_jobs() -> None:
     # Infraestrutura existente
     asyncio.create_task(_run_job("check_overdue_installments",  check_overdue_installments,  3600))
     asyncio.create_task(_run_job("check_expired_loan_requests", check_expired_loan_requests, 3600))
-    asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,          21600))
+    # 5 min — doc §11 pede 5–15 min; eventos financeiros já disparam snapshot pontual
+    asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,          300))
 
     # Scoring e reconciliação
     asyncio.create_task(_run_job("recalculate_behavior_metrics", recalculate_behavior_metrics, 86400))
@@ -276,8 +320,8 @@ async def start_all_jobs() -> None:
     asyncio.create_task(_run_job("recalculate_location_metrics", recalculate_location_metrics, 14400))
     asyncio.create_task(_run_job("reconcile_wallet_caches",      reconcile_wallet_caches,      86400))
 
-    # Investimentos
-    asyncio.create_task(_run_job("expire_opportunities",           expire_opportunities,           3600))
-    asyncio.create_task(_run_job("distribute_investment_payouts",  distribute_investment_payouts,  86400))
+    # Investimentos — distribute roda a cada minuto para cobrir vencimentos de curto prazo
+    asyncio.create_task(_run_job("expire_opportunities",           expire_opportunities,          3600))
+    asyncio.create_task(_run_job("distribute_investment_payouts",  distribute_investment_payouts,   60))
 
     logger.info("Jobs periódicos iniciados: 9 jobs ativos.")

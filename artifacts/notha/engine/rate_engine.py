@@ -90,7 +90,9 @@ async def compute_loan_quote(
     spread_strategy  = policy["spread_violation_strategy"]
 
     # ── Ajuste por prazo (basis points → fração) ──────────────────────────────
-    adj_bps = await rate_repo.get_term_adjustment(group_id, term_days)
+    # Passa a policy já carregada para evitar query extra e para que a fórmula
+    # correta (bands / linear / log / sqrt) seja aplicada conforme configurado.
+    adj_bps = await rate_repo.get_term_adjustment(group_id, term_days, policy=policy)
     term_adjustment = Decimal(str(adj_bps)) / Decimal("10000")
 
     # ── Camada 2: liquidez ────────────────────────────────────────────────────

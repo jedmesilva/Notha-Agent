@@ -219,7 +219,30 @@ class CreditLimitRepository:
             effective = (pct * max_per_user).quantize(Decimal("0.01"))
             return effective, "score_band", pct
 
-        return None, "unconfigured", None
+        # Fallback 1: max_per_user_limit do pool (quando existe mas não há score_band)
+        if max_per_user is not None:
+            return max_per_user, "pool_max_per_user", None
+
+        # Fallback 2: default_individual_limit em group_rate_policies
+        policy_row = await self._db.fetch_one(
+            """
+            SELECT default_individual_limit FROM group_rate_policies
+            WHERE group_id = $1
+            ORDER BY effective_from DESC
+            LIMIT 1
+            """,
+            group_id,
+        )
+        if policy_row and policy_row["default_individual_limit"] is not None:
+            return (
+                Decimal(str(policy_row["default_individual_limit"])),
+                "policy_default",
+                None,
+            )
+
+        # Sem nenhuma configuração: retorna zero — validate_limits rejeitará a operação
+        # com mensagem clara em vez de deixar passar silenciosamente.
+        return Decimal("0"), "unconfigured", None
 
     # ── validação completa ────────────────────────────────────────────────────
 

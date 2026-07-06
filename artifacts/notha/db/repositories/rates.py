@@ -51,20 +51,78 @@ class RateRepository:
     # ── term_rate_curve (Camada 1 — ajuste por prazo) ────────────────────────
 
     async def get_term_adjustment(
-        self, group_id: int, term_days: int
+        self,
+        group_id: int,
+        term_days: int,
+        policy=None,
     ) -> int:
-        """Retorna o ajuste em basis points para o prazo dado (0 se não encontrar faixa)."""
-        row = await self._db.fetch_one(
-            """
-            SELECT adjustment_bps FROM term_rate_curve
-            WHERE group_id     = $1
-              AND min_term_days <= $2
-              AND max_term_days >= $2
-            LIMIT 1
-            """,
-            group_id, term_days,
+        """
+        Retorna o ajuste em basis points para o prazo dado.
+
+        Estratégias (campo term_rate_formula em group_rate_policies):
+          'bands'  — lookup em term_rate_curve (padrão).
+                     Lança ValueError se o prazo não estiver coberto.
+          'linear' — base_bps + scale × term_days
+          'log'    — base_bps + scale × ln(term_days)   (prazo > 0)
+          'sqrt'   — base_bps + scale × √(term_days)
+
+        O uso de fórmulas elimina a necessidade de definir faixas fixas: qualquer
+        prazo, incluindo minutos e horas expressos em frações de dia, é calculável.
+        """
+        import math
+
+        _policy = policy or await self.get_active_policy(group_id)
+        formula = (
+            _policy["term_rate_formula"]
+            if _policy and _policy["term_rate_formula"]
+            else "bands"
         )
-        return int(row["adjustment_bps"]) if row else 0
+
+        if formula == "bands":
+            row = await self._db.fetch_one(
+                """
+                SELECT adjustment_bps FROM term_rate_curve
+                WHERE group_id     = $1
+                  AND min_term_days <= $2
+                  AND max_term_days >= $2
+                LIMIT 1
+                """,
+                group_id, term_days,
+            )
+            if row is None:
+                raise ValueError(
+                    f"Prazo de {term_days} dias não coberto pela term_rate_curve "
+                    f"do grupo {group_id}. Configure uma faixa ou altere "
+                    f"term_rate_formula para 'linear', 'log' ou 'sqrt'."
+                )
+            return int(row["adjustment_bps"])
+
+        # Parâmetros da fórmula
+        base_bps = float(
+            _policy["term_rate_base_bps"]
+            if _policy and _policy["term_rate_base_bps"] is not None
+            else 0
+        )
+        scale = float(
+            _policy["term_rate_scale"]
+            if _policy and _policy["term_rate_scale"] is not None
+            else 0
+        )
+        t = max(term_days, 1)  # evita log(0) / sqrt(0)
+
+        if formula == "linear":
+            result = base_bps + scale * t
+        elif formula == "log":
+            result = base_bps + scale * math.log(t)
+        elif formula == "sqrt":
+            result = base_bps + scale * math.sqrt(t)
+        else:
+            raise ValueError(
+                f"term_rate_formula desconhecida: '{formula}'. "
+                "Use 'bands', 'linear', 'log' ou 'sqrt'."
+            )
+
+        return round(result)
 
     async def upsert_term_curve(
         self,

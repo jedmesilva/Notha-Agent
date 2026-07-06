@@ -32,3 +32,7 @@ PLUGGY_CLIENT_SECRET: str = os.environ.get("PLUGGY_CLIENT_SECRET", "")
 # URL base da plataforma (ex: https://seu-dominio.railway.app)
 # Usada para gerar links enviados no WhatsApp.
 BASE_URL: str = os.environ.get("BASE_URL", "")
+
+# Chave de autenticação para endpoints /admin/risk-events (Bearer token).
+# Se não configurada, os endpoints ficam acessíveis sem auth (dev only).
+ADMIN_API_KEY: str = os.environ.get("ADMIN_API_KEY", "")

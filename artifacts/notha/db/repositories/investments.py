@@ -25,17 +25,18 @@ class InvestmentRepository:
         rate_agreed: Decimal,
         opportunity_id: int | None = None,
         maturity_date: date | None = None,
+        maturity_at=None,  # datetime | None — precisão de minutos/horas
     ) -> int:
         return await self._db.fetch_val(
             """
             INSERT INTO investments
                 (investor_user_id, group_id, opportunity_id,
-                 amount_invested, rate_agreed, status, maturity_date)
-            VALUES ($1, $2, $3, $4, $5, 'active', $6)
+                 amount_invested, rate_agreed, status, maturity_date, maturity_at)
+            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
             RETURNING id
             """,
             investor_user_id, group_id, opportunity_id,
-            amount_invested, rate_agreed, maturity_date,
+            amount_invested, rate_agreed, maturity_date, maturity_at,
         )
 
     async def get_by_id(self, investment_id: int):
@@ -136,37 +137,43 @@ class InvestmentRepository:
         period_start: date,
         period_end: date,
         scheduled_date: date,
+        scheduled_at=None,  # datetime | None — precisão de minutos/horas
     ) -> int:
+        """
+        Agenda o payout de vencimento do investimento.
+
+        scheduled_at (TIMESTAMPTZ) tem prioridade sobre scheduled_date (DATE) para
+        investimentos de curto prazo (minutos, horas).  O job de distribuição usa
+        scheduled_at <= NOW() quando disponível.
+        """
         return await self._db.fetch_val(
             """
             INSERT INTO investment_payouts
                 (investment_id, amount, period_start, period_end,
-                 scheduled_date, status)
-            VALUES ($1, $2, $3, $4, $5, 'scheduled')
+                 scheduled_date, scheduled_at, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'scheduled')
             RETURNING id
             """,
-            investment_id, amount, period_start, period_end, scheduled_date,
+            investment_id, amount, period_start, period_end,
+            scheduled_date, scheduled_at,
         )
 
     async def list_pending_payouts(self, up_to_date: date | None = None) -> list:
-        if up_to_date:
-            return await self._db.fetch_all(
-                """
-                SELECT p.*, i.investor_user_id, i.group_id
-                FROM investment_payouts p
-                JOIN investments i ON i.id = p.investment_id
-                WHERE p.status = 'scheduled' AND p.scheduled_date <= $1
-                ORDER BY p.scheduled_date ASC
-                """,
-                up_to_date,
-            )
+        """
+        Retorna payouts vencidos.  Usa scheduled_at <= NOW() quando definido
+        (precisão de minutos/horas); caso contrário, scheduled_date <= up_to_date.
+        """
         return await self._db.fetch_all(
             """
-            SELECT p.*, i.investor_user_id, i.group_id
+            SELECT p.*, i.investor_user_id, i.group_id, i.amount_invested
             FROM investment_payouts p
             JOIN investments i ON i.id = p.investment_id
             WHERE p.status = 'scheduled'
-            ORDER BY p.scheduled_date ASC
+              AND (
+                    (p.scheduled_at IS NOT NULL AND p.scheduled_at <= NOW())
+                 OR (p.scheduled_at IS NULL     AND p.scheduled_date <= CURRENT_DATE)
+              )
+            ORDER BY COALESCE(p.scheduled_at, p.scheduled_date::timestamptz) ASC
             """
         )
 

@@ -4,18 +4,27 @@ InvestmentEngine — lógica de captação e distribuição de rendimentos.
 Fluxo principal:
   1. create_opportunity()   → gerada automaticamente após approve_loan()
   2. accept_investment()    → investidor compromete dinheiro, wallet_tx entra no fundo
-  3. distribute_payouts()   → job mensal: calcula e paga rendimento proporcional
+  3. distribute_payouts()   → job frequente: processa investimentos que venceram
   4. get_investor_summary() → posição consolidada do investidor
+
+Modelo de prazo:
+  Cada investimento tem um vencimento próprio definido em maturity_at (TIMESTAMPTZ).
+  O prazo pode ser minutos, horas, dias, semanas ou meses — sem frequência fixa.
+  No vencimento, o investidor recebe: juros (interest_payout) + principal (investment_withdrawal).
+  Juros = principal × taxa_anual × fração_do_ano (juros simples).
 
 Princípio: LLM propõe, código executa. Nenhum valor financeiro é calculado pelo LLM.
 """
 import logging
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, timedelta, datetime, timezone, time as dt_time
 
 logger = logging.getLogger("notha.investment_engine")
 
 _ZERO = Decimal("0")
+
+# Segundos num ano gregoriano (365.25 × 24 × 3600)
+_YEAR_SECONDS = Decimal("31557600")
 
 # Prazo padrão de validade de uma oportunidade (dias)
 DEFAULT_OPPORTUNITY_TTL_DAYS = 30
@@ -78,7 +87,8 @@ async def accept_investment(
     opportunity_id: int,
     investor_user_id: int,
     amount: Decimal,
-    maturity_date: date | None = None,
+    maturity_date: date | None = None,   # deprecated — usar maturity_at
+    maturity_at: datetime | None = None,  # vencimento preciso (pode ser minutos/horas)
 ) -> dict:
     """
     Registra o investimento de um usuário em uma oportunidade.
@@ -100,6 +110,35 @@ async def accept_investment(
     opp_repo    = OpportunityRepository(db)
     inv_repo    = InvestmentRepository(db)
     wallet_repo = WalletRepository(db)
+
+    # ── Valida maturity_at ANTES de qualquer mutação no banco ────────────────
+    # (evitar inconsistência financeira se o parâmetro for inválido)
+    now_dt = datetime.now(timezone.utc)
+    if maturity_at is None:
+        return {
+            "ok":    False,
+            "error": (
+                "maturity_at é obrigatório — informe o vencimento do investimento "
+                "(pode ser minutos, horas, dias, semanas ou meses a partir de agora)."
+            ),
+        }
+    if isinstance(maturity_at, date) and not isinstance(maturity_at, datetime):
+        maturity_dt: datetime = datetime.combine(
+            maturity_at, dt_time.max, tzinfo=timezone.utc
+        )
+    elif maturity_at.tzinfo is None:
+        maturity_dt = maturity_at.replace(tzinfo=timezone.utc)
+    else:
+        maturity_dt = maturity_at
+
+    if maturity_dt <= now_dt:
+        return {
+            "ok":    False,
+            "error": "maturity_at deve ser uma data/hora futura.",
+        }
+
+    term_seconds = Decimal(str((maturity_dt - now_dt).total_seconds()))
+    term_years   = term_seconds / _YEAR_SECONDS
 
     # Valida oportunidade
     opp = await opp_repo.get_by_id(opportunity_id)
@@ -133,7 +172,7 @@ async def accept_investment(
             "error": f"Saldo insuficiente: disponível R$ {investor_balance:.2f}, solicitado R$ {amount:.2f}",
         }
 
-    # Registra investimento
+    # Registra investimento — maturity_at tem prioridade; maturity_date como fallback
     inv_id = await inv_repo.create(
         investor_user_id=investor_user_id,
         group_id=group_id,
@@ -141,6 +180,7 @@ async def accept_investment(
         rate_agreed=rate_agreed,
         opportunity_id=opportunity_id,
         maturity_date=maturity_date,
+        maturity_at=maturity_at,
     )
 
     # Wallet transactions
@@ -165,21 +205,38 @@ async def accept_investment(
     # Atualiza oportunidade
     new_status = await opp_repo.add_commitment(opportunity_id, amount)
 
-    # Agenda payout mensal (primeiro payout em 30 dias, proporcional à taxa)
-    monthly_return = (amount * rate_agreed).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    today = date.today()
+    # ── Snapshot de liquidez em tempo real ────────────────────────────────────
+    # O aporte do investidor aumenta o saldo do grupo — dispara snapshot pontual
+    # para que as próximas cotações reflitam a nova liquidez imediatamente.
+    try:
+        import asyncio as _asyncio
+        from engine.jobs import snapshot_liquidity_for_group
+        _asyncio.create_task(snapshot_liquidity_for_group(db, group_id))
+    except Exception:
+        pass
+
+    # ── Agenda payout único no vencimento ────────────────────────────────────
+    # maturity_dt e term_years já foram computados na validação antecipada acima.
+    # Juros simples: I = P × r × t   onde t = fração do ano gregoriano.
+    interest_amount = (amount * rate_agreed * term_years).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
     await inv_repo.schedule_payout(
         investment_id=inv_id,
-        amount=monthly_return,
-        period_start=today,
-        period_end=today + timedelta(days=30),
-        scheduled_date=today + timedelta(days=30),
+        amount=interest_amount,
+        period_start=now_dt.date(),
+        period_end=maturity_dt.date(),
+        scheduled_date=maturity_dt.date(),
+        scheduled_at=maturity_dt,
     )
 
     logger.info(
-        "Investimento aceito: inv_id=%d opp=%d investor=%d amount=R$%.2f rate=%.4f%% opp_status=%s",
+        "Investimento aceito: inv_id=%d opp=%d investor=%d amount=R$%.2f "
+        "rate=%.4f%% juros=R$%.2f vencimento=%s opp_status=%s",
         inv_id, opportunity_id, investor_user_id,
-        float(amount), float(rate_agreed) * 100, new_status,
+        float(amount), float(rate_agreed) * 100,
+        float(interest_amount), maturity_dt.isoformat(), new_status,
     )
 
     return {
@@ -187,7 +244,8 @@ async def accept_investment(
         "investment_id":         inv_id,
         "amount_invested":       amount,
         "rate_agreed":           rate_agreed,
-        "monthly_return":        monthly_return,
+        "interest_at_maturity":  interest_amount,
+        "maturity_at":           maturity_dt.isoformat(),
         "new_opportunity_status": new_status,
     }
 
@@ -219,65 +277,89 @@ async def distribute_payouts(db) -> dict:
     errors: list[str] = []
 
     for payout in payouts:
-        payout_id     = payout["id"]
-        inv_id        = payout["investment_id"]
-        investor_id   = payout["investor_user_id"]
-        group_id      = payout["group_id"]
-        amount        = Decimal(str(payout["amount"]))
+        payout_id   = payout["id"]
+        inv_id      = payout["investment_id"]
+        investor_id = payout["investor_user_id"]
+        group_id    = payout["group_id"]
+        interest    = Decimal(str(payout["amount"]))
 
         try:
+            inv = await inv_repo.get_by_id(inv_id)
+            if not inv or inv["status"] != "active":
+                # Já processado ou cancelado; marca e segue
+                await inv_repo.mark_payout_paid(payout_id)
+                continue
+
+            principal = Decimal(str(inv["amount_invested"]))
+            total_due = principal + interest  # devolução de principal + juros
+
             group_wallet    = await wallet_repo.get_or_create("group", group_id)
             investor_wallet = await wallet_repo.get_or_create("user",  investor_id)
 
-            # Verifica saldo do grupo para pagar
+            # Verifica saldo do grupo (deve cobrir principal + juros)
             group_balance = await wallet_repo.true_balance(group_wallet["id"])
-            if group_balance < amount:
+            if group_balance < total_due:
                 errors.append(
                     f"Payout #{payout_id} ignorado: saldo do grupo insuficiente "
-                    f"(R$ {group_balance:.2f} < R$ {amount:.2f})"
+                    f"(R$ {group_balance:.2f} < juros R$ {interest:.2f} + "
+                    f"principal R$ {principal:.2f} = R$ {total_due:.2f})"
                 )
                 continue
 
             ref = str(payout_id)
-            await wallet_repo.add_transaction(
-                wallet_id=group_wallet["id"],
-                amount=-amount,
-                tx_type="interest_payout",
-                reference_id=ref,
-                reference_type="investment_payout",
-                description=f"Rendimento pago ao investidor — inv #{inv_id}",
-            )
-            await wallet_repo.add_transaction(
-                wallet_id=investor_wallet["id"],
-                amount=amount,
-                tx_type="interest_payout",
-                reference_id=ref,
-                reference_type="investment_payout",
-                description=f"Rendimento recebido — investimento #{inv_id}",
-            )
 
-            await inv_repo.mark_payout_paid(payout_id)
+            # ── Bloco atômico: 4 movimentações + status ───────────────────
+            # atomic() adquire uma única conexão + transação asyncpg.
+            # Falha em qualquer passo reverte tudo — o payout permanece
+            # 'scheduled' e será reprocessado sem dupla postagem.
+            async with db.atomic() as tx:
+                from db.repositories.wallets import WalletRepository as _WR
+                from db.repositories.investments import InvestmentRepository as _IR
+                wallet_tx = _WR(tx)
+                inv_tx    = _IR(tx)
 
-            # Agenda próximo payout (se investimento ainda ativo)
-            inv = await inv_repo.get_by_id(inv_id)
-            if inv and inv["status"] == "active":
-                period_end  = payout["period_end"]
-                next_start  = period_end
-                next_end    = next_start + timedelta(days=30)
-                next_due    = next_start + timedelta(days=30)
+                # Juros: grupo → investidor
+                await wallet_tx.add_transaction(
+                    wallet_id=group_wallet["id"],
+                    amount=-interest,
+                    tx_type="interest_payout",
+                    reference_id=ref,
+                    reference_type="investment_payout",
+                    description=f"Juros pagos ao investidor no vencimento — inv #{inv_id}",
+                )
+                await wallet_tx.add_transaction(
+                    wallet_id=investor_wallet["id"],
+                    amount=interest,
+                    tx_type="interest_payout",
+                    reference_id=ref,
+                    reference_type="investment_payout",
+                    description=f"Juros recebidos no vencimento — investimento #{inv_id}",
+                )
 
-                # Não agenda além do maturity_date
-                if not inv["maturity_date"] or next_due <= inv["maturity_date"]:
-                    await inv_repo.schedule_payout(
-                        investment_id=inv_id,
-                        amount=amount,
-                        period_start=next_start,
-                        period_end=next_end,
-                        scheduled_date=next_due,
-                    )
+                # Devolução de principal: grupo → investidor
+                await wallet_tx.add_transaction(
+                    wallet_id=group_wallet["id"],
+                    amount=-principal,
+                    tx_type="investment_withdrawal",
+                    reference_id=ref,
+                    reference_type="investment_payout",
+                    description=f"Devolução de principal no vencimento — inv #{inv_id}",
+                )
+                await wallet_tx.add_transaction(
+                    wallet_id=investor_wallet["id"],
+                    amount=principal,
+                    tx_type="investment_withdrawal",
+                    reference_id=ref,
+                    reference_type="investment_payout",
+                    description=f"Principal devolvido no vencimento — investimento #{inv_id}",
+                )
+
+                await inv_tx.mark_payout_paid(payout_id)
+                # Modelo de payout único: sem ciclo. Marca o investimento como 'matured'.
+                await inv_tx.update_status(inv_id, "matured")
 
             paid_count        += 1
-            total_distributed += amount
+            total_distributed += total_due
 
         except Exception as e:
             errors.append(f"Payout #{payout_id}: {e}")

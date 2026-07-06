@@ -236,6 +236,61 @@ async def _migrate_pending_confirmations_table() -> None:
     logger.info("Pending confirmations table ready.")
 
 
+async def _migrate_financial_schema_extensions() -> None:
+    """
+    Adiciona colunas novas à estrutura financeira existente.
+
+    Migrações seguras (IF NOT EXISTS / idempotentes):
+
+    group_rate_policies:
+      - term_rate_formula      VARCHAR(20)  DEFAULT 'bands'
+        Formula de ajuste por prazo: 'bands' (tabela), 'linear', 'log', 'sqrt'.
+      - term_rate_base_bps     NUMERIC(10,2) DEFAULT 0
+        Coeficiente A da fórmula (y-intercept em basis points).
+      - term_rate_scale        NUMERIC(10,6) DEFAULT 0
+        Coeficiente B da fórmula (inclinação).
+      - default_individual_limit  NUMERIC(15,2)
+        Limite individual padrão para usuários sem configuração explícita.
+
+    investments:
+      - maturity_at  TIMESTAMPTZ
+        Vencimento do investimento com precisão de minutos/horas.
+
+    investment_payouts:
+      - scheduled_at  TIMESTAMPTZ
+        Momento exato de execução do payout (prioridade sobre scheduled_date).
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        # group_rate_policies — suporte a fórmulas de prazo + limite default
+        for col, definition in [
+            ("term_rate_formula",       "VARCHAR(20) NOT NULL DEFAULT 'bands'"),
+            ("term_rate_base_bps",      "NUMERIC(10,2) NOT NULL DEFAULT 0"),
+            ("term_rate_scale",         "NUMERIC(10,6) NOT NULL DEFAULT 0"),
+            ("default_individual_limit","NUMERIC(15,2)"),
+        ]:
+            await conn.execute(
+                f"ALTER TABLE group_rate_policies "
+                f"ADD COLUMN IF NOT EXISTS {col} {definition}"
+            )
+
+        # investments — vencimento de alta precisão
+        await conn.execute(
+            "ALTER TABLE investments "
+            "ADD COLUMN IF NOT EXISTS maturity_at TIMESTAMPTZ"
+        )
+
+        # investment_payouts — agendamento de alta precisão
+        await conn.execute(
+            "ALTER TABLE investment_payouts "
+            "ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ"
+        )
+
+    logger.info("Financial schema extensions applied.")
+
+
 async def _migrate_turn_state_table() -> None:
     """Creates the turn_state table if it doesn't exist yet.
 
@@ -279,6 +334,7 @@ async def lifespan(app: FastAPI):
     await _migrate_sessions_tables()
     await _migrate_pending_confirmations_table()
     await _migrate_turn_state_table()
+    await _migrate_financial_schema_extensions()
 
     # Pluggy — Open Finance
     from pluggy_flow import init_pluggy_tables
@@ -970,34 +1026,59 @@ async def detalhe_oportunidade(opp_id: int) -> dict:
     return dict(opp)
 
 
+class InvestirBody(BaseModel):
+    investor_user_id: int
+    opportunity_id: int
+    amount: float
+    maturity_at: str  # ISO-8601 datetime — ex: "2025-12-31T23:59:00Z" ou "2025-01-01"
+
+
 @app.post("/investir")
-async def aceitar_investimento(payload: dict) -> dict:
+async def aceitar_investimento(body: InvestirBody) -> dict:
     """
     Registra um investimento de um usuário em uma oportunidade.
 
-    Body: {
-      "investor_user_id": 42,
-      "opportunity_id": 7,
-      "amount": 1500.00
-    }
+    Body JSON:
+      investor_user_id — ID do usuário investidor
+      opportunity_id   — ID da oportunidade aberta
+      amount           — Valor investido (R$)
+      maturity_at      — Vencimento do investimento (ISO-8601).
+                         Pode ser curto prazo (minutos/horas) ou longo (meses).
+                         Exemplo: "2025-03-01T10:00:00Z", "2025-06-30", "2025-01-01T00:30:00Z"
     """
     from db.connection import get_db
     from engine.investment_engine import accept_investment
     from decimal import Decimal
+    from datetime import datetime, timezone
+
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    required = ["investor_user_id", "opportunity_id", "amount"]
-    missing = [f for f in required if f not in payload]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
+    # Parse maturity_at — aceita date ou datetime ISO-8601
+    try:
+        maturity_str = body.maturity_at.strip().replace(" ", "T")
+        if "T" in maturity_str:
+            maturity_dt = datetime.fromisoformat(maturity_str)
+            if maturity_dt.tzinfo is None:
+                maturity_dt = maturity_dt.replace(tzinfo=timezone.utc)
+        else:
+            from datetime import date as _date, time as _time
+            d = _date.fromisoformat(maturity_str)
+            maturity_dt = datetime.combine(d, _time.max, tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"maturity_at inválido — use formato ISO-8601: {exc}",
+        )
 
     result = await accept_investment(
         db=db,
-        opportunity_id=int(payload["opportunity_id"]),
-        investor_user_id=int(payload["investor_user_id"]),
-        amount=Decimal(str(payload["amount"])),
+        opportunity_id=body.opportunity_id,
+        investor_user_id=body.investor_user_id,
+        amount=Decimal(str(body.amount)),
+        maturity_date=None,   # deprecated — usar maturity_at
+        maturity_at=maturity_dt,
     )
 
     if not result.get("ok"):
@@ -1035,6 +1116,197 @@ async def investimentos_do_usuario(user_id: int, group_id: int | None = None) ->
         "user_id": user_id,
         "investments": [dict(i) for i in all_inv],
         "total": len(all_inv),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Eventos de risco geográfico — alimentação do motor de scoring (§8.2)
+# ---------------------------------------------------------------------------
+
+class RiskEventInput(BaseModel):
+    geohash: str
+    event_type: str          # 'climate' | 'economic' | 'social' | 'other'
+    severity: int            # 1 (mínimo) a 5 (crítico)
+    description: str
+    occurred_at: str         # ISO-8601, ex: "2025-07-06T12:00:00Z"
+    source: str              # ex: "inmet", "ibge", "reuters", "motor_noticias"
+    source_url: str | None = None  # link opcional da matéria/alerta original
+
+
+def _require_admin_key(request: Request) -> None:
+    """
+    Verifica a chave de administração para endpoints que alteram dados de scoring.
+    Requer header `Authorization: Bearer <ADMIN_API_KEY>`.
+    Quando ADMIN_API_KEY não está configurada (ambiente dev), permite acesso livre
+    mas registra warning para lembrar de configurar antes do deploy.
+    """
+    from config import ADMIN_API_KEY
+    if not ADMIN_API_KEY:
+        logger.warning(
+            "ADMIN_API_KEY não configurada — endpoint /admin/risk-events aberto. "
+            "Configure ADMIN_API_KEY antes de expor em produção."
+        )
+        return
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Não autorizado. Forneça 'Authorization: Bearer <ADMIN_API_KEY>'.",
+        )
+
+
+@app.post("/admin/risk-events", status_code=201)
+async def ingest_risk_event(request: Request, body: RiskEventInput) -> dict:
+    """
+    Ingere um evento de risco geográfico em `location_risk_events`.
+
+    Projetado para receber chamadas do motor de notícias que classificará
+    matérias em risco financeiro e impacto potencial sobre tomadores de
+    crédito na região indicada pelo geohash.
+
+    Após a inserção, dispara em background o recálculo das métricas de
+    mercado local (location_market_metrics) para o geohash afetado — o
+    próximo cálculo de score de usuários na região já refletirá o evento.
+
+    Requer header `Authorization: Bearer <ADMIN_API_KEY>` quando ADMIN_API_KEY
+    estiver configurada no ambiente.
+
+    Campos:
+      geohash      — Geohash Nível 4–6 da região afetada (ex: "6gyf").
+      event_type   — 'climate' | 'economic' | 'social' | 'other'.
+      severity     — Escala 1 (baixo) a 5 (crítico).
+      description  — Resumo do evento para auditoria/exibição.
+      occurred_at  — Quando o evento ocorreu (ISO-8601).
+      source       — Identificador da fonte (ex: "inmet", "motor_noticias").
+      source_url   — URL da matéria/alerta (opcional).
+
+    Retorna: {ok, event_id, geohash, severity}
+    """
+    _require_admin_key(request)
+
+    from db.connection import get_db
+    from datetime import datetime, timezone
+
+    if body.severity < 1 or body.severity > 5:
+        raise HTTPException(
+            status_code=422,
+            detail="severity deve estar entre 1 (mínimo) e 5 (crítico).",
+        )
+
+    valid_types = ("climate", "economic", "social", "other")
+    if body.event_type not in valid_types:
+        raise HTTPException(
+            status_code=422,
+            detail=f"event_type inválido. Use: {valid_types}",
+        )
+
+    try:
+        occurred_dt = datetime.fromisoformat(
+            body.occurred_at.strip().replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"occurred_at inválido — use ISO-8601: {exc}",
+        )
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    event_id = await db.fetch_val(
+        """
+        INSERT INTO location_risk_events
+            (geohash, event_type, severity, description, occurred_at, source, source_url)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        """,
+        body.geohash,
+        body.event_type,
+        body.severity,
+        body.description,
+        occurred_dt,
+        body.source,
+        body.source_url,
+    )
+
+    logger.info(
+        "risk_event inserido: id=%d geohash=%s type=%s severity=%d source=%s",
+        event_id, body.geohash, body.event_type, body.severity, body.source,
+    )
+
+    # Recalcula métricas de mercado local em background para o geohash afetado.
+    # O próximo cálculo de score de usuários na região já inclui este evento.
+    async def _refresh_location():
+        try:
+            from engine.scoring_engine import recalculate_location_market_metrics
+            await recalculate_location_market_metrics(db, body.geohash)
+            logger.info(
+                "location_market_metrics recalculado após risk_event id=%d geohash=%s",
+                event_id, body.geohash,
+            )
+        except Exception as exc:
+            logger.error(
+                "Erro ao recalcular location_metrics após risk_event id=%d: %s",
+                event_id, exc,
+            )
+
+    asyncio.create_task(_refresh_location())
+
+    return {
+        "ok":         True,
+        "event_id":   event_id,
+        "geohash":    body.geohash,
+        "severity":   body.severity,
+        "event_type": body.event_type,
+        "source":     body.source,
+    }
+
+
+@app.get("/admin/risk-events")
+async def list_risk_events(
+    geohash: str | None = None,
+    days: int = 30,
+    limit: int = 100,
+) -> dict:
+    """
+    Lista eventos de risco registrados.
+
+    ?geohash=6gyf  — filtra por região (prefixo de geohash)
+    ?days=30       — janela de tempo em dias (padrão: 30)
+    ?limit=100     — máximo de registros retornados
+    """
+    from db.connection import get_db
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    if geohash:
+        rows = await db.fetch_all(
+            """
+            SELECT * FROM location_risk_events
+            WHERE geohash LIKE $1
+              AND occurred_at >= NOW() - ($2 || ' days')::interval
+            ORDER BY occurred_at DESC
+            LIMIT $3
+            """,
+            geohash + "%", str(days), limit,
+        )
+    else:
+        rows = await db.fetch_all(
+            """
+            SELECT * FROM location_risk_events
+            WHERE occurred_at >= NOW() - ($1 || ' days')::interval
+            ORDER BY occurred_at DESC
+            LIMIT $2
+            """,
+            str(days), limit,
+        )
+
+    return {
+        "events": [dict(r) for r in rows],
+        "total":  len(rows),
+        "filter": {"geohash": geohash, "days": days},
     }
 
 
