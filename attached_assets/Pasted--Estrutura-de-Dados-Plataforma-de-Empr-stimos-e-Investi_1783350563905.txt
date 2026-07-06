@@ -1,0 +1,431 @@
+# Estrutura de Dados — Plataforma de Empréstimos e Investimentos
+
+## Índice
+1. [Visão geral e princípios de design](#1-visão-geral-e-princípios-de-design)
+2. [Grupos e alocação de usuários](#2-grupos-e-alocação-de-usuários)
+3. [Wallets (carteiras)](#3-wallets-carteiras)
+4. [Solicitação de empréstimo e plano de pagamento proposto](#4-solicitação-de-empréstimo-e-plano-de-pagamento-proposto)
+5. [Dívidas, parcelas, pagamentos e alocações](#5-dívidas-parcelas-pagamentos-e-alocações)
+6. [Limites de crédito](#6-limites-de-crédito)
+7. [Estrutura de taxas de juros](#7-estrutura-de-taxas-de-juros)
+8. [Engine de scoring multi-fator (comportamento, geografia, mercado local)](#8-engine-de-scoring-multi-fator)
+9. [Algoritmo vs. regra de negócio — o que precisa de cada um](#9-algoritmo-vs-regra-de-negócio)
+10. [Fluxo completo de ponta a ponta](#10-fluxo-completo-de-ponta-a-ponta)
+11. [Schema SQL consolidado e execução como jobs](#11-schema-sql-consolidado-e-execução-como-jobs)
+
+---
+
+## 1. Visão geral e princípios de design
+
+Três princípios guiam todo o schema abaixo:
+
+1. **Polimorfismo sobre duplicação** — sempre que uma entidade pode ser "usuário OU grupo" (dono de wallet, tomador de empréstimo, alvo de limite), usamos `owner_type`/`borrower_type` + `owner_id`/`borrower_id`, em vez de criar uma tabela por combinação. Isso evita explosão de tabelas quando novos tipos de ator aparecerem.
+
+2. **Snapshot no momento da contratação** — toda taxa, limite ou condição aplicada a uma dívida real precisa ser **congelada** no registro da dívida no instante da concessão. Políticas podem mudar depois sem afetar contratos já firmados. Isso é tanto proteção jurídica quanto rastreabilidade contábil.
+
+3. **Separação entre proposta e realidade** — o que o usuário *propõe* (plano de pagamento, solicitação de empréstimo) vive em tabelas de "request/proposal". O que é *efetivado* após aprovação vive em tabelas de "contrato real" (`debts`, `debt_installments`). Nunca materialize a proposta direto como dado definitivo.
+
+---
+
+## 2. Grupos e alocação de usuários
+
+```
+groups
+├── id
+├── name
+├── description
+├── status (active | inactive)
+└── created_at
+
+user_groups                    -- junction, com histórico
+├── id
+├── user_id
+├── group_id
+├── joined_at
+├── left_at (nullable)         -- NULL = alocação atual
+└── allocation_reason          -- por que foi enquadrado (auditoria)
+```
+
+**Por que `left_at` em vez de DELETE:** enquadramento em grupo é um evento de negócio (o usuário pode ter tomado empréstimo *enquanto* estava naquele grupo, e isso precisa ser rastreável mesmo após ele sair). Nunca apague a linha — feche o período.
+
+---
+
+## 3. Wallets (carteiras)
+
+```
+wallets
+├── id
+├── owner_type ('user' | 'group')
+├── owner_id
+├── balance_cache              -- saldo cacheado, fonte de verdade é a soma das transactions
+├── created_at
+└── UNIQUE (owner_type, owner_id)
+
+wallet_transactions
+├── id
+├── wallet_id
+├── amount                     -- positivo = crédito, negativo = débito
+├── type ('loan_disbursement' | 'loan_repayment' | 'investment_deposit' |
+│         'investment_withdrawal' | 'interest_payout' | 'fee')
+├── reference_id                -- aponta pra debts.id, payments.id, etc conforme o type
+├── reference_type
+└── created_at
+```
+
+**Por que polimórfico:** uma wallet de grupo e uma wallet de usuário têm exatamente o mesmo comportamento — recebem, enviam, têm saldo. O único diferencial é o dono. Isso também deixa o schema pronto pra uma futura "wallet do sistema" (taxas da plataforma) sem alterar estrutura.
+
+`balance_cache` é um cache, não a fonte de verdade — sempre reconciliável via `SUM(wallet_transactions.amount)`. Evita full-table-scan em toda consulta de saldo, mas nunca confie nele sem trigger de reconciliação.
+
+---
+
+## 4. Solicitação de empréstimo e plano de pagamento proposto
+
+```
+loan_requests
+├── id
+├── user_id                     -- quem solicita
+├── group_id                    -- de qual grupo pretende tomar emprestado
+├── requested_amount
+├── status ('pending' | 'approved' | 'rejected' | 'expired')
+├── requested_at
+├── decided_at
+└── decided_by                  -- referência a quem aprovou (usuário admin ou processo automático)
+
+proposed_installments            -- o PLANO PROPOSTO pelo usuário, ainda não é contrato
+├── id
+├── loan_request_id
+├── sequence
+├── proposed_due_date
+├── proposed_amount
+└── distribution_type ('equal' | 'custom')  -- útil pra UI/auditoria de como foi montado
+```
+
+**Por que separar de `debt_installments`:** se a solicitação for recusada, você não quer lixo em tabelas de parcelas reais. Além disso, o comitê/algoritmo de aprovação pode querer analisar exatamente o plano *como o usuário desenhou*, antes de qualquer ajuste. Só na aprovação você copia (possivelmente ajustado) para `debt_installments`.
+
+---
+
+## 5. Dívidas, parcelas, pagamentos e alocações
+
+Este é o núcleo mais delicado do sistema — o ponto que você identificou como problema (pagamento diferente do valor da parcela) exige separar **parcela** (o que é devido) de **pagamento** (o que foi de fato pago) de **alocação** (como o pagamento cobre as parcelas).
+
+```
+debts
+├── id
+├── loan_request_id              -- rastreabilidade até a origem
+├── from_wallet_id                -- wallet credora (quem emprestou o dinheiro)
+├── to_wallet_id                   -- wallet devedora (quem recebeu)
+├── principal                     -- valor original emprestado
+├── interest_rate_applied          -- SNAPSHOT da taxa final (congelada, ver seção 7)
+├── term_days
+├── status ('active' | 'paid_off' | 'defaulted' | 'renegotiated')
+├── disbursed_at
+└── created_at
+
+debt_installments
+├── id
+├── debt_id
+├── sequence
+├── due_date
+├── amount_due
+├── status ('pending' | 'partially_paid' | 'paid' | 'overdue')
+└── remaining_amount              -- amount_due - soma das alocações já recebidas
+
+payments
+├── id
+├── debt_id
+├── paid_at
+├── amount_paid                    -- valor total que o usuário efetivamente pagou naquele evento
+└── payment_method
+
+payment_allocations                 -- resolve o "pagar mais que uma parcela"
+├── id
+├── payment_id
+├── installment_id
+└── amount_allocated               -- quanto desse pagamento foi pra essa parcela específica
+```
+
+**Por que essa quebra em 4 tabelas resolve seu problema:**
+
+- Um `payment` pode gerar **N** `payment_allocations` — ex: usuário paga R$ 500 quando a parcela era R$ 300: R$ 300 fecha a parcela atual, os R$ 200 restantes são alocados na próxima parcela (reduzindo seu `remaining_amount`) ou direcionados como abate de principal, dependendo da regra de negócio que você escolher.
+- Um `payment` também pode ser **menor** que uma parcela (pagamento parcial) — nesse caso uma única `payment_allocation` cobre parte do `amount_due`, e o `installment.status` vira `partially_paid`.
+- Nunca é preciso reescrever `amount_due` da parcela original — ela é o contrato; o que muda é `remaining_amount`, derivado das alocações.
+
+**Regra de alocação (ordem de aplicação)** — isso é regra de negócio pura, não algoritmo:
+1. Parcela mais antiga em aberto primeiro (FIFO), a menos que o usuário especifique outra parcela.
+2. Se sobrar valor após quitar todas as parcelas pendentes, aplicar como abate de principal (reduz `principal` da dívida e recalcula parcelas futuras) ou como crédito antecipado — decisão de produto que deve virar um campo `overpayment_strategy` em `debts`.
+
+---
+
+## 6. Limites de crédito
+
+Dois tipos de limite, com naturezas diferentes:
+
+```
+credit_limits                       -- Tipo A: limite individual (borrower → group)
+├── id
+├── borrower_type ('user' | 'group')
+├── borrower_id
+├── lender_group_id
+├── limit_amount
+└── effective_from
+
+group_pool_limits                    -- Tipo B: exposição agregada do grupo credor
+├── id
+├── group_id                          -- o grupo que empresta
+├── max_aggregate_exposure
+├── current_exposure_cache            -- soma de debts.principal ativas concedidas por esse grupo
+└── effective_from
+```
+
+- **`credit_limits`** com `borrower_type='user'` cobre "quanto um usuário pode tomar emprestado de um grupo"; com `borrower_type='group'` cobre "quanto um grupo pode tomar emprestado de outro grupo". Mesma tabela, mesmo polimorfismo usado em wallets.
+- **`group_pool_limits`** cobre "quanto os usuários de um grupo, no total, podem tomar emprestado daquele grupo" — é o teto coletivo, independente de limites individuais.
+
+**Validação na concessão (regra de negócio, executada em sequência):**
+```
+1. SELECT limit_amount FROM credit_limits WHERE borrower=X AND lender_group=Y
+   → valor solicitado + dívidas ativas do borrower nesse grupo <= limit_amount?
+2. SELECT max_aggregate_exposure, current_exposure_cache FROM group_pool_limits WHERE group_id=Y
+   → current_exposure_cache + valor solicitado <= max_aggregate_exposure?
+```//
+Se qualquer uma falhar, `loan_requests.status = 'rejected'`.
+
+---
+
+## 7. Estrutura de taxas de juros
+
+Aqui a separação em camadas é essencial — não misture política (lenta), liquidez (rápida) e cotação (imutável).
+
+### Camada 1 — Política (muda raramente, é auditável)
+
+```
+group_rate_policies
+├── id, group_id
+├── base_borrowing_rate         -- taxa base cobrada de tomadores
+├── base_investment_rate       -- taxa base paga a investidores
+├── min_spread                  -- margem mínima obrigatória (proteção do negócio)
+└── effective_from
+
+term_rate_curve                  -- ajuste conforme prazo do empréstimo
+├── id, group_id
+├── min_term_days, max_term_days
+└── adjustment_bps
+
+user_risk_scores                  -- versionado, nunca sobrescrito
+├── id, user_id
+├── score
+├── factors_json                 -- transparência de quais fatores geraram o score
+├── calculated_at
+└── valid_until
+```
+
+### Camada 2 — Liquidez em tempo real (muda a cada minuto/hora)
+
+```
+liquidity_snapshots
+├── id, group_id
+├── total_available_investment    -- capital de investidores disponível agora
+├── total_active_loan_demand      -- volume de solicitações pendentes/interessadas
+└── captured_at
+```
+
+Atualizado por job periódico (ex: a cada 5 min) ou trigger em eventos de depósito/solicitação. A razão `demanda/oferta` alimenta o multiplicador da cotação.
+
+### Camada 3 — Cotação (o snapshot que vira contrato)
+
+```
+loan_rate_quotes
+├── id, loan_request_id
+├── base_rate, risk_premium, term_adjustment, liquidity_multiplier
+├── final_rate
+├── breakdown_json                -- transparência total do cálculo, útil pra disputa/auditoria
+├── quoted_at, expires_at
+
+investment_rate_quotes
+├── id, investment_id
+├── base_rate, liquidity_multiplier, final_rate
+└── quoted_at
+```
+
+**Fórmula (regra de negócio parametrizada, não ML):**
+
+```
+final_borrowing_rate =
+    base_borrowing_rate
+  + risk_premium(user_risk_scores.score)
+  + term_adjustment(term_days, term_rate_curve)
+  × liquidity_multiplier(total_active_loan_demand / total_available_investment)
+
+final_investment_rate =
+    base_investment_rate
+  × liquidity_multiplier(total_available_investment / total_active_loan_demand)
+```
+
+**Constraint obrigatória antes de aprovar qualquer cotação:**
+
+```
+final_borrowing_rate - final_investment_rate >= group_rate_policies.min_spread
+```
+
+Se o spread ficar negativo (liquidez apertada demais), o sistema deve: (a) rejeitar novas cotações de investimento até equilibrar, ou (b) subir automaticamente `final_borrowing_rate` dentro de um teto configurável. Essa decisão é regra de produto, deve estar explícita em `group_rate_policies` como um campo `spread_violation_strategy`.
+
+Quando o empréstimo é aprovado, **copie** `loan_rate_quotes.final_rate` para `debts.interest_rate_applied`. A partir daí é imutável — mudanças em `group_rate_policies` não afetam dívidas já firmadas.
+
+---
+
+## 8. Engine de scoring multi-fator
+
+A pergunta que motivou esta seção: dá pra decidir crédito considerando histórico de empréstimos/pagamentos, frequência de solicitações, atrasos/inadimplência, histórico de investimento, **e também** onde o usuário mora, incidentes climáticos/sociais na região, demanda local de empréstimos, e presença de investidores locais — só com regra de negócio simples?
+
+**Resposta curta: não.** O volume e a heterogeneidade dos fatores exige uma camada intermediária — um **motor de scoring multi-fator versionado** — que ainda não é Machine Learning, mas é mais estruturado que "regra simples". Divide-se em três sub-camadas:
+
+### 8.1 — Feature Store comportamental (agregações determinísticas, recalculadas por job)
+
+```
+user_behavior_metrics
+├── id, user_id
+├── total_borrowed_amount, total_repaid_amount
+├── loan_request_frequency_90d        -- qtd de solicitações nos últimos 90 dias
+├── payment_frequency_score            -- pontualidade histórica (ex: % pago no prazo)
+├── late_payments_count, defaults_count
+├── total_invested_amount, investment_frequency_90d
+├── calculated_at
+└── valid_until
+```
+
+Tudo aqui é `COUNT`/`SUM`/`AVG` sobre `debts`, `payments`, `payment_allocations` e uma futura tabela `investments` — não há ambiguidade, é agregação pura. Recalculado por job periódico (ex: diário) ou por trigger em eventos-chave (novo pagamento, novo atraso).
+
+### 8.2 — Contexto geográfico e de mercado local
+
+```
+user_locations
+├── id, user_id, city, state, country, geohash, updated_at
+
+location_risk_events                   -- feed de incidentes (ingestão externa)
+├── id, geohash
+├── event_type ('climate' | 'economic' | 'social' | 'other')
+├── severity, description, occurred_at, source
+
+location_market_metrics                -- oferta/demanda por região
+├── id, geohash
+├── active_loan_demand_local           -- volume de solicitações na região
+├── avg_requested_amount_local
+├── active_investors_count_local
+├── available_investment_local
+└── calculated_at
+```
+
+`location_risk_events` normalmente vem de **ingestão externa** (API climática, feed de dados públicos/notícias) — é integração de dados, não cálculo. `location_market_metrics` é agregação sobre `loan_requests`/wallets filtradas por `geohash`, mesma natureza da camada 8.1.
+
+**Por que `geohash` em vez de cidade/UF como chave:** permite raio de proximidade (ex: "incidentes num raio de 50km") sem depender de fronteiras administrativas, e casa bem com índices espaciais do Postgres (`earthdistance`/`postgis` se precisar de queries de raio).
+
+### 8.3 — Modelo de scoring (pesos versionados, auditável)
+
+```
+risk_score_models
+├── id, version, description, active (bool), created_at
+
+risk_score_weights                      -- pesos por fator, por modelo
+├── id, model_id, factor_name, weight
+
+user_risk_scores                         -- populado pela engine, não manualmente
+├── id, user_id, model_id
+├── score
+├── factors_json                         -- snapshot de CADA input usado nesse cálculo
+├── calculated_at, valid_until
+```
+
+**Fórmula (scorecard ponderado — ainda determinístico, não ML):**
+
+```
+score = Σ (factor_value_normalizado × weight)
+
+fatores incluem, por exemplo:
+  - payment_frequency_score (8.1)
+  - defaults_count (8.1, peso negativo)
+  - loan_request_frequency_90d (8.1)
+  - investment_frequency_90d (8.1, peso positivo — mostra relação de confiança com a plataforma)
+  - location_risk_events.severity recente no geohash do usuário (8.2, peso negativo)
+  - active_loan_demand_local / available_investment_local (8.2 — pressão de liquidez local)
+```
+
+Isso é o mesmo princípio usado por bureaus de crédito tradicionais (scorecards tipo FICO) — determinístico, explicável via `factors_json`, e **versionado**: ao mudar pesos ou adicionar fator, você cria um novo `risk_score_models` sem perder rastreabilidade de qual score foi calculado com qual versão do modelo.
+
+**Onde isso evoluiria para ML de verdade (futuro, opcional):** se você quiser que o sistema *aprenda* os pesos ótimos a partir de dados históricos de inadimplência (regressão logística, gradient boosting, etc.), você troca a fonte de `risk_score_weights` por um modelo treinado — mas a interface com o resto do sistema (`user_risk_scores.score` + `factors_json`) permanece idêntica. Isso é plugável desde o início porque o cálculo já está isolado nesta camada.
+
+**Ligação com a seção 7 (taxas):** `user_risk_scores.score` desta engine é exatamente o input de `risk_premium(user_risk_scores.score)` na fórmula de `final_borrowing_rate`. Nada muda na seção 7 — ela só passa a receber um score mais robusto.
+
+---
+
+## 9. Algoritmo vs. regra de negócio
+
+**Para o core financeiro (dívidas, parcelas, limites, cotação de taxa), não precisa de algoritmo de otimização/ML.** O que parece complexo se resolve com duas coisas:
+
+| Necessidade | O que resolve | É algoritmo? |
+|---|---|---|
+| Calcular taxa final de um empréstimo | Fórmula fixa (soma + multiplicador) sobre inputs já calculados | Não — regra de negócio |
+| Ajustar taxa conforme oferta/demanda | Razão simples `demanda/oferta`, recalculada por job periódico | Não — agregação |
+| Alocar pagamento em parcelas | Regra determinística (FIFO por data de vencimento) | Não — regra de negócio |
+| Validar limites antes de conceder | Duas queries sequenciais (individual + agregado) | Não — validação |
+| Agregar histórico comportamental (empréstimos, pagamentos, atrasos, investimentos) | Job de agregação (`COUNT`/`SUM`/`AVG`) — seção 8.1 | Não — pipeline de agregação |
+| Ingerir incidentes climáticos/sociais por região | Integração com API externa — seção 8.2 | Não — ingestão de dados |
+| Calcular score de risco combinando todos os fatores | Scorecard ponderado versionado (soma de fatores × pesos) — seção 8.3 | **Sim, no sentido de "procedimento bem definido"** — mas não precisa ser ML |
+| Prever inadimplência com maior precisão que um scorecard manual | Modelo estatístico treinado (regressão logística, gradient boosting) | **Sim — ML, opcional e futuro** |
+
+O ponto que evolui pra ML de verdade é substituir os pesos manuais de `risk_score_weights` por pesos aprendidos a partir de dados históricos de inadimplência. O schema já isola isso em `factors_json` e `calculated_at` (seção 8.3), então trocar "scorecard manual" por "modelo de ML" não exige nenhuma mudança estrutural — só troca o processo que popula `user_risk_scores`.
+
+---
+
+## 10. Fluxo completo de ponta a ponta
+
+```
+1. Usuário monta proposta de pagamento
+   → loan_requests (status: pending) + proposed_installments
+
+2a. Engine de scoring roda (assíncrono, via job periódico ou trigger)
+   → user_behavior_metrics recalculado (histórico de empréstimos/pagamentos/investimentos)
+   → location_market_metrics + location_risk_events consultados (contexto geográfico)
+   → user_risk_scores recalculado (scorecard ponderado, versionado por risk_score_models)
+
+2b. Sistema calcula cotação de taxa
+   → loan_rate_quotes (usa: group_rate_policies, term_rate_curve,
+                             user_risk_scores [já enriquecido pela engine], liquidity_snapshots)
+
+3. Sistema valida limites
+   → credit_limits (individual) + group_pool_limits (agregado)
+
+4. Se aprovado:
+   → loan_requests.status = 'approved'
+   → debts criado (interest_rate_applied = loan_rate_quotes.final_rate, snapshot)
+   → debt_installments gerados a partir de proposed_installments
+   → wallet_transactions: débito na wallet do grupo, crédito na wallet do usuário
+
+5. Usuário paga (integral, parcial, ou acima do valor)
+   → payments (novo registro)
+   → payment_allocations (distribui o valor pago entre installments em aberto, FIFO)
+   → debt_installments.remaining_amount atualizado
+   → wallet_transactions: crédito na wallet do grupo
+
+6. Em paralelo, investidores depositam
+   → wallet_transactions (investment_deposit)
+   → liquidity_snapshots recalculado
+   → investment_rate_quotes recalculado para novos investimentos
+```
+
+---
+
+## 11. Schema SQL consolidado e execução como jobs
+
+Quando gerarmos o `.sql` completo (Postgres/Supabase), os seguintes processos precisam rodar como **Supabase Edge Functions agendadas (cron)** ou **triggers**, e não como cálculo síncrono na hora da requisição do usuário — são agregações relativamente pesadas:
+
+| Processo | Frequência sugerida | Tipo |
+|---|---|---|
+| Recalcular `user_behavior_metrics` | Diário, ou trigger em novo pagamento/atraso | Edge Function agendada |
+| Ingerir `location_risk_events` de fontes externas | Diário ou por webhook da fonte externa | Edge Function agendada / webhook |
+| Recalcular `location_market_metrics` | A cada poucas horas | Edge Function agendada |
+| Recalcular `user_risk_scores` (scorecard) | Diário, ou sob demanda antes de nova cotação se `valid_until` expirado | Edge Function agendada + trigger sob demanda |
+| Recalcular `liquidity_snapshots` | A cada 5–15 min (é o que dá o "tempo real") | Edge Function agendada de alta frequência |
+| Gerar `loan_rate_quotes` / `investment_rate_quotes` | Síncrono, na hora da solicitação | Function chamada diretamente pela API |
+
+A regra geral: tudo que é **agregação sobre histórico** roda em background: com frequência baixa/média. Tudo que é **cotação para uma solicitação específica** roda síncrono, mas consumindo os resultados já pré-calculados das camadas acima — assim a resposta ao usuário é rápida mesmo com todo esse volume de fatores.
+
+No próximo passo eu gero o arquivo `.sql` completo (Postgres/Supabase) com todas essas tabelas, constraints, índices, as stored procedures de cálculo de cotação e de score, e os agendamentos via `pg_cron`/Edge Functions — pronto pra rodar via migration. Um documento só de texto tende a divergir do schema real conforme você for iterando; o `.sql` versionado é o que efetivamente vira fonte de verdade pra implementação.
