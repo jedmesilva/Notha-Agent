@@ -6,6 +6,10 @@ Fluxos implementados:
   2. allocate_payment    — distribui pagamento entre parcelas via FIFO
   3. get_loan_summary    — visão consolidada de uma dívida para o usuário
 
+Limite individual:
+  Resolvido dinamicamente via score_limit_bands (score → percentual × max_per_user_limit).
+  Ao atingir 95% do teto do grupo, o usuário é sinalizado como candidato a upgrade.
+
 Princípio: LLM propõe, código financeiro executa deterministicamente.
 Nenhum valor financeiro é decidido pelo LLM — apenas pelo código abaixo.
 """
@@ -28,14 +32,16 @@ async def approve_loan(
     """
     Fluxo completo de aprovação (seção 10, passos 2b–4):
 
-      1. Valida limites (individual + pool)
-      2. Obtém/calcula cotação de taxa
-      3. Cria debts com interest_rate_applied congelado
-      4. Gera debt_installments a partir de proposed_installments
-      5. Registra wallet_transactions (débito grupo, crédito usuário)
-      6. Atualiza group_pool_limits.current_exposure_cache
+      1. Resolve score atual do usuário
+      2. Valida limites (score_band/percentage/fixed + pool)
+      3. Obtém/calcula cotação de taxa
+      4. Cria debts com interest_rate_applied congelado
+      5. Gera debt_installments a partir de proposed_installments
+      6. Registra wallet_transactions (débito grupo, crédito usuário)
+      7. Atualiza group_pool_limits.current_exposure_cache
+      8. Detecta candidato a upgrade de grupo
 
-    Retorna dict com resultado: {ok, debt_id, final_rate, rejection_reason}
+    Retorna dict: {ok, debt_id, final_rate, rejection_reason, upgrade_candidate}
     """
     from db.repositories.loans import LoanRepository
     from db.repositories.debts import DebtRepository
@@ -67,20 +73,23 @@ async def approve_loan(
     if not proposed:
         return {"ok": False, "rejection_reason": "Sem parcelas propostas para esta solicitação"}
 
-    total_proposed = sum(Decimal(str(p["proposed_amount"])) for p in proposed)
     term_days = (
         max(p["proposed_due_date"] for p in proposed) - date.today()
     ).days
     term_days = max(term_days, 1)
 
+    # ── Score atual do usuário (necessário para resolver o limite) ────────────
+    user_risk_score = await get_or_compute_score(db, user_id)
+
     # ── Validação de limites (seção 6) ────────────────────────────────────────
     active_debt_total = await loan_repo.active_debt_total(user_id, group_id)
-    limits_ok, rejection_reason = await limit_repo.validate_limits(
+    limits_ok, rejection_reason, limit_ctx = await limit_repo.validate_limits(
         borrower_type="user",
         borrower_id=user_id,
         group_id=group_id,
         requested_amount=requested_amount,
         active_debt_total=active_debt_total,
+        user_risk_score=user_risk_score,
     )
     if not limits_ok:
         await loan_repo.update_status(
@@ -91,10 +100,7 @@ async def approve_loan(
         logger.info("Loan request %d REJECTED: %s", loan_request_id, rejection_reason)
         return {"ok": False, "rejection_reason": rejection_reason}
 
-    # ── Score de risco + cotação de taxa ──────────────────────────────────────
-    user_risk_score = await get_or_compute_score(db, user_id)
-
-    # Verifica se já existe cotação válida; se não, calcula
+    # ── Cotação de taxa ───────────────────────────────────────────────────────
     existing_quote = await rate_repo.get_latest_loan_quote(loan_request_id)
     if existing_quote:
         final_rate = Decimal(str(existing_quote["final_rate"]))
@@ -118,7 +124,6 @@ async def approve_loan(
     group_wallet_id = group_wallet["id"]
     user_wallet_id  = user_wallet["id"]
 
-    # Verifica saldo do grupo (saldo real, não cache)
     group_true_balance = await wallet_repo.true_balance(group_wallet_id)
     if group_true_balance < requested_amount:
         reason = (
@@ -142,11 +147,11 @@ async def approve_loan(
         term_days=term_days,
     )
 
-    # ── Gera parcelas reais a partir da proposta ──────────────────────────────
+    # ── Parcelas reais a partir da proposta ───────────────────────────────────
     installments_data = [
         {
-            "sequence":  p["sequence"],
-            "due_date":  p["proposed_due_date"],
+            "sequence":   p["sequence"],
+            "due_date":   p["proposed_due_date"],
             "amount_due": Decimal(str(p["proposed_amount"])),
         }
         for p in proposed
@@ -172,8 +177,7 @@ async def approve_loan(
         description=f"Empréstimo recebido — solicitação #{loan_request_id}",
     )
 
-    # ── Atualiza exposição do pool ────────────────────────────────────────────
-    from db.repositories.credit_limits import CreditLimitRepository
+    # ── Exposição do pool ─────────────────────────────────────────────────────
     await limit_repo.increment_exposure(group_id, requested_amount)
 
     # ── Aprova solicitação ────────────────────────────────────────────────────
@@ -181,19 +185,40 @@ async def approve_loan(
         loan_request_id, "approved", decided_by=approved_by
     )
 
+    # ── Detecta candidato a upgrade ───────────────────────────────────────────
+    upgrade_candidate = limit_ctx.get("upgrade_candidate", False)
+    if upgrade_candidate:
+        already_pending = await limit_repo.has_pending_upgrade(user_id, group_id)
+        if not already_pending:
+            pct = limit_ctx.get("pct")
+            await limit_repo.record_upgrade_suggestion(
+                user_id=user_id,
+                from_group_id=group_id,
+                trigger_score=user_risk_score,
+                trigger_pct=pct,
+            )
+            logger.info(
+                "Upgrade candidate: user_id=%d group_id=%d score=%.1f pct=%s",
+                user_id, group_id, float(user_risk_score), pct,
+            )
+
     logger.info(
-        "Loan APPROVED: request=%d debt=%d amount=R$%.2f rate=%.4f%% parcelas=%d",
+        "Loan APPROVED: request=%d debt=%d amount=R$%.2f rate=%.4f%% parcelas=%d upgrade=%s",
         loan_request_id, debt_id, float(requested_amount),
-        float(final_rate) * 100, len(proposed),
+        float(final_rate) * 100, len(proposed), upgrade_candidate,
     )
 
     return {
-        "ok":           True,
-        "debt_id":      debt_id,
-        "final_rate":   final_rate,
-        "term_days":    term_days,
-        "installments": len(proposed),
-        "quote_id":     quote_id,
+        "ok":               True,
+        "debt_id":          debt_id,
+        "final_rate":       final_rate,
+        "term_days":        term_days,
+        "installments":     len(proposed),
+        "quote_id":         quote_id,
+        "effective_limit":  limit_ctx.get("effective_limit"),
+        "limit_mode":       limit_ctx.get("mode"),
+        "limit_pct":        limit_ctx.get("pct"),
+        "upgrade_candidate": upgrade_candidate,
     }
 
 
@@ -234,7 +259,6 @@ async def allocate_payment(
     wallet_repo  = WalletRepository(db)
     loan_repo    = LoanRepository(db)
 
-    # Verifica dívida
     debt = await debt_repo.get_by_id(debt_id)
     if not debt:
         return {"ok": False, "error": "Dívida não encontrada"}
@@ -243,7 +267,6 @@ async def allocate_payment(
 
     overpayment_strategy = debt["overpayment_strategy"]
 
-    # Cria o registro de pagamento
     payment_id = await payment_repo.create(
         debt_id=debt_id,
         amount_paid=amount_paid,
@@ -252,7 +275,6 @@ async def allocate_payment(
         notes=notes,
     )
 
-    # Carrega parcelas em aberto (FIFO)
     open_installments = await debt_repo.list_open_installments(debt_id)
 
     remaining_to_allocate = amount_paid
@@ -262,11 +284,11 @@ async def allocate_payment(
         if remaining_to_allocate <= _ZERO:
             break
 
-        inst_id    = inst["id"]
-        remaining  = Decimal(str(inst["remaining_amount"]))
+        inst_id     = inst["id"]
+        remaining   = Decimal(str(inst["remaining_amount"]))
         to_allocate = min(remaining, remaining_to_allocate)
 
-        alloc_id = await payment_repo.add_allocation(
+        alloc_id   = await payment_repo.add_allocation(
             payment_id=payment_id,
             installment_id=inst_id,
             amount_allocated=to_allocate,
@@ -275,14 +297,14 @@ async def allocate_payment(
 
         remaining_to_allocate -= to_allocate
         allocations.append({
-            "allocation_id":  alloc_id,
-            "installment_id": inst_id,
-            "sequence":       inst["sequence"],
-            "allocated":      to_allocate,
+            "allocation_id":      alloc_id,
+            "installment_id":     inst_id,
+            "sequence":           inst["sequence"],
+            "allocated":          to_allocate,
             "installment_status": new_status,
         })
 
-    # ── Tratamento de overpayment ─────────────────────────────────────────────
+    # ── Overpayment ───────────────────────────────────────────────────────────
     overpayment = remaining_to_allocate
     if overpayment > _ZERO:
         if overpayment_strategy == "reduce_principal":
@@ -292,19 +314,15 @@ async def allocate_payment(
                 float(overpayment), debt_id,
             )
         else:
-            # advance_installments: o excedente fica como crédito (não implementa
-            # nova parcela automática — apenas loga; o gestor decide manualmente)
             logger.info(
-                "Overpayment R$%.2f registrado como pagamento antecipado (debt=%d) — "
-                "sem parcelas futuras abertas para alocar.",
+                "Overpayment R$%.2f registrado como pagamento antecipado (debt=%d)",
                 float(overpayment), debt_id,
             )
 
-    # ── Verifica quitação total ───────────────────────────────────────────────
+    # ── Quitação total ────────────────────────────────────────────────────────
     fully_paid = await debt_repo.check_debt_fully_paid(debt_id)
     if fully_paid:
         await debt_repo.update_status(debt_id, "paid_off")
-        # Decrementa exposição do pool
         req = await loan_repo.get_by_id(debt["loan_request_id"])
         if req:
             from db.repositories.credit_limits import CreditLimitRepository
@@ -314,7 +332,7 @@ async def allocate_payment(
             )
         logger.info("Dívida %d totalmente quitada.", debt_id)
 
-    # ── Wallet transaction de repagamento ─────────────────────────────────────
+    # ── Wallet transactions de repagamento ────────────────────────────────────
     user_wallet  = await wallet_repo.get_by_id(debt["to_wallet_id"])
     group_wallet = await wallet_repo.get_by_id(debt["from_wallet_id"])
 
@@ -344,17 +362,17 @@ async def allocate_payment(
     )
 
     return {
-        "ok":           True,
-        "payment_id":   payment_id,
-        "amount_paid":  amount_paid,
-        "allocations":  allocations,
-        "overpayment":  overpayment,
-        "fully_paid":   fully_paid,
+        "ok":            True,
+        "payment_id":    payment_id,
+        "amount_paid":   amount_paid,
+        "allocations":   allocations,
+        "overpayment":   overpayment,
+        "fully_paid":    fully_paid,
         "strategy_used": overpayment_strategy if overpayment > _ZERO else None,
     }
 
 
-# ── 3. Visão resumida de dívida para o usuário ────────────────────────────────
+# ── 3. Visão resumida de dívida ────────────────────────────────────────────────
 
 async def get_loan_summary(db, debt_id: int) -> dict:
     """Retorna visão consolidada de uma dívida para exibir ao usuário."""
@@ -374,12 +392,10 @@ async def get_loan_summary(db, debt_id: int) -> dict:
     insts = await debt_repo.list_all_installments(debt_id)
     total_paid = await payment_repo.total_paid(debt_id)
 
-    open_insts   = [i for i in insts if i["status"] != "paid"]
+    open_insts    = [i for i in insts if i["status"] != "paid"]
     overdue_insts = [i for i in insts if i["status"] == "overdue"]
     total_remaining = sum(Decimal(str(i["remaining_amount"])) for i in open_insts)
-    next_due = min(
-        (i["due_date"] for i in open_insts), default=None
-    )
+    next_due = min((i["due_date"] for i in open_insts), default=None)
 
     return {
         "debt_id":              debt_id,

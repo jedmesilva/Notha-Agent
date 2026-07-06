@@ -410,31 +410,75 @@ CREATE INDEX IF NOT EXISTS idx_liquidity_snapshots_group ON liquidity_snapshots(
 -- ============================================================
 
 -- Tipo A: limite individual (borrower → group)
+-- mode='fixed'      → usa limit_amount diretamente
+-- mode='percentage' → usa limit_percentage × group_pool_limits.max_per_user_limit
+-- mode='score_band' → resolve dinamicamente via score_limit_bands (padrão p/ novos usuários)
 CREATE TABLE IF NOT EXISTS credit_limits (
     id               SERIAL PRIMARY KEY,
     borrower_type    VARCHAR(20) NOT NULL,
         -- user | group
     borrower_id      INT NOT NULL,
     lender_group_id  INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    limit_amount     NUMERIC(15,2) NOT NULL,
+    mode             VARCHAR(20) NOT NULL DEFAULT 'fixed',
+        -- fixed | percentage | score_band
+    limit_amount     NUMERIC(15,2),          -- obrigatório se mode='fixed'
+    limit_percentage NUMERIC(5,4),           -- obrigatório se mode='percentage'
     effective_from   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_credit_limit_borrower_type CHECK (borrower_type IN ('user', 'group'))
+    CONSTRAINT chk_credit_limit_borrower_type CHECK (borrower_type IN ('user', 'group')),
+    CONSTRAINT chk_credit_limit_mode          CHECK (mode IN ('fixed', 'percentage', 'score_band'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_credit_limits_borrower ON credit_limits(borrower_type, borrower_id);
 CREATE INDEX IF NOT EXISTS idx_credit_limits_group    ON credit_limits(lender_group_id);
+
+-- Faixas de score → percentual do teto por usuário (score_limit_bands)
+-- Permite configurar progressão automática por grupo:
+--   ex: score 0–300 → 20%, 301–500 → 35%, ..., 851–1000 → 100% (upgrade candidate)
+CREATE TABLE IF NOT EXISTS score_limit_bands (
+    id               SERIAL PRIMARY KEY,
+    group_id         INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    min_score        NUMERIC(6,2) NOT NULL,
+    max_score        NUMERIC(6,2) NOT NULL,
+    limit_percentage NUMERIC(5,4) NOT NULL,  -- 0.0 a 1.0
+    label            VARCHAR(60),             -- ex: 'Iniciante', 'Bronze', 'Gold'
+    CONSTRAINT chk_slb_range CHECK (min_score >= 0 AND max_score <= 1000 AND min_score < max_score),
+    CONSTRAINT chk_slb_pct   CHECK (limit_percentage > 0 AND limit_percentage <= 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_score_limit_bands_group ON score_limit_bands(group_id);
 
 -- Tipo B: exposição agregada do grupo credor
 CREATE TABLE IF NOT EXISTS group_pool_limits (
     id                       SERIAL PRIMARY KEY,
     group_id                 INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     max_aggregate_exposure   NUMERIC(15,2) NOT NULL,
+    max_per_user_limit       NUMERIC(15,2),
+        -- teto máximo por usuário individual neste grupo
+        -- base de cálculo de score_limit_bands: effective = pct × max_per_user_limit
+        -- ao atingir 100%, usuário é candidato a upgrade de grupo
     current_exposure_cache   NUMERIC(15,2) NOT NULL DEFAULT 0,
         -- cache — reconciliável via SUM(debts.principal) ativas
     effective_from           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_group_pool_limits_group ON group_pool_limits(group_id);
+
+-- Histórico de sugestões de upgrade de grupo
+-- Gerado automaticamente ao atingir UPGRADE_TRIGGER_PCT (95%) do max_per_user_limit
+CREATE TABLE IF NOT EXISTS group_upgrade_events (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    from_group_id INT REFERENCES groups(id),
+    to_group_id   INT REFERENCES groups(id),
+    trigger_score NUMERIC(6,2),
+    trigger_pct   NUMERIC(5,4),
+    status        VARCHAR(20) NOT NULL DEFAULT 'suggested',
+        -- suggested | accepted | rejected
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_upgrade_events_user ON group_upgrade_events(user_id);
 
 -- ============================================================
 -- MÓDULO 8 — SOLICITAÇÃO E PROPOSTA DE EMPRÉSTIMO
