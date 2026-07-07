@@ -852,7 +852,157 @@ WHERE di.status IN ('pending', 'partially_paid')
   AND di.due_date < CURRENT_DATE;
 
 -- ============================================================
--- MÓDULO 11 — FUNDOS DE CRÉDITO
+-- MÓDULO 11 — BEHAVIORAL STATS & CREDIT PROFILE
+-- ============================================================
+--
+-- Pre-computed behavioral metrics per user.
+-- Populated by periodic jobs — NOT computed on every request.
+-- See docs/credit-system.md for full documentation.
+--
+-- There is no consolidated credit score.
+-- Each decision (limit, rate, upgrade) reads individual parameters directly.
+
+-- 11.1 Loan behavior metrics
+CREATE TABLE IF NOT EXISTS user_loan_stats (
+    user_id                INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    requests_last_30d      INT           NOT NULL DEFAULT 0,
+    requests_last_90d      INT           NOT NULL DEFAULT 0,
+    requests_last_365d     INT           NOT NULL DEFAULT 0,
+    grants_last_30d        INT           NOT NULL DEFAULT 0,
+    grants_last_90d        INT           NOT NULL DEFAULT 0,
+    grants_last_365d       INT           NOT NULL DEFAULT 0,
+    grant_rate             NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- loans_granted / loans_requested (lifetime)
+    total_requests_count   INT           NOT NULL DEFAULT 0,
+    total_grants_count     INT           NOT NULL DEFAULT 0,
+    total_requested_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
+    total_granted_amount   NUMERIC(15,2) NOT NULL DEFAULT 0,
+    avg_requested_amount   NUMERIC(15,2) NOT NULL DEFAULT 0,
+    avg_granted_amount     NUMERIC(15,2) NOT NULL DEFAULT 0,
+    avg_utilization_rate   NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- avg(granted / credit_limit) at time of each loan
+    max_utilization_ever   NUMERIC(6,4)  NOT NULL DEFAULT 0,
+    calculated_at          TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_loan_stats_calculated ON user_loan_stats(calculated_at);
+
+-- 11.2 Payment behavior metrics
+CREATE TABLE IF NOT EXISTS user_payment_stats (
+    user_id                 INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    on_time_rate            NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- % of installments paid on or before due date
+    early_rate              NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- % of installments paid before due date
+    late_rate               NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- % of installments paid after due date
+    avg_days_early          NUMERIC(8,2)  NOT NULL DEFAULT 0,
+        -- mean days ahead when paying early (positive)
+    avg_days_late           NUMERIC(8,2)  NOT NULL DEFAULT 0,
+        -- mean days overdue when paying late (positive)
+    payment_variance_days   NUMERIC(8,2)  NOT NULL DEFAULT 0,
+        -- std deviation of payment timing — measures consistency
+    consecutive_on_time     INT           NOT NULL DEFAULT 0,
+        -- current streak of on-time installments
+    max_consecutive_on_time INT           NOT NULL DEFAULT 0,
+        -- all-time longest on-time streak
+    active_defaults_count   INT           NOT NULL DEFAULT 0,
+        -- installments currently in default — hard block if > 0
+    total_defaults_count    INT           NOT NULL DEFAULT 0,
+    total_installments_paid INT           NOT NULL DEFAULT 0,
+    calculated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_payment_stats_calculated ON user_payment_stats(calculated_at);
+
+-- 11.3 Investment behavior metrics
+CREATE TABLE IF NOT EXISTS user_investment_stats (
+    user_id                   INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    has_ever_invested         BOOLEAN       NOT NULL DEFAULT FALSE,
+    offers_received_count     INT           NOT NULL DEFAULT 0,
+    offers_accepted_count     INT           NOT NULL DEFAULT 0,
+    acceptance_rate           NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- accepted / received
+    total_invested_amount     NUMERIC(15,2) NOT NULL DEFAULT 0,
+    active_invested_amount    NUMERIC(15,2) NOT NULL DEFAULT 0,
+    avg_investment_amount     NUMERIC(15,2) NOT NULL DEFAULT 0,
+    investments_active_count  INT           NOT NULL DEFAULT 0,
+    investments_matured_count INT           NOT NULL DEFAULT 0,
+    calculated_at             TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_investment_stats_calculated ON user_investment_stats(calculated_at);
+
+-- 11.4 Computed credit profile — output of the algorithm
+--      No consolidated score. Each field is an independent decision input.
+CREATE TABLE IF NOT EXISTS user_credit_profile (
+    user_id            INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    credit_limit       NUMERIC(15,2) NOT NULL DEFAULT 0,
+    personal_risk_rate NUMERIC(8,6)  NOT NULL DEFAULT 0,
+        -- risk premium added on top of level base_borrowing_rate for this user
+    default_rate       NUMERIC(6,4)  NOT NULL DEFAULT 0,
+        -- total_defaults / total_installments_paid
+    calculated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    valid_until        TIMESTAMPTZ
+);
+
+-- 11.5 Level scoring rules — replaces level_policies
+--      Defines credit formulas, rate parameters, and progression thresholds per level.
+--      See docs/credit-system.md §3 for full documentation of each field.
+CREATE TABLE IF NOT EXISTS level_scoring_rules (
+    id                                SERIAL PRIMARY KEY,
+    level_id                          SMALLINT      NOT NULL REFERENCES levels(id),
+    -- Credit limit formula
+    credit_limit_base                 NUMERIC(15,2) NOT NULL DEFAULT 0,
+    credit_limit_max                  NUMERIC(15,2) NOT NULL DEFAULT 0,
+    credit_limit_formula              VARCHAR(30)   NOT NULL DEFAULT 'payment_weighted',
+        -- linear | utilization_based | payment_weighted
+    -- Borrowing rate
+    base_borrowing_rate               NUMERIC(8,6)  NOT NULL DEFAULT 0,
+    risk_rate_multiplier              NUMERIC(8,4)  NOT NULL DEFAULT 1,
+    max_risk_premium                  NUMERIC(8,6)  NOT NULL DEFAULT 0,
+    -- Investment rate
+    base_investment_rate              NUMERIC(8,6)  NOT NULL DEFAULT 0,
+    min_spread                        NUMERIC(8,6)  NOT NULL DEFAULT 0,
+    spread_violation_strategy         VARCHAR(30)   NOT NULL DEFAULT 'reject_investment',
+        -- reject_investment | raise_borrowing_rate
+    -- Pool exposure limits
+    max_aggregate_exposure            NUMERIC(15,2) NOT NULL DEFAULT 0,
+    default_individual_limit          NUMERIC(15,2),
+    -- Term rate adjustment
+    term_rate_formula                 VARCHAR(20)   NOT NULL DEFAULT 'bands',
+        -- bands | linear | log | sqrt
+    term_rate_base_bps                NUMERIC(8,2),
+    term_rate_scale                   NUMERIC(8,4),
+    -- Upgrade thresholds (ALL must be met simultaneously)
+    min_on_time_rate_for_upgrade      NUMERIC(6,4)  NOT NULL DEFAULT 0.90,
+    max_late_rate_for_upgrade         NUMERIC(6,4)  NOT NULL DEFAULT 0.10,
+    max_defaults_ever_for_upgrade     INT           NOT NULL DEFAULT 0,
+    min_consecutive_on_time_upgrade   INT           NOT NULL DEFAULT 3,
+    min_grants_count_for_upgrade      INT           NOT NULL DEFAULT 1,
+    min_granted_amount_for_upgrade    NUMERIC(15,2) NOT NULL DEFAULT 0,
+    max_avg_utilization_for_upgrade   NUMERIC(6,4)  NOT NULL DEFAULT 0.95,
+    min_account_age_days_for_upgrade  INT           NOT NULL DEFAULT 30,
+    min_level_tenure_days_for_upgrade INT           NOT NULL DEFAULT 0,
+    requires_investment_for_upgrade   BOOLEAN       NOT NULL DEFAULT FALSE,
+    -- Downgrade thresholds (any violation triggers evaluation)
+    min_on_time_rate_to_keep          NUMERIC(6,4)  NOT NULL DEFAULT 0.70,
+    max_active_defaults_to_keep       INT           NOT NULL DEFAULT 0,
+    max_consecutive_late_to_keep      INT           NOT NULL DEFAULT 5,
+    effective_from                    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UNIQUE (level_id),
+    CONSTRAINT chk_lsr_formula
+        CHECK (credit_limit_formula IN ('linear','utilization_based','payment_weighted')),
+    CONSTRAINT chk_lsr_spread
+        CHECK (spread_violation_strategy IN ('reject_investment','raise_borrowing_rate')),
+    CONSTRAINT chk_lsr_term
+        CHECK (term_rate_formula IN ('bands','linear','log','sqrt'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_level_scoring_rules_level ON level_scoring_rules(level_id);
+
+-- ============================================================
+-- MÓDULO 12 — FUNDOS DE CRÉDITO
 -- ============================================================
 --
 -- Funds are credit pools from which borrowers take loans.
