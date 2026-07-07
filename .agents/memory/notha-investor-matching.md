@@ -32,6 +32,13 @@ Usa `UPDATE investment_offers SET status='processing' WHERE id=? AND status='pen
 `CREATE INDEX IF NOT EXISTS` não é atômico entre processos no pg_catalog. Uvicorn com `--reload` pode disparar dois workers simultaneamente causando `UniqueViolationError` no pg_class.
 - **Fix:** cada DDL de índice envolvido em `try/except` capturando `UniqueViolationError | DuplicateTableError | DuplicateObjectError`.
 
+## debt_id direto em investments (FK de 1 salto)
+
+`investments.debt_id` é uma FK redundante deliberada para `debts.id`, propagada de `investment_opportunities.debt_id` no momento do `accept_investment()`.
+- **Por quê:** sem ela, rastrear "quais investimentos cobrem esta dívida?" exige 2 JOINs (investments → opportunities → debts) e falha se `opportunity_id` for NULL. Com `debt_id` direto: 1 JOIN, sempre presente.
+- Migration idempotente: `ALTER TABLE investments ADD COLUMN IF NOT EXISTS debt_id BIGINT REFERENCES debts(id)` + backfill via UPDATE + índice parcial `WHERE debt_id IS NOT NULL`.
+- `list_by_debt(debt_id)` e `coverage_summary_for_debt(debt_id)` adicionados ao `InvestmentRepository`.
+
 ## maturity_at dos investimentos
 `create_opportunity` recebe `loan_term_days` (passado por `approve_loan` via `term_days`). `investment_maturity_at = now + timedelta(days=loan_term_days)`. Fallback para `expires_at` somente em criação manual (sem empréstimo subjacente).
 - **Por quê:** usar `expires_at` (TTL da oportunidade) como maturity criava vencimentos errados para investidores que aceitavam tarde — o prazo do empréstimo é o referencial econômico correto.

@@ -236,6 +236,49 @@ async def _migrate_pending_confirmations_table() -> None:
     logger.info("Pending confirmations table ready.")
 
 
+async def _migrate_debt_id_on_investments() -> None:
+    """
+    Adiciona debt_id diretamente em investments — FK de 1 salto para a dívida coberta.
+
+    Sem esse campo, rastrear "quais investimentos cobrem esta dívida?" exige 2 JOINs
+    (investments → investment_opportunities → debts). Com debt_id direto, é 1 JOIN
+    e o vínculo persiste mesmo se a oportunidade for cancelada/excluída.
+
+    Backfill automático: preenche debt_id nos registros existentes onde
+    investment_opportunities.debt_id não é NULL.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "ALTER TABLE investments "
+            "ADD COLUMN IF NOT EXISTS debt_id BIGINT REFERENCES debts(id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_investments_debt_id "
+            "ON investments(debt_id) WHERE debt_id IS NOT NULL"
+        )
+        # Backfill — preenche debt_id nos investimentos existentes ligados a oportunidades
+        # com debt_id. Idempotente: só atualiza onde debt_id ainda é NULL.
+        result = await conn.execute(
+            """
+            UPDATE investments i
+               SET debt_id = o.debt_id
+              FROM investment_opportunities o
+             WHERE o.id       = i.opportunity_id
+               AND o.debt_id  IS NOT NULL
+               AND i.debt_id  IS NULL
+            """
+        )
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            logger.info(
+                "_migrate_debt_id_on_investments: backfill de %d registro(s).", count
+            )
+    logger.info("investments.debt_id ready.")
+
+
 async def _migrate_investor_profile_tables() -> None:
     """
     Cria as tabelas de perfil de investidor e ofertas de investimento.
@@ -434,6 +477,7 @@ async def lifespan(app: FastAPI):
     await _migrate_turn_state_table()
     await _migrate_financial_schema_extensions()
     await _migrate_investor_profile_tables()
+    await _migrate_debt_id_on_investments()
 
     # Pluggy — Open Finance
     from pluggy_flow import init_pluggy_tables

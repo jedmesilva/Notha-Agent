@@ -24,18 +24,19 @@ class InvestmentRepository:
         amount_invested: Decimal,
         rate_agreed: Decimal,
         opportunity_id: int | None = None,
+        debt_id: int | None = None,          # FK direta à dívida coberta (1-JOIN traceability)
         maturity_date: date | None = None,
-        maturity_at=None,  # datetime | None — precisão de minutos/horas
+        maturity_at=None,                    # datetime | None — precisão de minutos/horas
     ) -> int:
         return await self._db.fetch_val(
             """
             INSERT INTO investments
-                (investor_user_id, group_id, opportunity_id,
+                (investor_user_id, group_id, opportunity_id, debt_id,
                  amount_invested, rate_agreed, status, maturity_date, maturity_at)
-            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
             RETURNING id
             """,
-            investor_user_id, group_id, opportunity_id,
+            investor_user_id, group_id, opportunity_id, debt_id,
             amount_invested, rate_agreed, maturity_date, maturity_at,
         )
 
@@ -73,6 +74,55 @@ class InvestmentRepository:
             """,
             investor_user_id, limit,
         )
+
+    async def list_by_debt(self, debt_id: int) -> list:
+        """
+        Retorna todos os investimentos que cobrem uma dívida específica.
+        Usa o debt_id direto (1 JOIN) — não precisa passar por investment_opportunities.
+        """
+        return await self._db.fetch_all(
+            """
+            SELECT i.*, u.full_name, u.nickname,
+                   o.amount_needed, o.amount_committed, o.status AS opportunity_status
+            FROM investments i
+            JOIN users u ON u.id = i.investor_user_id
+            LEFT JOIN investment_opportunities o ON o.id = i.opportunity_id
+            WHERE i.debt_id = $1
+            ORDER BY i.invested_at ASC
+            """,
+            debt_id,
+        )
+
+    async def coverage_summary_for_debt(self, debt_id: int) -> dict:
+        """
+        Resumo de cobertura de captação para uma dívida:
+          total_invested  — soma dos investimentos ativos cobrindo essa dívida
+          investor_count  — número de investidores distintos
+          fully_covered   — True se total_invested >= principal da dívida
+        """
+        row = await self._db.fetch_one(
+            """
+            SELECT
+                COALESCE(SUM(i.amount_invested), 0)::NUMERIC(15,2) AS total_invested,
+                COUNT(DISTINCT i.investor_user_id)::INT             AS investor_count
+            FROM investments i
+            WHERE i.debt_id = $1 AND i.status = 'active'
+            """,
+            debt_id,
+        )
+        debt = await self._db.fetch_one(
+            "SELECT principal FROM debts WHERE id = $1", debt_id
+        )
+        total = Decimal(str(row["total_invested"])) if row else Decimal("0")
+        principal = Decimal(str(debt["principal"])) if debt else Decimal("0")
+        return {
+            "debt_id":        debt_id,
+            "total_invested": total,
+            "investor_count": int(row["investor_count"]) if row else 0,
+            "principal":      principal,
+            "fully_covered":  total >= principal,
+            "coverage_pct":   float(total / principal * 100) if principal > 0 else 0.0,
+        }
 
     async def list_by_group(self, group_id: int, status: str | None = None) -> list:
         if status:

@@ -212,6 +212,8 @@ async def accept_investment(
             else:
                 group_id    = opp["group_id"]
                 rate_agreed = Decimal(str(opp["expected_rate"]))
+                # debt_id propagado diretamente — FK de 1 salto para rastreabilidade
+                opp_debt_id = opp["debt_id"] if opp["debt_id"] else None
 
                 # Garante wallet do grupo dentro da transação
                 group_wallet = await wallet_repo_tx.get_or_create("group", group_id)
@@ -228,13 +230,14 @@ async def accept_investment(
                         ),
                     }
                 else:
-                    # Registra investimento
+                    # Registra investimento com FK direta à dívida coberta
                     inv_id = await inv_repo_tx.create(
                         investor_user_id=investor_user_id,
                         group_id=group_id,
                         amount_invested=amount,
                         rate_agreed=rate_agreed,
                         opportunity_id=opportunity_id,
+                        debt_id=opp_debt_id,
                         maturity_date=maturity_date,
                         maturity_at=maturity_at,
                     )

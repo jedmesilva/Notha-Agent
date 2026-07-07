@@ -609,6 +609,143 @@ CREATE INDEX IF NOT EXISTS idx_payment_allocations_payment     ON payment_alloca
 CREATE INDEX IF NOT EXISTS idx_payment_allocations_installment ON payment_allocations(installment_id);
 
 -- ============================================================
+-- MÓDULO 10b — INVESTIMENTOS E OPORTUNIDADES DE CAPTAÇÃO
+-- ============================================================
+
+-- Oportunidade criada automaticamente após cada aprovação de empréstimo
+-- para repor o saldo retirado do fundo. Também criada manualmente.
+-- debt_id → qual dívida esta captação está financiando (nullable para captações gerais)
+CREATE TABLE IF NOT EXISTS investment_opportunities (
+    id               BIGSERIAL PRIMARY KEY,
+    group_id         INT           NOT NULL REFERENCES groups(id),
+    debt_id          BIGINT        REFERENCES debts(id),
+        -- NULL = captação geral de liquidez, sem empréstimo subjacente
+    amount_needed    NUMERIC(15,2) NOT NULL,
+    amount_committed NUMERIC(15,2) NOT NULL DEFAULT 0,
+    expected_rate    NUMERIC(8,6)  NOT NULL,
+    status           VARCHAR(20)   NOT NULL DEFAULT 'open',
+        -- open | partially_funded | fully_funded | expired | cancelled
+    expires_at       TIMESTAMPTZ   NOT NULL,
+    created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_opp_status
+        CHECK (status IN ('open','partially_funded','fully_funded','expired','cancelled')),
+    CONSTRAINT chk_committed_lte_needed
+        CHECK (amount_committed <= amount_needed)
+);
+
+CREATE INDEX IF NOT EXISTS idx_investment_opp_group  ON investment_opportunities(group_id);
+CREATE INDEX IF NOT EXISTS idx_investment_opp_debt   ON investment_opportunities(debt_id) WHERE debt_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_investment_opp_status ON investment_opportunities(status);
+
+-- Posição de um investidor em um fundo.
+-- opportunity_id — oportunidade que motivou o investimento (nullable: aportes diretos)
+-- debt_id        — FK direta à dívida coberta (1 JOIN); propagado de opportunity.debt_id
+--                  Persiste mesmo se a oportunidade for cancelada/arquivada.
+CREATE TABLE IF NOT EXISTS investments (
+    id               BIGSERIAL PRIMARY KEY,
+    investor_user_id INT           NOT NULL REFERENCES users(id),
+    group_id         INT           NOT NULL REFERENCES groups(id),
+    opportunity_id   BIGINT        REFERENCES investment_opportunities(id),
+    debt_id          BIGINT        REFERENCES debts(id),
+        -- Redundância deliberada: permite rastrear cobertura de dívida em 1 JOIN
+    amount_invested  NUMERIC(15,2) NOT NULL,
+    rate_agreed      NUMERIC(8,6)  NOT NULL,
+    status           VARCHAR(20)   NOT NULL DEFAULT 'active',
+        -- active | matured | withdrawn
+    invested_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    maturity_date    DATE,
+    maturity_at      TIMESTAMPTZ,  -- precisão de minutos/horas para investimentos curtos
+    withdrawn_at     TIMESTAMPTZ,
+    CONSTRAINT chk_investment_status
+        CHECK (status IN ('active','matured','withdrawn'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_investments_investor ON investments(investor_user_id);
+CREATE INDEX IF NOT EXISTS idx_investments_group    ON investments(group_id);
+CREATE INDEX IF NOT EXISTS idx_investments_opp      ON investments(opportunity_id) WHERE opportunity_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_investments_debt     ON investments(debt_id) WHERE debt_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_investments_status   ON investments(status);
+
+-- Payout único no vencimento do investimento.
+-- scheduled_at (TIMESTAMPTZ) tem prioridade sobre scheduled_date (DATE) para
+-- investimentos de curto prazo. Juros simples: I = P × r × t.
+CREATE TABLE IF NOT EXISTS investment_payouts (
+    id             BIGSERIAL PRIMARY KEY,
+    investment_id  BIGINT        NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
+    amount         NUMERIC(15,2) NOT NULL,
+    period_start   DATE          NOT NULL,
+    period_end     DATE          NOT NULL,
+    scheduled_date DATE          NOT NULL,
+    scheduled_at   TIMESTAMPTZ,
+    status         VARCHAR(20)   NOT NULL DEFAULT 'scheduled',
+        -- scheduled | paid | cancelled
+    paid_at        TIMESTAMPTZ,
+    CONSTRAINT chk_payout_status CHECK (status IN ('scheduled','paid','cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_investment_payouts_investment ON investment_payouts(investment_id);
+CREATE INDEX IF NOT EXISTS idx_investment_payouts_due
+    ON investment_payouts(scheduled_date) WHERE status = 'scheduled';
+CREATE INDEX IF NOT EXISTS idx_investment_payouts_due_at
+    ON investment_payouts(scheduled_at) WHERE status = 'scheduled' AND scheduled_at IS NOT NULL;
+
+-- Ofertas de investimento enviadas a investidores específicos via WhatsApp.
+-- Restrição parcial: apenas UMA oferta PENDING por (opportunity, user) — permite
+-- re-oferta ao mesmo investidor após decline/expire.
+CREATE TABLE IF NOT EXISTS investment_offers (
+    id               SERIAL PRIMARY KEY,
+    opportunity_id   INT           NOT NULL REFERENCES investment_opportunities(id),
+    user_id          INT           NOT NULL REFERENCES users(id),
+    group_id         INT           NOT NULL,
+    suggested_amount NUMERIC(15,2) NOT NULL,
+    maturity_at      TIMESTAMPTZ   NOT NULL,
+    status           VARCHAR(20)   NOT NULL DEFAULT 'pending',
+        -- pending | processing | accepted | declined | expired
+    message_sent_at  TIMESTAMPTZ,
+    expires_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+    responded_at     TIMESTAMPTZ,
+    final_amount     NUMERIC(15,2),
+    investment_id    INT REFERENCES investments(id),
+    created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_offer_status
+        CHECK (status IN ('pending','processing','accepted','declined','expired'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_offers_pending_unique
+    ON investment_offers(opportunity_id, user_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_investment_offers_lookup
+    ON investment_offers(user_id, status, expires_at);
+
+-- Perfis de preferência de investidor (base do sistema de matching automático).
+-- Métricas históricas (avg_investment_amount, etc.) atualizadas por job periódico (1h).
+CREATE TABLE IF NOT EXISTS investor_profiles (
+    id                      SERIAL PRIMARY KEY,
+    user_id                 INT           NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    group_id                INT           REFERENCES groups(id) ON DELETE SET NULL,
+        -- NULL = aceita qualquer grupo
+    risk_tolerance          VARCHAR(20)   NOT NULL DEFAULT 'moderate',
+        -- conservative | moderate | aggressive
+    min_investment_amount   NUMERIC(15,2) NOT NULL DEFAULT 50,
+    max_investment_amount   NUMERIC(15,2),
+    min_term_days           INT           NOT NULL DEFAULT 1,
+    max_term_days           INT           NOT NULL DEFAULT 365,
+    auto_invest             BOOLEAN       NOT NULL DEFAULT FALSE,
+    is_active               BOOLEAN       NOT NULL DEFAULT TRUE,
+    -- Métricas históricas (calculadas por job)
+    avg_investment_amount   NUMERIC(15,2),
+    avg_term_days           INT,
+    total_invested_lifetime NUMERIC(15,2) NOT NULL DEFAULT 0,
+    active_investment_count INT           NOT NULL DEFAULT 0,
+    last_metrics_at         TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_risk_tolerance
+        CHECK (risk_tolerance IN ('conservative','moderate','aggressive'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_investor_profiles_active ON investor_profiles(is_active, group_id);
+
+-- ============================================================
 -- MÓDULO 11 — INFRAESTRUTURA DO AGENTE CONVERSACIONAL
 -- ============================================================
 
