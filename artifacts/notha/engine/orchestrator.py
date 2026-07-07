@@ -477,7 +477,7 @@ class Orchestrator:
             synthesis_context += "\n\nTOOL RESULTS:\n" + "\n".join(results)
 
         final_reply, _ = await self._conv.chat_with_tools(
-            contexto=synthesis_context,
+            context=synthesis_context,
             history=history,
             user_message=text,
             tools=NOTHA_TOOLS,
@@ -582,7 +582,7 @@ class Orchestrator:
 
     async def _no_db_fallback(self, phone: str, text: str) -> str:
         messages, _ = await self._conv.get_tool_calls(
-            contexto="no database available — memory-only mode",
+            context="no database available — memory-only mode",
             history=_memory_get(phone),
             user_message=text,
             tools=NOTHA_TOOLS,

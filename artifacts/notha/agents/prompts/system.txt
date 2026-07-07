@@ -295,4 +295,4 @@ Mandatory use of tools for any factual data:
 Inventing a value causes real financial harm. Always use the tool.
 
 Current user context (real database data):
-{contexto}
+{context}

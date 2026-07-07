@@ -779,7 +779,7 @@ class ConversationAgent:
 
     async def get_tool_calls(
         self,
-        contexto: str,
+        context: str,
         history: list[dict],
         user_message: str,
         tools: list[dict],
@@ -789,7 +789,7 @@ class ConversationAgent:
         Returns (messages_so_far, tool_calls).
         messages_so_far must be passed to get_reply_after_tools along with the real results.
         """
-        system = SYSTEM_PROMPT.format(contexto=contexto)
+        system = SYSTEM_PROMPT.format(context=context)
         messages: list[dict] = [{"role": "system", "content": system}]
         for h in history[-20:]:
             messages.append(h)
@@ -831,7 +831,7 @@ class ConversationAgent:
         messages: list[dict],
         tool_results: dict[str, str],
         tools: list[dict],
-        contexto: str = "",
+        context: str = "",
     ) -> tuple[list[dict], list[dict]]:
         """Feeds tool results back to the LLM as role:tool messages and calls it again
         with tools available — allowing the LLM to chain tool calls (e.g. check_restriction
@@ -907,7 +907,7 @@ class ConversationAgent:
         self,
         messages: list[dict],
         tool_results: dict[str, str],
-        contexto: str = "",
+        context: str = "",
     ) -> str:
         """Phase 2 of tool calling: generates the final response with the tool results.
 
@@ -917,7 +917,7 @@ class ConversationAgent:
         from "restarting" the conversation with greetings.
 
         tool_results: dict of tool_call_id → descriptive result (real DB data).
-        contexto: user context string (from _build_context) for the guardrail.
+        context: user context string (from _build_context) for the guardrail.
         """
         tool_context = "\n\n━━━ DATA RETRIEVED BY TOOLS ━━━\n"
         for result in tool_results.values():
@@ -952,7 +952,7 @@ class ConversationAgent:
             reply = resp.text or "Done!"
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
             return await validate_reply(
-                sanitized, history_for_guardrail, contexto, last_user_msg
+                sanitized, history_for_guardrail, context, last_user_msg
             )
         except Exception as e:
             logger.error("Error in get_reply_after_tools: %s", e)
@@ -960,13 +960,13 @@ class ConversationAgent:
 
     async def chat_with_tools(
         self,
-        contexto: str,
+        context: str,
         history: list[dict],
         user_message: str,
         tools: list[dict] | None = None,
     ) -> tuple[str, list[dict]]:
         """Shortcut for when there are no tools or the two phases are not needed separately."""
-        system = SYSTEM_PROMPT.format(contexto=contexto)
+        system = SYSTEM_PROMPT.format(context=context)
         messages: list[dict] = [{"role": "system", "content": system}]
         for h in history[-20:]:
             messages.append(h)
@@ -988,7 +988,7 @@ class ConversationAgent:
         reply = resp.text or "I had a technical issue."
         sanitized = await _sanitize_response(reply, has_history, user_greeted)
         history_for_guardrail = list(history) + [{"role": "user", "content": user_message}]
-        validated = await validate_reply(sanitized, history_for_guardrail, contexto, user_message)
+        validated = await validate_reply(sanitized, history_for_guardrail, context, user_message)
         return validated, []
 
     async def respond(
@@ -1006,15 +1006,15 @@ class ConversationAgent:
             f"Product: {product_info} | Negotiation: {negotiation_status}"
         )
         text, _ = await self.chat_with_tools(
-            contexto=context,
+            context=context,
             history=history,
             user_message=user_message,
             tools=None,
         )
         return text
 
-    async def extract_intent(self, message: str, contexto: str = "general") -> dict:
-        prompt = INTENT_EXTRACTION_PROMPT.format(message=message, context=contexto)
+    async def extract_intent(self, message: str, context: str = "general") -> dict:
+        prompt = INTENT_EXTRACTION_PROMPT.format(message=message, context=context)
         try:
             resp = await get_provider().complete(
                 messages=[{"role": "user", "content": prompt}],
@@ -1031,7 +1031,7 @@ class ConversationAgent:
         self,
         instruction: str,
         history: list[dict] | None = None,
-        contexto: str = "",
+        context: str = "",
     ) -> str:
         """Generates a response to the user with full history and context.
 
@@ -1040,7 +1040,7 @@ class ConversationAgent:
         Replaces build_reply and ask_confirmation.
         """
         history = history or []
-        system = SYSTEM_PROMPT.format(contexto=contexto or "no context available")
+        system = SYSTEM_PROMPT.format(context=context or "no context available")
         system += (
             "\n\n━━━ SYSTEM INSTRUCTION ━━━\n"
             f"{instruction}\n"
@@ -1071,7 +1071,7 @@ class ConversationAgent:
             )
             reply = resp.text or instruction
             sanitized = await _sanitize_response(reply, has_history, user_greeted)
-            return await validate_reply(sanitized, history, contexto, last_user_msg)
+            return await validate_reply(sanitized, history, context, last_user_msg)
         except Exception as e:
             logger.error("Error in speak: %s", e)
             return "Sorry, I ran into a technical issue. Please try again in a moment."
