@@ -2,7 +2,7 @@
 OpportunityRepository — investment_opportunities.
 
 Uma oportunidade é criada automaticamente após cada aprovação de empréstimo
-para repor o saldo retirado do fundo (grupo). Também pode ser criada manualmente
+para repor o saldo retirado do pool (nível). Também pode ser criada manualmente
 para captação geral de liquidez.
 
 Estados:
@@ -22,7 +22,7 @@ class OpportunityRepository:
 
     async def create(
         self,
-        group_id: int,
+        level_id: int,
         amount_needed: Decimal,
         expected_rate: Decimal,
         expires_at,
@@ -31,12 +31,12 @@ class OpportunityRepository:
         return await self._db.fetch_val(
             """
             INSERT INTO investment_opportunities
-                (group_id, debt_id, amount_needed, amount_committed,
+                (level_id, debt_id, amount_needed, amount_committed,
                  expected_rate, status, expires_at)
             VALUES ($1, $2, $3, 0, $4, 'open', $5)
             RETURNING id
             """,
-            group_id, debt_id, amount_needed, expected_rate, expires_at,
+            level_id, debt_id, amount_needed, expected_rate, expires_at,
         )
 
     async def get_by_id(self, opp_id: int):
@@ -44,29 +44,29 @@ class OpportunityRepository:
             "SELECT * FROM investment_opportunities WHERE id = $1", opp_id
         )
 
-    async def list_open(self, group_id: int | None = None, limit: int = 50) -> list:
+    async def list_open(self, level_id: int | None = None, limit: int = 50) -> list:
         """Lista oportunidades abertas ou parcialmente financiadas."""
-        if group_id:
+        if level_id:
             return await self._db.fetch_all(
                 """
-                SELECT o.*, g.name AS group_name,
+                SELECT o.*, lv.name AS level_name,
                        (o.amount_needed - o.amount_committed) AS amount_remaining
                 FROM investment_opportunities o
-                JOIN groups g ON g.id = o.group_id
-                WHERE o.group_id = $1
+                JOIN levels lv ON lv.id = o.level_id
+                WHERE o.level_id = $1
                   AND o.status IN ('open', 'partially_funded')
                   AND o.expires_at > NOW()
                 ORDER BY o.created_at DESC
                 LIMIT $2
                 """,
-                group_id, limit,
+                level_id, limit,
             )
         return await self._db.fetch_all(
             """
-            SELECT o.*, g.name AS group_name,
+            SELECT o.*, lv.name AS level_name,
                    (o.amount_needed - o.amount_committed) AS amount_remaining
             FROM investment_opportunities o
-            JOIN groups g ON g.id = o.group_id
+            JOIN levels lv ON lv.id = o.level_id
             WHERE o.status IN ('open', 'partially_funded')
               AND o.expires_at > NOW()
             ORDER BY o.created_at DESC
@@ -75,16 +75,16 @@ class OpportunityRepository:
             limit,
         )
 
-    async def list_by_group(self, group_id: int, limit: int = 100) -> list:
+    async def list_by_level(self, level_id: int, limit: int = 100) -> list:
         return await self._db.fetch_all(
             """
             SELECT *, (amount_needed - amount_committed) AS amount_remaining
             FROM investment_opportunities
-            WHERE group_id = $1
+            WHERE level_id = $1
             ORDER BY created_at DESC
             LIMIT $2
             """,
-            group_id, limit,
+            level_id, limit,
         )
 
     async def add_commitment(self, opp_id: int, amount: Decimal) -> str:

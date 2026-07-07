@@ -11,6 +11,7 @@ Tools disponíveis:
   - registrar_pagamento     : registra um pagamento e aloca via FIFO
   - consultar_limite        : mostra limite de crédito disponível
   - calcular_cotacao_taxa   : mostra a taxa estimada antes de formalizar
+  - aprovar_emprestimo      : executa aprovação de uma solicitação pendente
 """
 import json
 import logging
@@ -49,14 +50,14 @@ class SolicitarEmprestimoTool(Tool):
     description = (
         "Cria uma solicitação de empréstimo para o usuário. "
         "Use quando o usuário confirmar que quer pedir empréstimo, "
-        "informando o valor, o grupo e o plano de parcelas. "
+        "informando o valor, o nível de crédito e o plano de parcelas. "
         "Não confirma a aprovação — apenas registra a proposta."
     )
     parameters = {
         "type": "object",
         "properties": {
             "user_id":          {"type": "integer", "description": "ID do usuário solicitante"},
-            "group_id":         {"type": "integer", "description": "ID do grupo credor"},
+            "level_id":         {"type": "integer", "description": "ID do nível de crédito (1–10)"},
             "requested_amount": {"type": "number",  "description": "Valor solicitado em BRL"},
             "num_installments": {"type": "integer", "description": "Número de parcelas mensais"},
             "first_due_days":   {
@@ -65,13 +66,13 @@ class SolicitarEmprestimoTool(Tool):
                 "default": 30,
             },
         },
-        "required": ["user_id", "group_id", "requested_amount", "num_installments"],
+        "required": ["user_id", "level_id", "requested_amount", "num_installments"],
     }
 
     async def execute(
         self,
         user_id: int,
-        group_id: int,
+        level_id: int,
         requested_amount: float,
         num_installments: int,
         first_due_days: int = 30,
@@ -94,7 +95,7 @@ class SolicitarEmprestimoTool(Tool):
         try:
             request_id = await loan_repo.create_request(
                 user_id=user_id,
-                group_id=group_id,
+                level_id=level_id,
                 requested_amount=amount,
             )
 
@@ -102,7 +103,7 @@ class SolicitarEmprestimoTool(Tool):
             installment_amount = (amount / Decimal(str(num_installments))).quantize(
                 Decimal("0.01")
             )
-            # Ajuste de centavos na última parcela para fechar o total exato
+            # Ajuste de centavos na última parcela
             remainder = amount - (installment_amount * Decimal(str(num_installments - 1)))
 
             installments = []
@@ -122,7 +123,8 @@ class SolicitarEmprestimoTool(Tool):
                 f"✅ Solicitação #{request_id} criada com sucesso!\n\n"
                 f"• Valor: {_fmt_brl(amount)}\n"
                 f"• Parcelas: {num_installments}x {_fmt_brl(installment_amount)}\n"
-                f"• 1ª parcela: {first_due.strftime('%d/%m/%Y')}\n\n"
+                f"• 1ª parcela: {first_due.strftime('%d/%m/%Y')}\n"
+                f"• Nível de crédito: {level_id}\n\n"
                 f"Aguardando análise de crédito. "
                 f"Posso verificar sua taxa estimada agora se quiser! 📊"
             )
@@ -164,13 +166,13 @@ class ConsultarExtrato(Tool):
             txs = await wallet_repo.get_transactions(wallet["id"], limit=limit)
 
             type_labels = {
-                "loan_disbursement":    "💰 Empréstimo recebido",
-                "loan_repayment":       "💳 Pagamento de dívida",
-                "investment_deposit":   "📈 Depósito de investimento",
-                "investment_withdrawal":"📤 Saque de investimento",
-                "interest_payout":      "💹 Rendimento",
-                "fee":                  "⚙️ Taxa",
-                "adjustment":           "🔧 Ajuste",
+                "loan_disbursement":     "💰 Empréstimo recebido",
+                "loan_repayment":        "💳 Pagamento de dívida",
+                "investment_deposit":    "📈 Depósito de investimento",
+                "investment_withdrawal": "📤 Saque de investimento",
+                "interest_payout":       "💹 Rendimento",
+                "fee":                   "⚙️ Taxa",
+                "adjustment":            "🔧 Ajuste",
             }
 
             lines = [f"💼 *Saldo atual:* {_fmt_brl(balance)}\n\n*Últimas movimentações:*"]
@@ -293,8 +295,8 @@ class RegistrarPagamento(Tool):
             if not result.get("ok"):
                 return f"❌ Erro: {result.get('error')}"
 
-            allocs = result.get("allocations", [])
-            overpay = result.get("overpayment", Decimal("0"))
+            allocs     = result.get("allocations", [])
+            overpay    = result.get("overpayment", Decimal("0"))
             fully_paid = result.get("fully_paid", False)
 
             lines = [
@@ -327,57 +329,61 @@ class RegistrarPagamento(Tool):
 class ConsultarLimite(Tool):
     name = "consultar_limite"
     description = (
-        "Consulta o limite de crédito disponível do usuário em um grupo. "
+        "Consulta o limite de crédito disponível do usuário em um nível de crédito. "
         "Use quando o usuário perguntar quanto pode pegar emprestado."
     )
     parameters = {
         "type": "object",
         "properties": {
             "user_id":  {"type": "integer", "description": "ID do usuário"},
-            "group_id": {"type": "integer", "description": "ID do grupo credor"},
+            "level_id": {"type": "integer", "description": "ID do nível de crédito (1–10)"},
         },
-        "required": ["user_id", "group_id"],
+        "required": ["user_id", "level_id"],
     }
 
-    async def execute(self, user_id: int, group_id: int) -> str:
+    async def execute(self, user_id: int, level_id: int) -> str:
         from db.connection import get_db
         from db.repositories.credit_limits import CreditLimitRepository
         from db.repositories.loans import LoanRepository
+        from engine.scoring_engine import get_or_compute_score
 
         db = get_db()
         if not db:
             return "❌ Banco de dados indisponível."
 
         try:
-            limit_repo = CreditLimitRepository(db)
-            loan_repo  = LoanRepository(db)
+            limit_repo   = CreditLimitRepository(db)
+            loan_repo    = LoanRepository(db)
+            score        = await get_or_compute_score(db, user_id)
+            active_total = await loan_repo.active_debt_total(user_id, level_id)
+            policy       = await limit_repo.get_pool_limit(level_id)
 
-            ind = await limit_repo.get_individual_limit("user", user_id, group_id)
-            pool = await limit_repo.get_pool_limit(group_id)
-            active_total = await loan_repo.active_debt_total(user_id, group_id)
+            effective_limit, mode, pct = await limit_repo.resolve_effective_limit(
+                "user", user_id, level_id, score
+            )
 
-            if not ind and not pool:
+            if not policy and effective_limit == Decimal("0"):
                 return (
-                    "Ainda não há limite de crédito configurado para você neste grupo. "
+                    "Ainda não há limite de crédito configurado para você neste nível. "
                     "Aguarde a análise de crédito ou contate o administrador."
                 )
 
-            lines = ["💳 *Seu limite de crédito:*\n"]
-            if ind:
-                limit = Decimal(str(ind["limit_amount"]))
-                available = max(Decimal("0"), limit - active_total)
+            lines = [f"💳 *Seu limite de crédito (Nível {level_id}):*\n"]
+
+            if effective_limit is not None:
+                available = max(Decimal("0"), effective_limit - active_total)
                 lines.append(
-                    f"  Limite individual: {_fmt_brl(limit)}\n"
+                    f"  Limite individual: {_fmt_brl(effective_limit)} (modo: {mode})\n"
                     f"  Em uso: {_fmt_brl(active_total)}\n"
                     f"  *Disponível: {_fmt_brl(available)}*"
                 )
 
-            if pool:
-                max_exp = Decimal(str(pool["max_aggregate_exposure"]))
-                cur_exp = Decimal(str(pool["current_exposure_cache"]))
+            if policy:
+                max_exp = Decimal(str(policy["max_aggregate_exposure"]))
+                cur_exp = Decimal(str(policy["current_exposure_cache"]))
                 pool_available = max(Decimal("0"), max_exp - cur_exp)
                 lines.append(
-                    f"\n  Teto do grupo: {_fmt_brl(max_exp)}\n"
+                    f"\n  Teto do nível: {_fmt_brl(max_exp)}\n"
                     f"  Exposição atual: {_fmt_brl(cur_exp)}\n"
                     f"  Disponível no pool: {_fmt_brl(pool_available)}"
                 )
@@ -392,24 +398,24 @@ class CalcularCotacaoTaxa(Tool):
     name = "calcular_cotacao_taxa"
     description = (
         "Calcula e exibe a taxa de juros estimada para um empréstimo, "
-        "com base no perfil de risco do usuário e na liquidez do grupo. "
+        "com base no perfil de risco do usuário e na liquidez do nível. "
         "Use antes de formalizar a solicitação para mostrar ao usuário a taxa prevista."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "user_id":    {"type": "integer", "description": "ID do usuário"},
-            "group_id":   {"type": "integer", "description": "ID do grupo credor"},
-            "amount":     {"type": "number",  "description": "Valor desejado em BRL"},
-            "term_days":  {"type": "integer", "description": "Prazo em dias"},
+            "user_id":   {"type": "integer", "description": "ID do usuário"},
+            "level_id":  {"type": "integer", "description": "ID do nível de crédito (1–10)"},
+            "amount":    {"type": "number",  "description": "Valor desejado em BRL"},
+            "term_days": {"type": "integer", "description": "Prazo em dias"},
         },
-        "required": ["user_id", "group_id", "amount", "term_days"],
+        "required": ["user_id", "level_id", "amount", "term_days"],
     }
 
     async def execute(
         self,
         user_id: int,
-        group_id: int,
+        level_id: int,
         amount: float,
         term_days: int,
     ) -> str:
@@ -422,25 +428,23 @@ class CalcularCotacaoTaxa(Tool):
             return "❌ Banco de dados indisponível."
 
         try:
-            score = await get_or_compute_score(db, user_id)
+            score     = await get_or_compute_score(db, user_id)
             rate_repo = RateRepository(db)
-            policy = await rate_repo.get_active_policy(group_id)
+            policy    = await rate_repo.get_active_policy(level_id)
 
             if not policy:
-                return "Sem política de taxa configurada para este grupo. Contate o administrador."
+                return f"Sem política de taxa configurada para o nível {level_id}. Contate o administrador."
 
             from engine.rate_engine import (
                 _compute_risk_premium, _compute_liquidity_multiplier
             )
-            from decimal import Decimal
 
             base_rate    = Decimal(str(policy["base_borrowing_rate"]))
-            min_spread   = Decimal(str(policy["min_spread"]))
-            adj_bps      = await rate_repo.get_term_adjustment(group_id, term_days)
+            adj_bps      = await rate_repo.get_term_adjustment(level_id, term_days)
             term_adj     = Decimal(str(adj_bps)) / Decimal("10000")
             risk_premium = _compute_risk_premium(score)
 
-            liquidity = await rate_repo.get_latest_liquidity(group_id)
+            liquidity = await rate_repo.get_latest_liquidity(level_id)
             if liquidity:
                 demand = Decimal(str(liquidity["total_active_loan_demand"]))
                 supply = Decimal(str(liquidity["total_available_investment"]))
@@ -452,7 +456,6 @@ class CalcularCotacaoTaxa(Tool):
                 Decimal("0.000001")
             )
 
-            # Custo total estimado
             total_interest = (Decimal(str(amount)) * final_rate * Decimal(str(term_days)) / Decimal("30"))
             total_cost = Decimal(str(amount)) + total_interest
 
@@ -462,7 +465,7 @@ class CalcularCotacaoTaxa(Tool):
                 f"  Prazo: {term_days} dias\n"
                 f"  Taxa: {_fmt_rate(final_rate)}\n\n"
                 f"  Score de crédito: {float(score):.0f}/1000\n"
-                f"  Taxa base: {_fmt_rate(base_rate)}\n"
+                f"  Taxa base (Nível {level_id}): {_fmt_rate(base_rate)}\n"
                 f"  Prêmio de risco: {_fmt_rate(risk_premium)}\n"
                 f"  Ajuste de prazo: {adj_bps} bps\n"
                 f"  Multiplicador de liquidez: {float(liq_mult):.2f}x\n\n"
@@ -514,6 +517,7 @@ class AprovarEmprestimoTool(Tool):
             rate      = result["final_rate"]
             term_days = result["term_days"]
             n_insts   = result["installments"]
+            upgrade   = result.get("level_upgrade_candidate", False)
 
             return (
                 f"✅ *Empréstimo aprovado!*\n\n"
@@ -521,8 +525,9 @@ class AprovarEmprestimoTool(Tool):
                 f"  Dívida criada: #{debt_id}\n"
                 f"  Taxa: {_fmt_rate(rate)}\n"
                 f"  Prazo: {term_days} dias\n"
-                f"  Parcelas geradas: {n_insts}\n\n"
-                f"O valor foi creditado na carteira do usuário. "
+                f"  Parcelas geradas: {n_insts}\n"
+                + (f"\n📈 *Usuário próximo do teto do nível — candidato a upgrade!*\n" if upgrade else "")
+                + f"\nO valor foi creditado na carteira do usuário. "
                 f"Use *consultar_dividas* para ver o plano de pagamento completo."
             )
         except Exception as e:

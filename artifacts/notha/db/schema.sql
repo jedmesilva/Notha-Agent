@@ -1,5 +1,5 @@
 -- ============================================================
--- NOTHA — PostgreSQL Schema v2
+-- NOTHA — PostgreSQL Schema v3
 -- Plataforma de empréstimos e investimentos via WhatsApp
 -- Apply via Supabase SQL Editor
 -- ============================================================
@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
     nickname            VARCHAR(60),
     identity_status     VARCHAR(20) NOT NULL DEFAULT 'unverified',
         -- unverified | under_review | verified | rejected
+    current_level       SMALLINT NOT NULL DEFAULT 1,
+        -- nível de risco/crédito atual (1 = menor, 10 = maior)
     city                VARCHAR(100),
     neighborhood        VARCHAR(100),
     street              VARCHAR(200),
@@ -30,10 +32,13 @@ CREATE TABLE IF NOT EXISTS users (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_identity_status
-        CHECK (identity_status IN ('unverified', 'under_review', 'verified', 'rejected'))
+        CHECK (identity_status IN ('unverified', 'under_review', 'verified', 'rejected')),
+    CONSTRAINT chk_user_level
+        CHECK (current_level BETWEEN 1 AND 10)
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_identity_status ON users(identity_status);
+CREATE INDEX IF NOT EXISTS idx_users_level           ON users(current_level);
 
 -- 1.2 Phone numbers
 CREATE TABLE IF NOT EXISTS user_phone_numbers (
@@ -128,17 +133,17 @@ CREATE INDEX IF NOT EXISTS idx_pwm_processed_at ON processed_webhook_msgs(proces
 -- MÓDULO 2 — OPEN FINANCE (PLUGGY)
 -- ============================================================
 
--- 2.1 Pluggy connections — link entre usuário e conta bancária via Open Finance
+-- 2.1 Pluggy connections
 CREATE TABLE IF NOT EXISTS pluggy_connections (
     id                   SERIAL PRIMARY KEY,
     user_id              INT REFERENCES users(id) ON DELETE SET NULL,
     phone                VARCHAR(20) NOT NULL,
-    token                TEXT NOT NULL UNIQUE,  -- internal token (link sent via WhatsApp)
-    pluggy_item_id       TEXT,                  -- Pluggy item ID after successful connection
-    pluggy_connect_token TEXT,                  -- Pluggy connect token (short-lived)
+    token                TEXT NOT NULL UNIQUE,
+    pluggy_item_id       TEXT,
+    pluggy_connect_token TEXT,
     status               VARCHAR(30) NOT NULL DEFAULT 'pending',
         -- pending | connected | error | expired
-    connectors           JSONB,                 -- list of connected institution connectors
+    connectors           JSONB,
     error_message        TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at           TIMESTAMPTZ NOT NULL,
@@ -150,24 +155,24 @@ CREATE INDEX IF NOT EXISTS idx_pluggy_connections_phone  ON pluggy_connections(p
 CREATE INDEX IF NOT EXISTS idx_pluggy_connections_status ON pluggy_connections(status);
 CREATE INDEX IF NOT EXISTS idx_pluggy_connections_item   ON pluggy_connections(pluggy_item_id);
 
--- 2.2 Bank accounts — dados de contas bancárias obtidos via Pluggy
+-- 2.2 Bank accounts
 CREATE TABLE IF NOT EXISTS bank_accounts (
     id                   SERIAL PRIMARY KEY,
     user_id              INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     pluggy_connection_id INT NOT NULL REFERENCES pluggy_connections(id) ON DELETE CASCADE,
-    pluggy_account_id    TEXT NOT NULL UNIQUE,  -- Pluggy account ID
+    pluggy_account_id    TEXT NOT NULL UNIQUE,
     institution_name     VARCHAR(200),
-    institution_number   VARCHAR(10),           -- ISPB ou código COMPE
+    institution_number   VARCHAR(10),
     account_type         VARCHAR(30),
         -- checking | savings | credit | investment | other
     account_number       VARCHAR(30),
     branch_number        VARCHAR(10),
     owner_name           TEXT,
-    tax_number           VARCHAR(14),           -- CPF/CNPJ do titular
+    tax_number           VARCHAR(14),
     balance              NUMERIC(15,2),
     currency_code        VARCHAR(3) DEFAULT 'BRL',
-    pix_key              TEXT,                  -- chave Pix, se disponível
-    raw_data             JSONB,                 -- snapshot bruto da API Pluggy
+    pix_key              TEXT,
+    raw_data             JSONB,
     synced_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -175,13 +180,13 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
 CREATE INDEX IF NOT EXISTS idx_bank_accounts_user       ON bank_accounts(user_id);
 CREATE INDEX IF NOT EXISTS idx_bank_accounts_connection ON bank_accounts(pluggy_connection_id);
 
--- 2.3 Bank transactions cache — extrato bancário importado via Pluggy (para scoring)
+-- 2.3 Bank transactions cache
 CREATE TABLE IF NOT EXISTS bank_transactions_cache (
     id                   BIGSERIAL PRIMARY KEY,
     user_id              INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     bank_account_id      INT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
     pluggy_tx_id         TEXT NOT NULL UNIQUE,
-    amount               NUMERIC(15,2) NOT NULL,  -- positivo = crédito, negativo = débito
+    amount               NUMERIC(15,2) NOT NULL,
     type                 VARCHAR(30),
         -- credit | debit
     description          TEXT,
@@ -197,46 +202,94 @@ CREATE INDEX IF NOT EXISTS idx_bank_tx_account ON bank_transactions_cache(bank_a
 CREATE INDEX IF NOT EXISTS idx_bank_tx_date    ON bank_transactions_cache(date DESC);
 
 -- ============================================================
--- MÓDULO 3 — GRUPOS E ALOCAÇÃO DE USUÁRIOS
+-- MÓDULO 3 — NÍVEIS, SEGMENTOS E ALOCAÇÃO DE USUÁRIOS
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS groups (
-    id          SERIAL PRIMARY KEY,
-    name        VARCHAR(200) NOT NULL,
+-- 3.1 Níveis de risco/crédito (1 = menor risco/limite, 10 = maior risco/limite)
+--     Um usuário só pode estar em um nível por vez (users.current_level).
+--     Cada nível possui políticas financeiras definidas em level_policies.
+CREATE TABLE IF NOT EXISTS levels (
+    id          SMALLINT PRIMARY KEY CHECK (id BETWEEN 1 AND 10),
+    name        VARCHAR(100) NOT NULL,
     description TEXT,
     status      VARCHAR(20) NOT NULL DEFAULT 'active',
         -- active | inactive
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Junction com histórico: left_at = NULL significa membro atual
-CREATE TABLE IF NOT EXISTS user_groups (
-    id                SERIAL PRIMARY KEY,
-    user_id           INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    group_id          INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    joined_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    left_at           TIMESTAMPTZ,  -- NULL = alocação ativa
-    allocation_reason TEXT
+-- 3.2 Histórico de transições de nível do usuário
+--     Toda mudança de nível é registrada aqui (imutável — append only).
+CREATE TABLE IF NOT EXISTS user_level_history (
+    id            BIGSERIAL PRIMARY KEY,
+    user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    from_level    SMALLINT REFERENCES levels(id),
+    to_level      SMALLINT NOT NULL REFERENCES levels(id),
+    trigger_score NUMERIC(6,2),
+    reason        TEXT,
+    changed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    changed_by    TEXT NOT NULL DEFAULT 'system'
 );
 
-CREATE INDEX IF NOT EXISTS idx_user_groups_user    ON user_groups(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_groups_group   ON user_groups(group_id);
-CREATE INDEX IF NOT EXISTS idx_user_groups_active  ON user_groups(user_id, group_id) WHERE left_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_level_history_user    ON user_level_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_level_history_changed ON user_level_history(user_id, changed_at DESC);
+
+-- 3.3 Segmentos — agrupam usuários com parâmetros em comum.
+--     Um usuário pode estar em múltiplos segmentos ao mesmo tempo.
+--     Segmentos NÃO controlam limite financeiro (isso é papel do nível).
+--     Segmentos aplicam ajustes e contexto sobre as políticas do nível.
+CREATE TABLE IF NOT EXISTS segments (
+    id             SERIAL PRIMARY KEY,
+    name           VARCHAR(200) NOT NULL,
+    description    TEXT,
+    criteria_type  VARCHAR(20) NOT NULL DEFAULT 'manual',
+        -- manual | auto
+    status         VARCHAR(20) NOT NULL DEFAULT 'active',
+        -- active | inactive
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 3.4 Parâmetros de segmento (key-value flexíveis por segmento)
+--     Ex: rate_adjustment_bps = -50, region = "nordeste", profile = "agricultor"
+CREATE TABLE IF NOT EXISTS segment_parameters (
+    id           SERIAL PRIMARY KEY,
+    segment_id   INT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+    key          VARCHAR(100) NOT NULL,
+    value        TEXT NOT NULL,
+    value_type   VARCHAR(20) NOT NULL DEFAULT 'string',
+        -- string | number | boolean | json
+    UNIQUE (segment_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_segment_parameters_segment ON segment_parameters(segment_id);
+
+-- 3.5 Membros de segmento (M×N — usuário pode estar em vários segmentos)
+CREATE TABLE IF NOT EXISTS user_segments (
+    id         SERIAL PRIMARY KEY,
+    user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    segment_id INT NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+    joined_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reason     TEXT,
+    UNIQUE (user_id, segment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_segments_user    ON user_segments(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_segments_segment ON user_segments(segment_id);
 
 -- ============================================================
 -- MÓDULO 4 — WALLETS (CARTEIRAS)
 -- ============================================================
 
--- Polimórfico: owner_type = 'user' | 'group' | 'platform'
+-- Polimórfico: owner_type = 'user' | 'level' | 'platform'
+-- Cada nível tem sua própria carteira (pool de empréstimos).
 CREATE TABLE IF NOT EXISTS wallets (
     id            SERIAL PRIMARY KEY,
     owner_type    VARCHAR(20) NOT NULL,
-        -- user | group | platform
+        -- user | level | platform
     owner_id      INT NOT NULL,
     balance_cache NUMERIC(15,2) NOT NULL DEFAULT 0,
         -- cache — fonte de verdade é SUM(wallet_transactions.amount)
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_wallet_owner_type CHECK (owner_type IN ('user', 'group', 'platform')),
+    CONSTRAINT chk_wallet_owner_type CHECK (owner_type IN ('user', 'level', 'platform')),
     CONSTRAINT uq_wallet_owner UNIQUE (owner_type, owner_id)
 );
 
@@ -357,7 +410,7 @@ CREATE TABLE IF NOT EXISTS user_risk_scores (
     user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     model_id      INT NOT NULL REFERENCES risk_score_models(id),
     score         NUMERIC(7,4) NOT NULL,
-    factors_json  JSONB NOT NULL DEFAULT '{}',  -- snapshot de cada input usado
+    factors_json  JSONB NOT NULL DEFAULT '{}',
     calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     valid_until   TIMESTAMPTZ
 );
@@ -366,119 +419,85 @@ CREATE INDEX IF NOT EXISTS idx_risk_scores_user       ON user_risk_scores(user_i
 CREATE INDEX IF NOT EXISTS idx_risk_scores_calculated ON user_risk_scores(user_id, calculated_at DESC);
 
 -- ============================================================
--- MÓDULO 6 — POLÍTICAS E TAXAS DE JUROS
+-- MÓDULO 6 — POLÍTICAS DE NÍVEL (TAXAS E LIMITES)
 -- ============================================================
 
--- 6.1 Política base por grupo (muda raramente)
-CREATE TABLE IF NOT EXISTS group_rate_policies (
+-- 6.1 Política financeira por nível (substitui group_rate_policies + group_pool_limits)
+--     Cada nível tem uma política ativa (a mais recente por effective_from).
+--     Contém: taxas, spread, fórmula de ajuste por prazo e limites de exposição.
+CREATE TABLE IF NOT EXISTS level_policies (
     id                        SERIAL PRIMARY KEY,
-    group_id                  INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    level_id                  SMALLINT NOT NULL REFERENCES levels(id),
+    -- Taxas base
     base_borrowing_rate       NUMERIC(8,6) NOT NULL,  -- taxa base cobrada de tomadores
     base_investment_rate      NUMERIC(8,6) NOT NULL,  -- taxa base paga a investidores
     min_spread                NUMERIC(8,6) NOT NULL,  -- margem mínima obrigatória
     spread_violation_strategy VARCHAR(30) NOT NULL DEFAULT 'reject_investment',
         -- reject_investment | raise_borrowing_rate
+    -- Fórmula de ajuste por prazo
+    term_rate_formula         VARCHAR(20) NOT NULL DEFAULT 'bands',
+        -- bands | linear | log | sqrt
+    term_rate_base_bps        NUMERIC(8,2),           -- base para fórmulas linear/log/sqrt
+    term_rate_scale           NUMERIC(8,4),           -- coeficiente de escala
+    -- Limites de exposição do pool deste nível
+    max_aggregate_exposure    NUMERIC(15,2) NOT NULL, -- exposição total máxima do nível
+    max_per_user_limit        NUMERIC(15,2),          -- teto máximo por usuário individual
+    current_exposure_cache    NUMERIC(15,2) NOT NULL DEFAULT 0,
+        -- cache — reconciliável via SUM(debts.principal) ativas no nível
+    -- Limite individual padrão (fallback quando não há credit_limit individual)
+    default_individual_limit  NUMERIC(15,2),
     effective_from            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_group_rate_policies_group ON group_rate_policies(group_id);
+CREATE INDEX IF NOT EXISTS idx_level_policies_level ON level_policies(level_id);
 
--- 6.2 Curva de ajuste por prazo
-CREATE TABLE IF NOT EXISTS term_rate_curve (
+-- 6.2 Curva de ajuste por prazo por nível (usada quando term_rate_formula = 'bands')
+CREATE TABLE IF NOT EXISTS level_term_curve (
     id             SERIAL PRIMARY KEY,
-    group_id       INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    level_id       SMALLINT NOT NULL REFERENCES levels(id),
     min_term_days  INT NOT NULL,
     max_term_days  INT NOT NULL,
     adjustment_bps INT NOT NULL DEFAULT 0  -- basis points (100 bps = 1%)
 );
 
-CREATE INDEX IF NOT EXISTS idx_term_rate_curve_group ON term_rate_curve(group_id);
+CREATE INDEX IF NOT EXISTS idx_level_term_curve_level ON level_term_curve(level_id);
 
--- 6.3 Snapshot de liquidez (atualizado por job periódico a cada 5–15 min)
+-- 6.3 Snapshot de liquidez por nível (atualizado por job periódico a cada 5–15 min)
 CREATE TABLE IF NOT EXISTS liquidity_snapshots (
     id                           SERIAL PRIMARY KEY,
-    group_id                     INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    level_id                     SMALLINT NOT NULL REFERENCES levels(id),
     total_available_investment   NUMERIC(15,2) NOT NULL DEFAULT 0,
     total_active_loan_demand     NUMERIC(15,2) NOT NULL DEFAULT 0,
     captured_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_liquidity_snapshots_group ON liquidity_snapshots(group_id);
+CREATE INDEX IF NOT EXISTS idx_liquidity_snapshots_level ON liquidity_snapshots(level_id);
 
 -- ============================================================
--- MÓDULO 7 — LIMITES DE CRÉDITO
+-- MÓDULO 7 — LIMITES DE CRÉDITO INDIVIDUAIS
 -- ============================================================
 
--- Tipo A: limite individual (borrower → group)
+-- Limite individual por usuário no nível credor.
 -- mode='fixed'      → usa limit_amount diretamente
--- mode='percentage' → usa limit_percentage × group_pool_limits.max_per_user_limit
--- mode='score_band' → resolve dinamicamente via score_limit_bands (padrão p/ novos usuários)
+-- mode='percentage' → usa limit_percentage × level_policies.max_per_user_limit
+-- mode='score_band' → resolve via scoring (padrão para novos usuários)
 CREATE TABLE IF NOT EXISTS credit_limits (
     id               SERIAL PRIMARY KEY,
-    borrower_type    VARCHAR(20) NOT NULL,
-        -- user | group
+    borrower_type    VARCHAR(20) NOT NULL DEFAULT 'user',
+        -- user (expansível futuramente)
     borrower_id      INT NOT NULL,
-    lender_group_id  INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    mode             VARCHAR(20) NOT NULL DEFAULT 'fixed',
+    lender_level_id  SMALLINT NOT NULL REFERENCES levels(id),
+    mode             VARCHAR(20) NOT NULL DEFAULT 'score_band',
         -- fixed | percentage | score_band
     limit_amount     NUMERIC(15,2),          -- obrigatório se mode='fixed'
     limit_percentage NUMERIC(5,4),           -- obrigatório se mode='percentage'
     effective_from   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_credit_limit_borrower_type CHECK (borrower_type IN ('user', 'group')),
+    CONSTRAINT chk_credit_limit_borrower_type CHECK (borrower_type IN ('user')),
     CONSTRAINT chk_credit_limit_mode          CHECK (mode IN ('fixed', 'percentage', 'score_band'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_credit_limits_borrower ON credit_limits(borrower_type, borrower_id);
-CREATE INDEX IF NOT EXISTS idx_credit_limits_group    ON credit_limits(lender_group_id);
-
--- Faixas de score → percentual do teto por usuário (score_limit_bands)
--- Permite configurar progressão automática por grupo:
---   ex: score 0–300 → 20%, 301–500 → 35%, ..., 851–1000 → 100% (upgrade candidate)
-CREATE TABLE IF NOT EXISTS score_limit_bands (
-    id               SERIAL PRIMARY KEY,
-    group_id         INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    min_score        NUMERIC(6,2) NOT NULL,
-    max_score        NUMERIC(6,2) NOT NULL,
-    limit_percentage NUMERIC(5,4) NOT NULL,  -- 0.0 a 1.0
-    label            VARCHAR(60),             -- ex: 'Iniciante', 'Bronze', 'Gold'
-    CONSTRAINT chk_slb_range CHECK (min_score >= 0 AND max_score <= 1000 AND min_score < max_score),
-    CONSTRAINT chk_slb_pct   CHECK (limit_percentage > 0 AND limit_percentage <= 1)
-);
-
-CREATE INDEX IF NOT EXISTS idx_score_limit_bands_group ON score_limit_bands(group_id);
-
--- Tipo B: exposição agregada do grupo credor
-CREATE TABLE IF NOT EXISTS group_pool_limits (
-    id                       SERIAL PRIMARY KEY,
-    group_id                 INT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    max_aggregate_exposure   NUMERIC(15,2) NOT NULL,
-    max_per_user_limit       NUMERIC(15,2),
-        -- teto máximo por usuário individual neste grupo
-        -- base de cálculo de score_limit_bands: effective = pct × max_per_user_limit
-        -- ao atingir 100%, usuário é candidato a upgrade de grupo
-    current_exposure_cache   NUMERIC(15,2) NOT NULL DEFAULT 0,
-        -- cache — reconciliável via SUM(debts.principal) ativas
-    effective_from           TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_group_pool_limits_group ON group_pool_limits(group_id);
-
--- Histórico de sugestões de upgrade de grupo
--- Gerado automaticamente ao atingir UPGRADE_TRIGGER_PCT (95%) do max_per_user_limit
-CREATE TABLE IF NOT EXISTS group_upgrade_events (
-    id            BIGSERIAL PRIMARY KEY,
-    user_id       INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    from_group_id INT REFERENCES groups(id),
-    to_group_id   INT REFERENCES groups(id),
-    trigger_score NUMERIC(6,2),
-    trigger_pct   NUMERIC(5,4),
-    status        VARCHAR(20) NOT NULL DEFAULT 'suggested',
-        -- suggested | accepted | rejected
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    resolved_at   TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_upgrade_events_user ON group_upgrade_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_limits_level    ON credit_limits(lender_level_id);
 
 -- ============================================================
 -- MÓDULO 8 — SOLICITAÇÃO E PROPOSTA DE EMPRÉSTIMO
@@ -487,7 +506,7 @@ CREATE INDEX IF NOT EXISTS idx_upgrade_events_user ON group_upgrade_events(user_
 CREATE TABLE IF NOT EXISTS loan_requests (
     id               SERIAL PRIMARY KEY,
     user_id          INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    group_id         INT NOT NULL REFERENCES groups(id),
+    level_id         SMALLINT NOT NULL REFERENCES levels(id),
     requested_amount NUMERIC(15,2) NOT NULL,
     status           VARCHAR(20) NOT NULL DEFAULT 'pending',
         -- pending | approved | rejected | expired
@@ -498,10 +517,10 @@ CREATE TABLE IF NOT EXISTS loan_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_loan_requests_user   ON loan_requests(user_id);
-CREATE INDEX IF NOT EXISTS idx_loan_requests_group  ON loan_requests(group_id);
+CREATE INDEX IF NOT EXISTS idx_loan_requests_level  ON loan_requests(level_id);
 CREATE INDEX IF NOT EXISTS idx_loan_requests_status ON loan_requests(status);
 
--- Plano proposto pelo usuário (separado de debt_installments — se rejeitado, não polui a realidade)
+-- Plano proposto pelo usuário
 CREATE TABLE IF NOT EXISTS proposed_installments (
     id                 SERIAL PRIMARY KEY,
     loan_request_id    INT NOT NULL REFERENCES loan_requests(id) ON DELETE CASCADE,
@@ -535,7 +554,7 @@ CREATE INDEX IF NOT EXISTS idx_loan_rate_quotes_request ON loan_rate_quotes(loan
 
 CREATE TABLE IF NOT EXISTS investment_rate_quotes (
     id                   SERIAL PRIMARY KEY,
-    investment_id        INT,  -- FK adicionada quando tabela investments for criada
+    investment_id        INT,
     base_rate            NUMERIC(8,6) NOT NULL,
     liquidity_multiplier NUMERIC(8,6) NOT NULL DEFAULT 1,
     final_rate           NUMERIC(8,6) NOT NULL,
@@ -549,11 +568,10 @@ CREATE TABLE IF NOT EXISTS investment_rate_quotes (
 CREATE TABLE IF NOT EXISTS debts (
     id                      SERIAL PRIMARY KEY,
     loan_request_id         INT NOT NULL REFERENCES loan_requests(id),
-    from_wallet_id          INT NOT NULL REFERENCES wallets(id),  -- carteira credora
-    to_wallet_id            INT NOT NULL REFERENCES wallets(id),  -- carteira devedora
+    from_wallet_id          INT NOT NULL REFERENCES wallets(id),
+    to_wallet_id            INT NOT NULL REFERENCES wallets(id),
     principal               NUMERIC(15,2) NOT NULL,
     interest_rate_applied   NUMERIC(8,6) NOT NULL,
-        -- SNAPSHOT congelado da cotação final — imutável após concessão
     term_days               INT NOT NULL,
     status                  VARCHAR(20) NOT NULL DEFAULT 'active',
         -- active | paid_off | defaulted | renegotiated
@@ -573,7 +591,7 @@ CREATE TABLE IF NOT EXISTS debt_installments (
     sequence         INT NOT NULL,
     due_date         DATE NOT NULL,
     amount_due       NUMERIC(15,2) NOT NULL,
-    remaining_amount NUMERIC(15,2) NOT NULL,  -- amount_due - soma das alocações recebidas
+    remaining_amount NUMERIC(15,2) NOT NULL,
     status           VARCHAR(20) NOT NULL DEFAULT 'pending',
         -- pending | partially_paid | paid | overdue
     CONSTRAINT chk_installment_status
@@ -585,18 +603,17 @@ CREATE INDEX IF NOT EXISTS idx_debt_installments_status ON debt_installments(sta
 CREATE INDEX IF NOT EXISTS idx_debt_installments_due    ON debt_installments(due_date) WHERE status != 'paid';
 
 CREATE TABLE IF NOT EXISTS payments (
-    id             SERIAL PRIMARY KEY,
-    debt_id        INT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
-    paid_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    amount_paid    NUMERIC(15,2) NOT NULL,
-    payment_method VARCHAR(30) NOT NULL DEFAULT 'pix',
+    id              SERIAL PRIMARY KEY,
+    debt_id         INT NOT NULL REFERENCES debts(id) ON DELETE CASCADE,
+    paid_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    amount_paid     NUMERIC(15,2) NOT NULL,
+    payment_method  VARCHAR(30) NOT NULL DEFAULT 'pix',
     asaas_charge_id TEXT,
-    notes          TEXT
+    notes           TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_debt ON payments(debt_id);
 
--- Resolve pagamentos parciais, totais e antecipados
 CREATE TABLE IF NOT EXISTS payment_allocations (
     id               SERIAL PRIMARY KEY,
     payment_id       INT NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
@@ -612,12 +629,11 @@ CREATE INDEX IF NOT EXISTS idx_payment_allocations_installment ON payment_alloca
 -- MÓDULO 10b — INVESTIMENTOS E OPORTUNIDADES DE CAPTAÇÃO
 -- ============================================================
 
--- Oportunidade criada automaticamente após cada aprovação de empréstimo
--- para repor o saldo retirado do fundo. Também criada manualmente.
--- debt_id → qual dívida esta captação está financiando (nullable para captações gerais)
+-- Oportunidade de captação — criada após aprovação de empréstimo
+-- para repor o saldo retirado do nível. Também criada manualmente.
 CREATE TABLE IF NOT EXISTS investment_opportunities (
     id               BIGSERIAL PRIMARY KEY,
-    group_id         INT           NOT NULL REFERENCES groups(id),
+    level_id         SMALLINT      NOT NULL REFERENCES levels(id),
     debt_id          BIGINT        REFERENCES debts(id),
         -- NULL = captação geral de liquidez, sem empréstimo subjacente
     amount_needed    NUMERIC(15,2) NOT NULL,
@@ -633,42 +649,36 @@ CREATE TABLE IF NOT EXISTS investment_opportunities (
         CHECK (amount_committed <= amount_needed)
 );
 
-CREATE INDEX IF NOT EXISTS idx_investment_opp_group  ON investment_opportunities(group_id);
+CREATE INDEX IF NOT EXISTS idx_investment_opp_level  ON investment_opportunities(level_id);
 CREATE INDEX IF NOT EXISTS idx_investment_opp_debt   ON investment_opportunities(debt_id) WHERE debt_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_investment_opp_status ON investment_opportunities(status);
 
--- Posição de um investidor em um fundo.
--- opportunity_id — oportunidade que motivou o investimento (nullable: aportes diretos)
--- debt_id        — FK direta à dívida coberta (1 JOIN); propagado de opportunity.debt_id
---                  Persiste mesmo se a oportunidade for cancelada/arquivada.
+-- Posição de um investidor em um nível/fundo.
 CREATE TABLE IF NOT EXISTS investments (
     id               BIGSERIAL PRIMARY KEY,
     investor_user_id INT           NOT NULL REFERENCES users(id),
-    group_id         INT           NOT NULL REFERENCES groups(id),
+    level_id         SMALLINT      NOT NULL REFERENCES levels(id),
     opportunity_id   BIGINT        REFERENCES investment_opportunities(id),
     debt_id          BIGINT        REFERENCES debts(id),
-        -- Redundância deliberada: permite rastrear cobertura de dívida em 1 JOIN
     amount_invested  NUMERIC(15,2) NOT NULL,
     rate_agreed      NUMERIC(8,6)  NOT NULL,
     status           VARCHAR(20)   NOT NULL DEFAULT 'active',
         -- active | matured | withdrawn
     invested_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     maturity_date    DATE,
-    maturity_at      TIMESTAMPTZ,  -- precisão de minutos/horas para investimentos curtos
+    maturity_at      TIMESTAMPTZ,
     withdrawn_at     TIMESTAMPTZ,
     CONSTRAINT chk_investment_status
         CHECK (status IN ('active','matured','withdrawn'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_investments_investor ON investments(investor_user_id);
-CREATE INDEX IF NOT EXISTS idx_investments_group    ON investments(group_id);
+CREATE INDEX IF NOT EXISTS idx_investments_level    ON investments(level_id);
 CREATE INDEX IF NOT EXISTS idx_investments_opp      ON investments(opportunity_id) WHERE opportunity_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_investments_debt     ON investments(debt_id) WHERE debt_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_investments_status   ON investments(status);
 
--- Payout único no vencimento do investimento.
--- scheduled_at (TIMESTAMPTZ) tem prioridade sobre scheduled_date (DATE) para
--- investimentos de curto prazo. Juros simples: I = P × r × t.
+-- Payout único no vencimento do investimento (juros simples: I = P × r × t).
 CREATE TABLE IF NOT EXISTS investment_payouts (
     id             BIGSERIAL PRIMARY KEY,
     investment_id  BIGINT        NOT NULL REFERENCES investments(id) ON DELETE CASCADE,
@@ -690,13 +700,12 @@ CREATE INDEX IF NOT EXISTS idx_investment_payouts_due_at
     ON investment_payouts(scheduled_at) WHERE status = 'scheduled' AND scheduled_at IS NOT NULL;
 
 -- Ofertas de investimento enviadas a investidores específicos via WhatsApp.
--- Restrição parcial: apenas UMA oferta PENDING por (opportunity, user) — permite
--- re-oferta ao mesmo investidor após decline/expire.
+-- Restrição parcial: apenas UMA oferta PENDING por (opportunity, user).
 CREATE TABLE IF NOT EXISTS investment_offers (
     id               SERIAL PRIMARY KEY,
     opportunity_id   INT           NOT NULL REFERENCES investment_opportunities(id),
     user_id          INT           NOT NULL REFERENCES users(id),
-    group_id         INT           NOT NULL,
+    level_id         SMALLINT      NOT NULL REFERENCES levels(id),
     suggested_amount NUMERIC(15,2) NOT NULL,
     maturity_at      TIMESTAMPTZ   NOT NULL,
     status           VARCHAR(20)   NOT NULL DEFAULT 'pending',
@@ -716,13 +725,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_offers_pending_unique
 CREATE INDEX IF NOT EXISTS idx_investment_offers_lookup
     ON investment_offers(user_id, status, expires_at);
 
--- Perfis de preferência de investidor (base do sistema de matching automático).
--- Métricas históricas (avg_investment_amount, etc.) atualizadas por job periódico (1h).
+-- Perfis de preferência de investidor.
+-- level_id = NULL → aceita qualquer nível.
 CREATE TABLE IF NOT EXISTS investor_profiles (
     id                      SERIAL PRIMARY KEY,
     user_id                 INT           NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-    group_id                INT           REFERENCES groups(id) ON DELETE SET NULL,
-        -- NULL = aceita qualquer grupo
+    level_id                SMALLINT      REFERENCES levels(id) ON DELETE SET NULL,
+        -- NULL = aceita qualquer nível
     risk_tolerance          VARCHAR(20)   NOT NULL DEFAULT 'moderate',
         -- conservative | moderate | aggressive
     min_investment_amount   NUMERIC(15,2) NOT NULL DEFAULT 50,
@@ -731,7 +740,6 @@ CREATE TABLE IF NOT EXISTS investor_profiles (
     max_term_days           INT           NOT NULL DEFAULT 365,
     auto_invest             BOOLEAN       NOT NULL DEFAULT FALSE,
     is_active               BOOLEAN       NOT NULL DEFAULT TRUE,
-    -- Métricas históricas (calculadas por job)
     avg_investment_amount   NUMERIC(15,2),
     avg_term_days           INT,
     total_invested_lifetime NUMERIC(15,2) NOT NULL DEFAULT 0,
@@ -743,7 +751,7 @@ CREATE TABLE IF NOT EXISTS investor_profiles (
         CHECK (risk_tolerance IN ('conservative','moderate','aggressive'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_investor_profiles_active ON investor_profiles(is_active, group_id);
+CREATE INDEX IF NOT EXISTS idx_investor_profiles_active ON investor_profiles(is_active, level_id);
 
 -- ============================================================
 -- MÓDULO 11 — INFRAESTRUTURA DO AGENTE CONVERSACIONAL
@@ -836,7 +844,7 @@ SELECT
     d.loan_request_id,
     d.interest_rate_applied,
     lr.user_id,
-    lr.group_id
+    lr.level_id
 FROM debt_installments di
 JOIN debts d ON d.id = di.debt_id
 JOIN loan_requests lr ON lr.id = d.loan_request_id
@@ -869,6 +877,25 @@ ON CONFLICT DO NOTHING;
 INSERT INTO risk_score_models (version, description, active) VALUES
 ('v1.0', 'Scorecard ponderado inicial — comportamental + geográfico', TRUE)
 ON CONFLICT DO NOTHING;
+
+-- ============================================================
+-- SEED: levels (1 a 10)
+-- ============================================================
+
+INSERT INTO levels (id, name, description) VALUES
+(1,  'Nível 1 — Iniciante',        'Limite mínimo de crédito. Usuários sem histórico.'),
+(2,  'Nível 2 — Básico',           'Pequeno histórico positivo. Risco elevado.'),
+(3,  'Nível 3 — Em desenvolvimento','Histórico inicial construído. Risco moderado-alto.'),
+(4,  'Nível 4 — Regular',          'Comportamento consistente. Risco moderado.'),
+(5,  'Nível 5 — Intermediário',    'Bom histórico de pagamentos. Risco mediano.'),
+(6,  'Nível 6 — Confiável',        'Histórico sólido. Risco baixo-moderado.'),
+(7,  'Nível 7 — Avançado',         'Excelente histórico. Risco baixo.'),
+(8,  'Nível 8 — Premium',          'Histórico excepcional. Risco muito baixo.'),
+(9,  'Nível 9 — Elite',            'Top performers. Risco mínimo.'),
+(10, 'Nível 10 — Máximo',          'Perfil máximo de confiança e capacidade.')
+ON CONFLICT (id) DO UPDATE SET
+    name        = EXCLUDED.name,
+    description = EXCLUDED.description;
 
 -- ============================================================
 -- Fim do schema

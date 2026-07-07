@@ -295,7 +295,7 @@ async def _migrate_investor_profile_tables() -> None:
             CREATE TABLE IF NOT EXISTS investor_profiles (
                 id                      SERIAL PRIMARY KEY,
                 user_id                 INT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-                group_id                INT REFERENCES groups(id) ON DELETE SET NULL,
+                level_id                INT REFERENCES levels(id) ON DELETE SET NULL,
                 risk_tolerance          VARCHAR(20)    NOT NULL DEFAULT 'moderate',
                 min_investment_amount   NUMERIC(15,2)  NOT NULL DEFAULT 50,
                 max_investment_amount   NUMERIC(15,2),
@@ -319,7 +319,7 @@ async def _migrate_investor_profile_tables() -> None:
                 id               SERIAL PRIMARY KEY,
                 opportunity_id   INT           NOT NULL REFERENCES investment_opportunities(id),
                 user_id          INT           NOT NULL REFERENCES users(id),
-                group_id         INT           NOT NULL,
+                level_id         INT           NOT NULL,
                 suggested_amount NUMERIC(15,2) NOT NULL,
                 maturity_at      TIMESTAMPTZ   NOT NULL,
                 status           VARCHAR(20)   NOT NULL DEFAULT 'pending',
@@ -341,7 +341,7 @@ async def _migrate_investor_profile_tables() -> None:
 
         _idx_ddls = [
             ("CREATE INDEX IF NOT EXISTS idx_investor_profiles_active "
-             "ON investor_profiles(is_active, group_id)"),
+             "ON investor_profiles(is_active, level_id)"),
 
             ("CREATE INDEX IF NOT EXISTS idx_investment_offers_lookup "
              "ON investment_offers(user_id, status, expires_at)"),
@@ -383,7 +383,7 @@ async def _migrate_financial_schema_extensions() -> None:
 
     Migrações seguras (IF NOT EXISTS / idempotentes):
 
-    group_rate_policies:
+    level_policies:
       - term_rate_formula      VARCHAR(20)  DEFAULT 'bands'
         Formula de ajuste por prazo: 'bands' (tabela), 'linear', 'log', 'sqrt'.
       - term_rate_base_bps     NUMERIC(10,2) DEFAULT 0
@@ -405,17 +405,20 @@ async def _migrate_financial_schema_extensions() -> None:
     if not pool:
         return
     async with pool.acquire() as conn:
-        # group_rate_policies — suporte a fórmulas de prazo + limite default
+        # level_policies — suporte a fórmulas de prazo + limite default
         for col, definition in [
             ("term_rate_formula",       "VARCHAR(20) NOT NULL DEFAULT 'bands'"),
             ("term_rate_base_bps",      "NUMERIC(10,2) NOT NULL DEFAULT 0"),
             ("term_rate_scale",         "NUMERIC(10,6) NOT NULL DEFAULT 0"),
             ("default_individual_limit","NUMERIC(15,2)"),
         ]:
-            await conn.execute(
-                f"ALTER TABLE group_rate_policies "
-                f"ADD COLUMN IF NOT EXISTS {col} {definition}"
-            )
+            try:
+                await conn.execute(
+                    f"ALTER TABLE level_policies "
+                    f"ADD COLUMN IF NOT EXISTS {col} {definition}"
+                )
+            except Exception:
+                pass  # tabela pode não existir em envs antigos
 
         # investments — vencimento de alta precisão
         await conn.execute(
@@ -464,6 +467,52 @@ async def _migrate_turn_state_table() -> None:
     logger.info("Turn state table ready.")
 
 
+async def _migrate_level_upgrade_suggestions() -> None:
+    """
+    Cria a tabela de sugestões de upgrade de nível, se não existir.
+    Uma sugestão por usuário (status='suggested') — constraint parcial.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS level_upgrade_suggestions (
+                id                  SERIAL PRIMARY KEY,
+                user_id             INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                from_level_id       SMALLINT NOT NULL REFERENCES levels(id),
+                to_level_id         SMALLINT NOT NULL REFERENCES levels(id),
+                trigger_score       NUMERIC(6,2),
+                reason              TEXT,
+                status              VARCHAR(20) NOT NULL DEFAULT 'suggested',
+                    -- suggested | accepted | rejected
+                suggested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                resolved_at         TIMESTAMPTZ,
+                resolved_to_level_id SMALLINT REFERENCES levels(id)
+            )
+            """
+        )
+        import asyncpg as _asyncpg
+        try:
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_level_upgrade_suggestions_status "
+                "ON level_upgrade_suggestions(status, suggested_at DESC)"
+            )
+        except (_asyncpg.exceptions.UniqueViolationError,
+                _asyncpg.exceptions.DuplicateObjectError):
+            pass
+        try:
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_level_upgrade_suggestions_pending "
+                "ON level_upgrade_suggestions(user_id) WHERE status = 'suggested'"
+            )
+        except (_asyncpg.exceptions.UniqueViolationError,
+                _asyncpg.exceptions.DuplicateObjectError):
+            pass
+    logger.info("Level upgrade suggestions table ready.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
@@ -477,6 +526,7 @@ async def lifespan(app: FastAPI):
     await _migrate_turn_state_table()
     await _migrate_financial_schema_extensions()
     await _migrate_investor_profile_tables()
+    await _migrate_level_upgrade_suggestions()
     await _migrate_debt_id_on_investments()
 
     # Pluggy — Open Finance
@@ -1136,10 +1186,10 @@ async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> d
 # ---------------------------------------------------------------------------
 
 @app.get("/oportunidades")
-async def listar_oportunidades_endpoint(group_id: int | None = None, limit: int = 20) -> dict:
+async def listar_oportunidades_endpoint(level_id: int | None = None, limit: int = 20) -> dict:
     """
     Lista oportunidades de investimento abertas.
-    Filtro opcional: ?group_id=1
+    Filtro opcional: ?level_id=1
     """
     from db.connection import get_db
     from db.repositories.opportunities import OpportunityRepository
@@ -1147,7 +1197,7 @@ async def listar_oportunidades_endpoint(group_id: int | None = None, limit: int 
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    opps = await OpportunityRepository(db).list_open(group_id=group_id, limit=limit)
+    opps = await OpportunityRepository(db).list_open(level_id=level_id, limit=limit)
     return {
         "oportunidades": [dict(o) for o in opps],
         "total": len(opps),
@@ -1231,10 +1281,10 @@ async def aceitar_investimento(body: InvestirBody) -> dict:
 
 
 @app.get("/investimentos/{user_id}")
-async def investimentos_do_usuario(user_id: int, group_id: int | None = None) -> dict:
+async def investimentos_do_usuario(user_id: int, level_id: int | None = None) -> dict:
     """
     Posição consolidada de um investidor.
-    ?group_id=1 filtra por grupo específico.
+    ?level_id=1 filtra por nível específico.
     """
     from db.connection import get_db
     from db.repositories.investments import InvestmentRepository
@@ -1243,22 +1293,22 @@ async def investimentos_do_usuario(user_id: int, group_id: int | None = None) ->
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
     inv_repo = InvestmentRepository(db)
-    if group_id:
-        position = await inv_repo.get_investor_position(user_id, group_id)
+    if level_id:
+        position = await inv_repo.get_investor_position(user_id, level_id)
         active   = await inv_repo.list_by_investor(user_id, status="active")
         return {
-            "user_id":  user_id,
-            "group_id": group_id,
-            "position": position,
+            "user_id":     user_id,
+            "level_id":    level_id,
+            "position":    position,
             "investments": [dict(i) for i in active],
         }
 
-    # Sem filtro de grupo: lista todos os investimentos
+    # Sem filtro de nível: lista todos os investimentos
     all_inv = await inv_repo.list_by_investor(user_id)
     return {
-        "user_id": user_id,
+        "user_id":     user_id,
         "investments": [dict(i) for i in all_inv],
-        "total": len(all_inv),
+        "total":       len(all_inv),
     }
 
 
@@ -1460,7 +1510,7 @@ async def criar_oportunidade_manual(payload: dict) -> dict:
     Útil para captação geral de liquidez do fundo.
 
     Body: {
-      "group_id": 1,
+      "level_id": 1,
       "amount_needed": 10000.00,
       "ttl_days": 30
     }
@@ -1472,31 +1522,31 @@ async def criar_oportunidade_manual(payload: dict) -> dict:
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    required = ["group_id", "amount_needed"]
+    required = ["level_id", "amount_needed"]
     missing = [f for f in required if f not in payload]
     if missing:
         raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
 
     result = await create_opportunity(
         db=db,
-        group_id=int(payload["group_id"]),
+        level_id=int(payload["level_id"]),
         amount_needed=Decimal(str(payload["amount_needed"])),
         ttl_days=int(payload.get("ttl_days", 30)),
     )
     return {"ok": True, **result}
 
 
-@app.get("/admin/grupos/{group_id}/oportunidades")
-async def oportunidades_do_grupo(group_id: int, limit: int = 50) -> dict:
-    """Lista todas as oportunidades de um grupo (todos os status)."""
+@app.get("/admin/niveis/{level_id}/oportunidades")
+async def oportunidades_do_nivel(level_id: int, limit: int = 50) -> dict:
+    """Lista todas as oportunidades de um nível (todos os status)."""
     from db.connection import get_db
     from db.repositories.opportunities import OpportunityRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    opps = await OpportunityRepository(db).list_by_group(group_id, limit=limit)
-    return {"group_id": group_id, "oportunidades": [dict(o) for o in opps], "total": len(opps)}
+    opps = await OpportunityRepository(db).list_by_level(level_id, limit=limit)
+    return {"level_id": level_id, "oportunidades": [dict(o) for o in opps], "total": len(opps)}
 
 
 @app.delete("/admin/oportunidades/{opp_id}")
@@ -1531,10 +1581,10 @@ async def distribuir_payouts_manual() -> dict:
     return result
 
 
-@app.get("/admin/grupos/{group_id}/posicao")
-async def posicao_do_grupo(group_id: int) -> dict:
+@app.get("/admin/niveis/{level_id}/posicao")
+async def posicao_do_nivel(level_id: int) -> dict:
     """
-    Visão financeira completa do grupo:
+    Visão financeira completa do nível:
     saldo real, exposição, total investido, oportunidades abertas.
     """
     from db.connection import get_db
@@ -1549,25 +1599,29 @@ async def posicao_do_grupo(group_id: int) -> dict:
     opp_repo    = OpportunityRepository(db)
     inv_repo    = InvestmentRepository(db)
 
-    wallet = await wallet_repo.get_by_owner("group", group_id)
+    wallet  = await wallet_repo.get_by_owner("level", level_id)
     balance = await wallet_repo.true_balance(wallet["id"]) if wallet else 0
 
-    open_opps      = await opp_repo.list_open(group_id=group_id)
-    total_invested = await inv_repo.total_active_by_group(group_id)
+    open_opps      = await opp_repo.list_open(level_id=level_id)
+    total_invested = await inv_repo.total_active_by_level(level_id)
 
-    pool = await db.fetch_one(
-        "SELECT * FROM group_pool_limits WHERE group_id=$1 ORDER BY effective_from DESC LIMIT 1",
-        group_id,
+    policy = await db.fetch_one(
+        """
+        SELECT * FROM level_policies
+        WHERE level_id = $1 AND effective_from <= NOW()
+        ORDER BY effective_from DESC LIMIT 1
+        """,
+        level_id,
     )
 
     return {
-        "group_id":            group_id,
-        "wallet_balance":      float(balance),
+        "level_id":              level_id,
+        "wallet_balance":        float(balance),
         "total_active_invested": float(total_invested),
-        "current_exposure":    float(pool["current_exposure_cache"]) if pool else 0,
-        "max_exposure":        float(pool["max_aggregate_exposure"]) if pool else None,
-        "max_per_user":        float(pool["max_per_user_limit"]) if pool and pool["max_per_user_limit"] else None,
-        "open_opportunities":  len(open_opps),
+        "current_exposure":      float(policy["current_exposure_cache"]) if policy else 0,
+        "max_exposure":          float(policy["max_aggregate_exposure"]) if policy else None,
+        "max_per_user":          float(policy["max_per_user_limit"]) if policy and policy["max_per_user_limit"] else None,
+        "open_opportunities":    len(open_opps),
         "open_opp_total_needed": float(sum(
             float(o["amount_needed"]) - float(o["amount_committed"]) for o in open_opps
         )),
@@ -1575,93 +1629,45 @@ async def posicao_do_grupo(group_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Grupos — CRUD completo
+# Níveis — CRUD completo (substituem grupos)
 # ---------------------------------------------------------------------------
 
-@app.post("/admin/grupos")
-async def criar_grupo(payload: dict) -> dict:
-    """
-    Cria um grupo completo em uma única chamada.
-
-    Body JSON:
-    {
-      "name": "Grupo Seed SP",
-      "description": "Tomadores iniciantes — São Paulo",
-      "max_aggregate_exposure": 50000.00,
-      "max_per_user_limit": 2000.00,
-      "base_borrowing_rate": 0.04,
-      "base_investment_rate": 0.025,
-      "min_spread": 0.01,
-      "spread_violation_strategy": "reject_investment",
-      "term_curve": [
-        {"min_term_days": 1,  "max_term_days": 30,  "adjustment_bps": 0},
-        {"min_term_days": 31, "max_term_days": 90,  "adjustment_bps": 50},
-        {"min_term_days": 91, "max_term_days": 180, "adjustment_bps": 100}
-      ],
-      "score_bands": [
-        {"min_score": 0,   "max_score": 300,  "limit_percentage": 0.20, "label": "Iniciante"},
-        {"min_score": 300, "max_score": 500,  "limit_percentage": 0.35, "label": "Bronze"},
-        {"min_score": 500, "max_score": 700,  "limit_percentage": 0.55, "label": "Prata"},
-        {"min_score": 700, "max_score": 850,  "limit_percentage": 0.75, "label": "Ouro"},
-        {"min_score": 850, "max_score": 1001, "limit_percentage": 1.00, "label": "Elite"}
-      ]
-    }
-    """
+@app.get("/admin/niveis")
+async def listar_niveis(status: str | None = None) -> dict:
+    """Lista todos os níveis. Filtro opcional: ?status=active|inactive"""
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    required = ["name", "max_aggregate_exposure",
-                "base_borrowing_rate", "base_investment_rate", "min_spread"]
-    missing = [f for f in required if f not in payload]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
-
-    try:
-        result = await GroupRepository(db).create_full(payload)
-        return {"ok": True, "grupo": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    niveis = await LevelRepository(db).list_all(status=status)
+    return {"niveis": [dict(n) for n in niveis], "total": len(niveis)}
 
 
-@app.get("/admin/grupos")
-async def listar_grupos(status: str | None = None) -> dict:
-    """Lista todos os grupos. Filtro opcional: ?status=active|inactive"""
+@app.get("/admin/niveis/{level_id}")
+async def detalhe_nivel(level_id: int) -> dict:
+    """
+    Retorna perfil completo do nível:
+    dados base + level_policies + level_term_curve + saldo da wallet.
+    """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    grupos = await GroupRepository(db).list_all(status=status)
-    return {"grupos": [dict(g) for g in grupos], "total": len(grupos)}
-
-
-@app.get("/admin/grupos/{group_id}")
-async def detalhe_grupo(group_id: int) -> dict:
-    """
-    Retorna perfil completo do grupo:
-    dados base + pool_limit + rate_policy + term_curve + score_bands + membros + saldo da wallet.
-    """
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    profile = await GroupRepository(db).get_full_profile(group_id)
+    profile = await LevelRepository(db).get_full_profile(level_id)
     if not profile:
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+        raise HTTPException(status_code=404, detail="Nível não encontrado")
     return profile
 
 
-@app.patch("/admin/grupos/{group_id}/status")
-async def atualizar_status_grupo(group_id: int, payload: dict) -> dict:
-    """Ativa ou desativa um grupo. Body: {"status": "active" | "inactive"}"""
+@app.patch("/admin/niveis/{level_id}/status")
+async def atualizar_status_nivel(level_id: int, payload: dict) -> dict:
+    """Ativa ou desativa um nível. Body: {"status": "active" | "inactive"}"""
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
@@ -1670,86 +1676,59 @@ async def atualizar_status_grupo(group_id: int, payload: dict) -> dict:
     if status not in ("active", "inactive"):
         raise HTTPException(status_code=422, detail="status deve ser 'active' ou 'inactive'")
 
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+    repo = LevelRepository(db)
+    if not await repo.get_by_id(level_id):
+        raise HTTPException(status_code=404, detail="Nível não encontrado")
 
-    await repo.update_status(group_id, status)
-    return {"ok": True, "group_id": group_id, "status": status}
+    await repo.update_status(level_id, status)
+    return {"ok": True, "level_id": level_id, "status": status}
 
 
-@app.put("/admin/grupos/{group_id}/taxas")
-async def atualizar_taxas_grupo(group_id: int, payload: dict) -> dict:
+@app.put("/admin/niveis/{level_id}/politica")
+async def atualizar_politica_nivel(level_id: int, payload: dict) -> dict:
     """
-    Atualiza política de taxas do grupo (insere novo registro com effective_from=agora).
+    Atualiza a política financeira do nível (insere novo registro com effective_from=agora).
 
     Body: {
       "base_borrowing_rate": 0.04,
       "base_investment_rate": 0.025,
       "min_spread": 0.01,
-      "spread_violation_strategy": "reject_investment"
+      "spread_violation_strategy": "raise_borrowing_rate",
+      "max_aggregate_exposure": 100000.00,
+      "max_per_user_limit": 5000.00
     }
     """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+    repo = LevelRepository(db)
+    if not await repo.get_by_id(level_id):
+        raise HTTPException(status_code=404, detail="Nível não encontrado")
 
     required = ["base_borrowing_rate", "base_investment_rate", "min_spread"]
     missing = [f for f in required if f not in payload]
     if missing:
         raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
 
-    policy_id = await repo.set_rate_policy(
-        group_id=group_id,
+    policy_id = await repo.set_policy(
+        level_id=level_id,
         base_borrowing_rate=payload["base_borrowing_rate"],
         base_investment_rate=payload["base_investment_rate"],
         min_spread=payload["min_spread"],
-        spread_violation_strategy=payload.get("spread_violation_strategy", "reject_investment"),
-    )
-    return {"ok": True, "group_id": group_id, "rate_policy_id": policy_id}
-
-
-@app.put("/admin/grupos/{group_id}/limites")
-async def atualizar_limites_grupo(group_id: int, payload: dict) -> dict:
-    """
-    Adiciona novo pool limit para o grupo.
-
-    Body: {
-      "max_aggregate_exposure": 100000.00,
-      "max_per_user_limit": 5000.00
-    }
-    """
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
-
-    if "max_aggregate_exposure" not in payload:
-        raise HTTPException(status_code=422, detail="max_aggregate_exposure é obrigatório")
-
-    pool_id = await repo.set_pool_limit(
-        group_id=group_id,
-        max_aggregate_exposure=payload["max_aggregate_exposure"],
+        spread_violation_strategy=payload.get("spread_violation_strategy", "raise_borrowing_rate"),
+        max_aggregate_exposure=payload.get("max_aggregate_exposure"),
         max_per_user_limit=payload.get("max_per_user_limit"),
     )
-    return {"ok": True, "group_id": group_id, "pool_limit_id": pool_id}
+    return {"ok": True, "level_id": level_id, "policy_id": policy_id}
 
 
-@app.put("/admin/grupos/{group_id}/curva-prazo")
-async def atualizar_curva_prazo(group_id: int, payload: dict) -> dict:
+@app.put("/admin/niveis/{level_id}/curva-prazo")
+async def atualizar_curva_prazo_nivel(level_id: int, payload: dict) -> dict:
     """
-    Recria a curva de ajuste de taxa por prazo.
+    Recria a curva de ajuste de taxa por prazo para o nível.
 
     Body: {
       "bands": [
@@ -1760,140 +1739,50 @@ async def atualizar_curva_prazo(group_id: int, payload: dict) -> dict:
     }
     """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
+    repo = LevelRepository(db)
+    if not await repo.get_by_id(level_id):
+        raise HTTPException(status_code=404, detail="Nível não encontrado")
 
     bands = payload.get("bands", [])
-    await repo.set_term_curve(group_id, bands)
-    return {"ok": True, "group_id": group_id, "bands_configuradas": len(bands)}
-
-
-@app.put("/admin/grupos/{group_id}/faixas-score")
-async def atualizar_faixas_score(group_id: int, payload: dict) -> dict:
-    """
-    Recria as faixas de score → percentual do teto de crédito.
-
-    Body: {
-      "bands": [
-        {"min_score": 0,   "max_score": 300,  "limit_percentage": 0.20, "label": "Iniciante"},
-        {"min_score": 300, "max_score": 500,  "limit_percentage": 0.35, "label": "Bronze"},
-        {"min_score": 500, "max_score": 700,  "limit_percentage": 0.55, "label": "Prata"},
-        {"min_score": 700, "max_score": 850,  "limit_percentage": 0.75, "label": "Ouro"},
-        {"min_score": 850, "max_score": 1001, "limit_percentage": 1.00, "label": "Elite"}
-      ]
-    }
-    """
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
-
-    bands = payload.get("bands", [])
-    await repo.set_score_bands(group_id, bands)
-    return {"ok": True, "group_id": group_id, "faixas_configuradas": len(bands)}
-
-
-@app.get("/admin/grupos/{group_id}/membros")
-async def listar_membros(group_id: int, todos: bool = False) -> dict:
-    """Lista membros do grupo. ?todos=true inclui histórico de saídas."""
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
-
-    membros = await repo.list_members(group_id, active_only=not todos)
-    return {"group_id": group_id, "membros": [dict(m) for m in membros], "total": len(membros)}
-
-
-@app.post("/admin/grupos/{group_id}/membros")
-async def adicionar_membro(group_id: int, payload: dict) -> dict:
-    """
-    Adiciona um usuário ao grupo.
-    Body: {"user_id": 42, "allocation_reason": "Onboarding manual"}
-    """
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    user_id = payload.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=422, detail="user_id é obrigatório")
-
-    repo = GroupRepository(db)
-    if not await repo.get_by_id(group_id):
-        raise HTTPException(status_code=404, detail="Grupo não encontrado")
-
-    ug_id = await repo.add_member(
-        group_id=group_id,
-        user_id=user_id,
-        allocation_reason=payload.get("allocation_reason"),
-    )
-    return {"ok": True, "user_group_id": ug_id, "group_id": group_id, "user_id": user_id}
-
-
-@app.delete("/admin/grupos/{group_id}/membros/{user_id}")
-async def remover_membro(group_id: int, user_id: int) -> dict:
-    """Remove (marca left_at) um usuário do grupo."""
-    from db.connection import get_db
-    from db.repositories.groups import GroupRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    removed = await GroupRepository(db).remove_member(group_id, user_id)
-    if not removed:
-        raise HTTPException(status_code=404, detail="Membro ativo não encontrado neste grupo")
-    return {"ok": True, "group_id": group_id, "user_id": user_id}
+    await repo.set_term_curve(level_id, bands)
+    return {"ok": True, "level_id": level_id, "bands_configuradas": len(bands)}
 
 
 @app.get("/admin/upgrades")
 async def listar_upgrades(status: str = "suggested") -> dict:
     """
-    Lista candidatos a upgrade de grupo.
+    Lista candidatos a upgrade de nível.
     ?status=suggested|accepted|rejected
     """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    eventos = await GroupRepository(db).list_upgrade_candidates(status=status)
+    eventos = await LevelRepository(db).list_upgrade_candidates(status=status)
     return {"upgrades": [dict(e) for e in eventos], "total": len(eventos)}
 
 
 @app.post("/admin/upgrades/{event_id}/resolver")
 async def resolver_upgrade(event_id: int, payload: dict) -> dict:
     """
-    Aceita ou rejeita uma sugestão de upgrade de grupo.
-    Se aceito, move o usuário para o novo grupo automaticamente.
+    Aceita ou rejeita uma sugestão de upgrade de nível.
+    Se aceito, executa a transição de nível do usuário automaticamente.
 
     Body: {
       "resolution": "accepted",
-      "to_group_id": 2,
-      "allocation_reason": "Upgrade por score Elite"
+      "to_level_id": 3,
+      "transition_reason": "Upgrade por score Elite"
     }
     """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
@@ -1902,31 +1791,38 @@ async def resolver_upgrade(event_id: int, payload: dict) -> dict:
     if resolution not in ("accepted", "rejected"):
         raise HTTPException(status_code=422, detail="resolution deve ser 'accepted' ou 'rejected'")
 
-    result = await GroupRepository(db).resolve_upgrade(
+    result = await LevelRepository(db).resolve_upgrade(
         event_id=event_id,
         resolution=resolution,
-        to_group_id=payload.get("to_group_id"),
-        allocation_reason=payload.get("allocation_reason"),
+        to_level_id=payload.get("to_level_id"),
+        transition_reason=payload.get("transition_reason"),
     )
-    if not result["ok"]:
-        raise HTTPException(status_code=400, detail=result["error"])
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Erro ao resolver upgrade"))
     return result
 
 
-@app.get("/admin/usuarios/{user_id}/grupos")
-async def grupos_do_usuario(user_id: int, todos: bool = False) -> dict:
+@app.get("/admin/usuarios/{user_id}/nivel")
+async def nivel_do_usuario(user_id: int, historico: bool = False) -> dict:
     """
-    Retorna os grupos de um usuário.
-    ?todos=true inclui grupos que o usuário já saiu.
+    Retorna o nível atual do usuário.
+    ?historico=true inclui histórico de transições.
     """
     from db.connection import get_db
-    from db.repositories.groups import GroupRepository
+    from db.repositories.levels import LevelRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    grupos = await GroupRepository(db).get_user_groups(user_id, active_only=not todos)
-    return {"user_id": user_id, "grupos": [dict(g) for g in grupos], "total": len(grupos)}
+    repo = LevelRepository(db)
+    nivel = await repo.get_user_level(user_id)
+    result: dict = {"user_id": user_id, "nivel": dict(nivel) if nivel else None}
+
+    if historico:
+        hist = await repo.get_user_level_history(user_id)
+        result["historico"] = [dict(h) for h in hist]
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1935,7 +1831,7 @@ async def grupos_do_usuario(user_id: int, todos: bool = False) -> dict:
 
 class InvestorProfileInput(BaseModel):
     user_id:                int
-    group_id:               int | None = None
+    level_id:               int | None = None
     risk_tolerance:         str = "moderate"        # conservative | moderate | aggressive
     min_investment_amount:  float = 50.0
     max_investment_amount:  float | None = None
@@ -1966,7 +1862,7 @@ async def admin_create_investor_profile(request: Request, body: InvestorProfileI
     repo = InvestorProfileRepository(db)
     profile_id = await repo.upsert(
         user_id=body.user_id,
-        group_id=body.group_id,
+        level_id=body.level_id,
         risk_tolerance=body.risk_tolerance,
         min_investment_amount=Decimal(str(body.min_investment_amount)),
         max_investment_amount=Decimal(str(body.max_investment_amount)) if body.max_investment_amount else None,
@@ -1978,10 +1874,10 @@ async def admin_create_investor_profile(request: Request, body: InvestorProfileI
 
 
 @app.get("/admin/investor-profiles")
-async def admin_list_investor_profiles(request: Request, group_id: int | None = None) -> dict:
+async def admin_list_investor_profiles(request: Request, level_id: int | None = None) -> dict:
     """
     Lista perfis de investidor ativos.
-    ?group_id=N filtra por fundo preferido.
+    ?level_id=N filtra por nível preferido.
     """
     _require_admin_key(request)
     from db.connection import get_db
@@ -1991,11 +1887,11 @@ async def admin_list_investor_profiles(request: Request, group_id: int | None = 
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    profiles = await InvestorProfileRepository(db).list_active(group_id=group_id)
+    profiles = await InvestorProfileRepository(db).list_active(level_id=level_id)
     return {
         "profiles": [dict(p) for p in profiles],
         "total": len(profiles),
-        "group_id": group_id,
+        "level_id": level_id,
     }
 
 
@@ -2034,14 +1930,14 @@ async def admin_deactivate_investor_profile(request: Request, user_id: int) -> d
 async def admin_list_investment_offers(
     request: Request,
     status: str | None = None,
-    group_id: int | None = None,
+    level_id: int | None = None,
     opportunity_id: int | None = None,
     limit: int = 50,
 ) -> dict:
     """
     Lista ofertas de investimento com filtros opcionais.
     ?status=pending|accepted|declined|expired
-    ?group_id=N ?opportunity_id=N
+    ?level_id=N ?opportunity_id=N
     """
     _require_admin_key(request)
     from db.connection import get_db
@@ -2056,8 +1952,8 @@ async def admin_list_investment_offers(
 
     if status:
         clauses.append(f"io.status = ${idx}"); params.append(status); idx += 1
-    if group_id:
-        clauses.append(f"io.group_id = ${idx}"); params.append(group_id); idx += 1
+    if level_id:
+        clauses.append(f"io.level_id = ${idx}"); params.append(level_id); idx += 1
     if opportunity_id:
         clauses.append(f"io.opportunity_id = ${idx}"); params.append(opportunity_id); idx += 1
 
@@ -2111,7 +2007,7 @@ async def admin_trigger_matching(request: Request, opportunity_id: int) -> dict:
     result = await match_and_notify(
         db=db,
         opportunity_id=opportunity_id,
-        group_id=opp["group_id"],
+        level_id=opp["level_id"],
         amount_needed=remaining,
         expected_rate=Decimal(str(opp["expected_rate"])),
         maturity_at=opp["expires_at"],

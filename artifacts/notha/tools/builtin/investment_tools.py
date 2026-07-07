@@ -46,9 +46,9 @@ class ListarOportunidades(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "group_id": {
+            "level_id": {
                 "type": "integer",
-                "description": "ID do grupo (fundo). Se não souber, omita para ver todos.",
+                "description": "ID do nível (fundo) a filtrar. Omitir para ver todos os níveis.",
             },
             "limit": {
                 "type": "integer",
@@ -59,7 +59,7 @@ class ListarOportunidades(Tool):
         "required": [],
     }
 
-    async def execute(self, group_id: int | None = None, limit: int = 5) -> str:
+    async def execute(self, level_id: int | None = None, limit: int = 5) -> str:
         from db.connection import get_db
         from db.repositories.opportunities import OpportunityRepository
 
@@ -69,7 +69,7 @@ class ListarOportunidades(Tool):
 
         try:
             opp_repo = OpportunityRepository(db)
-            opps = await opp_repo.list_open(group_id=group_id, limit=limit)
+            opps = await opp_repo.list_open(level_id=level_id, limit=limit)
 
             if not opps:
                 return (
@@ -84,11 +84,12 @@ class ListarOportunidades(Tool):
                 remaining = needed - committed
                 pct       = int((committed / needed * 100)) if needed > 0 else 0
 
-                debt_ref = f" | Empréstimo #{o['debt_id']}" if o.get("debt_id") else ""
-                expires  = o["expires_at"].strftime("%d/%m/%Y") if o.get("expires_at") else "—"
+                debt_ref   = f" | Empréstimo #{o['debt_id']}" if o.get("debt_id") else ""
+                expires    = o["expires_at"].strftime("%d/%m/%Y") if o.get("expires_at") else "—"
+                level_name = o.get("level_name") or f"Nível {o.get('level_id', '?')}"
 
                 lines.append(
-                    f"🔹 *Oportunidade #{o['id']}* — {o.get('group_name', 'Grupo')}{debt_ref}\n"
+                    f"🔹 *Oportunidade #{o['id']}* — {level_name}{debt_ref}\n"
                     f"  Captação total: {_fmt_brl(needed)}\n"
                     f"  Já captado: {_fmt_brl(committed)} ({pct}%)\n"
                     f"  *Ainda disponível: {_fmt_brl(remaining)}*\n"
@@ -109,7 +110,7 @@ class InvestirTool(Tool):
     name = "investir"
     description = (
         "Registra o investimento de um usuário em uma oportunidade de captação do fundo. "
-        "Debita o valor da wallet do investidor e credita no fundo. "
+        "Debita o valor da wallet do investidor e credita no fundo do nível. "
         "Use quando o investidor confirmar que quer investir um valor específico em uma oportunidade. "
         "Sempre pergunte o prazo/vencimento desejado antes de chamar esta tool — é obrigatório."
     )
@@ -132,8 +133,8 @@ class InvestirTool(Tool):
                 "type": "string",
                 "description": (
                     "Vencimento do investimento em ISO-8601. Pode ser curto (minutos, horas) "
-                    "ou longo (dias, meses). Exemplos: '2025-03-01T10:00:00Z', '2025-06-30', "
-                    "'2025-01-01T00:30:00Z'. Sempre pergunte ao investidor o prazo desejado."
+                    "ou longo (dias, meses). Exemplos: '2025-03-01T10:00:00Z', '2025-06-30'. "
+                    "Sempre pergunte ao investidor o prazo desejado."
                 ),
             },
         },
@@ -149,7 +150,7 @@ class InvestirTool(Tool):
     ) -> str:
         from db.connection import get_db
         from engine.investment_engine import accept_investment
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, date as _date, time as _time
 
         db = get_db()
         if not db:
@@ -159,13 +160,11 @@ class InvestirTool(Tool):
         if inv_amount <= Decimal("0"):
             return "❌ Valor de investimento inválido."
 
-        # Parse maturity_at
         try:
             mat_str = maturity_at.strip().replace(" ", "T")
             if "T" in mat_str:
                 mat_dt = datetime.fromisoformat(mat_str.replace("Z", "+00:00"))
             else:
-                from datetime import date as _date, time as _time
                 d = _date.fromisoformat(mat_str)
                 mat_dt = datetime.combine(d, _time.max, tzinfo=timezone.utc)
         except ValueError as exc:
@@ -183,11 +182,11 @@ class InvestirTool(Tool):
             if not result.get("ok"):
                 return f"❌ {result.get('error', 'Erro desconhecido')}"
 
-            inv_id      = result["investment_id"]
-            rate        = result["rate_agreed"]
-            interest    = result["interest_at_maturity"]
-            maturity    = result["maturity_at"]
-            opp_status  = result["new_opportunity_status"]
+            inv_id     = result["investment_id"]
+            rate       = result["rate_agreed"]
+            interest   = result["interest_at_maturity"]
+            maturity   = result["maturity_at"]
+            opp_status = result["new_opportunity_status"]
 
             status_msg = {
                 "fully_funded":     "✅ Oportunidade 100% financiada! O fundo foi reabastecido.",
@@ -225,15 +224,15 @@ class ConsultarInvestimentos(Tool):
                 "type": "integer",
                 "description": "ID do usuário investidor",
             },
-            "group_id": {
+            "level_id": {
                 "type": "integer",
-                "description": "ID do grupo (fundo)",
+                "description": "ID do nível (fundo) a consultar",
             },
         },
-        "required": ["investor_user_id", "group_id"],
+        "required": ["investor_user_id", "level_id"],
     }
 
-    async def execute(self, investor_user_id: int, group_id: int) -> str:
+    async def execute(self, investor_user_id: int, level_id: int) -> str:
         from db.connection import get_db
         from engine.investment_engine import get_investor_summary
 
@@ -242,7 +241,7 @@ class ConsultarInvestimentos(Tool):
             return "❌ Banco de dados indisponível."
 
         try:
-            summary = await get_investor_summary(db, investor_user_id, group_id)
+            summary = await get_investor_summary(db, investor_user_id, level_id)
 
             pos     = summary["position"]
             balance = summary["wallet_balance"]
@@ -250,7 +249,7 @@ class ConsultarInvestimentos(Tool):
             opps    = summary["open_opportunities"]
 
             lines = [
-                f"📊 *Sua posição de investidor:*\n",
+                f"📊 *Sua posição de investidor (Nível {level_id}):*\n",
                 f"  💼 Saldo disponível na carteira: {_fmt_brl(balance)}",
                 f"  📈 Total investido (ativo): {_fmt_brl(pos['total_invested'])}",
                 f"  💹 Total recebido em rendimentos: {_fmt_brl(pos['total_returned'])}",
@@ -261,14 +260,14 @@ class ConsultarInvestimentos(Tool):
             if active:
                 lines.append("\n*Investimentos ativos:*")
                 for inv in active[:5]:
+                    level_label = f"Nível {inv.get('level_id', '?')}"
                     lines.append(
                         f"  • #{inv['id']} — {_fmt_brl(inv['amount_invested'])} "
-                        f"@ {_fmt_rate(inv['rate_agreed'])} "
-                        f"({inv.get('group_name', 'Grupo')})"
+                        f"@ {_fmt_rate(inv['rate_agreed'])} ({level_label})"
                     )
 
             if opps:
-                lines.append(f"\n📭 *{len(opps)} oportunidade(s) abertas* no fundo.")
+                lines.append(f"\n📭 *{len(opps)} oportunidade(s) abertas* neste nível.")
                 lines.append("  Diga \"listar oportunidades\" para ver detalhes.")
 
             return "\n".join(lines)

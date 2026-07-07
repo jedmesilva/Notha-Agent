@@ -1,5 +1,5 @@
 """
-RateEngine — calcula cotações de taxa de juros (seção 7 do documento).
+RateEngine — calcula cotações de taxa de juros.
 
 Fórmula (determinística, não ML):
   final_borrowing_rate =
@@ -10,6 +10,9 @@ Fórmula (determinística, não ML):
 
   Constraint obrigatória:
     final_borrowing_rate - final_investment_rate >= min_spread
+
+As políticas de taxa são definidas por nível (level_policies),
+não mais por grupos.
 """
 import logging
 from decimal import Decimal, ROUND_HALF_UP
@@ -24,7 +27,6 @@ _LIQUIDITY_RATIO_CAP = Decimal("3")
 
 # risk_premium é calculado a partir do score normalizado (0–1000)
 # Quanto mais baixo o score, maior o prêmio de risco.
-# Parâmetros ajustáveis: score 0 → premium máximo; score 1000 → premium 0.
 _MAX_RISK_PREMIUM = Decimal("0.08")   # 8 pp para score = 0
 _MIN_SCORE        = Decimal("0")
 _MAX_SCORE        = Decimal("1000")
@@ -37,7 +39,7 @@ def _compute_risk_premium(score: Decimal) -> Decimal:
     score    0 → MAX_RISK_PREMIUM (risco máximo)
     """
     score = max(_MIN_SCORE, min(_MAX_SCORE, score))
-    normalized = (score - _MIN_SCORE) / (_MAX_SCORE - _MIN_SCORE)  # 0.0 – 1.0
+    normalized = (score - _MIN_SCORE) / (_MAX_SCORE - _MIN_SCORE)
     premium = _MAX_RISK_PREMIUM * (_ONE - normalized)
     return premium.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
@@ -62,7 +64,7 @@ def _compute_liquidity_multiplier(
 async def compute_loan_quote(
     db,
     loan_request_id: int,
-    group_id: int,
+    level_id: int,
     term_days: int,
     user_risk_score: Decimal | None,
 ) -> dict:
@@ -79,10 +81,10 @@ async def compute_loan_quote(
     _db = db or get_db()
     rate_repo = RateRepository(_db)
 
-    # ── Camada 1: política do grupo ───────────────────────────────────────────
-    policy = await rate_repo.get_active_policy(group_id)
+    # ── Camada 1: política do nível ───────────────────────────────────────────
+    policy = await rate_repo.get_active_policy(level_id)
     if not policy:
-        raise ValueError(f"Sem política de taxa configurada para o grupo {group_id}")
+        raise ValueError(f"Sem política de taxa configurada para o nível {level_id}")
 
     base_rate        = Decimal(str(policy["base_borrowing_rate"]))
     base_invest_rate = Decimal(str(policy["base_investment_rate"]))
@@ -90,13 +92,11 @@ async def compute_loan_quote(
     spread_strategy  = policy["spread_violation_strategy"]
 
     # ── Ajuste por prazo (basis points → fração) ──────────────────────────────
-    # Passa a policy já carregada para evitar query extra e para que a fórmula
-    # correta (bands / linear / log / sqrt) seja aplicada conforme configurado.
-    adj_bps = await rate_repo.get_term_adjustment(group_id, term_days, policy=policy)
+    adj_bps = await rate_repo.get_term_adjustment(level_id, term_days, policy=policy)
     term_adjustment = Decimal(str(adj_bps)) / Decimal("10000")
 
     # ── Camada 2: liquidez ────────────────────────────────────────────────────
-    liquidity = await rate_repo.get_latest_liquidity(group_id)
+    liquidity = await rate_repo.get_latest_liquidity(level_id)
     if liquidity:
         demand = Decimal(str(liquidity["total_active_loan_demand"]))
         supply = Decimal(str(liquidity["total_available_investment"]))
@@ -110,7 +110,6 @@ async def compute_loan_quote(
     risk_premium = _compute_risk_premium(score)
 
     # ── Taxa final do tomador ─────────────────────────────────────────────────
-    #  final = (base + risk_premium + term_adjustment) × liquidity_multiplier
     raw_rate   = (base_rate + risk_premium + term_adjustment) * liq_mult
     final_rate = raw_rate.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
@@ -122,13 +121,12 @@ async def compute_loan_quote(
     spread_ok = spread >= min_spread
 
     if not spread_ok and spread_strategy == "raise_borrowing_rate":
-        # Eleva final_rate até garantir o spread mínimo
         final_rate = (invest_rate + min_spread).quantize(
             Decimal("0.000001"), rounding=ROUND_HALF_UP
         )
         spread_ok = True
         logger.warning(
-            "Spread violation: taxa elevada para %.6f (grupo %d)", final_rate, group_id
+            "Spread violation: taxa elevada para %.6f (nível %d)", final_rate, level_id
         )
 
     breakdown = {
@@ -163,35 +161,35 @@ async def compute_loan_quote(
     )
 
     return {
-        "quote_id":            quote_id,
-        "base_rate":           base_rate,
-        "risk_premium":        risk_premium,
-        "term_adjustment":     term_adjustment,
+        "quote_id":             quote_id,
+        "base_rate":            base_rate,
+        "risk_premium":         risk_premium,
+        "term_adjustment":      term_adjustment,
         "liquidity_multiplier": liq_mult,
-        "final_rate":          final_rate,
-        "investment_rate":     invest_rate,
-        "spread_ok":           spread_ok,
-        "breakdown_json":      breakdown,
+        "final_rate":           final_rate,
+        "investment_rate":      invest_rate,
+        "spread_ok":            spread_ok,
+        "breakdown_json":       breakdown,
     }
 
 
 async def compute_investment_quote(
-    db, group_id: int, investment_id: int | None = None
+    db, level_id: int, investment_id: int | None = None
 ) -> dict:
-    """Cotação de taxa para investidores (seção 7, Camada 3)."""
+    """Cotação de taxa para investidores (Camada 3)."""
     from db.repositories.rates import RateRepository
     from db.connection import get_db
 
     _db = db or get_db()
     rate_repo = RateRepository(_db)
 
-    policy = await rate_repo.get_active_policy(group_id)
+    policy = await rate_repo.get_active_policy(level_id)
     if not policy:
-        raise ValueError(f"Sem política de taxa para o grupo {group_id}")
+        raise ValueError(f"Sem política de taxa para o nível {level_id}")
 
     base_invest_rate = Decimal(str(policy["base_investment_rate"]))
 
-    liquidity = await rate_repo.get_latest_liquidity(group_id)
+    liquidity = await rate_repo.get_latest_liquidity(level_id)
     if liquidity:
         demand = Decimal(str(liquidity["total_active_loan_demand"]))
         supply = Decimal(str(liquidity["total_available_investment"]))
@@ -212,8 +210,8 @@ async def compute_investment_quote(
     )
 
     return {
-        "quote_id":            quote_id,
-        "base_rate":           base_invest_rate,
+        "quote_id":             quote_id,
+        "base_rate":            base_invest_rate,
         "liquidity_multiplier": liq_mult,
-        "final_rate":          final_rate,
+        "final_rate":           final_rate,
     }

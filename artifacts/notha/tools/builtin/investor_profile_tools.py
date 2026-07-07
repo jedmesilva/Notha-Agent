@@ -36,7 +36,7 @@ class ConfigurarPerfilInvestidor(Tool):
     description = (
         "Cria ou atualiza o perfil de preferências de investimento do usuário. "
         "Use quando o investidor quiser definir: tolerância a risco, valor mínimo/máximo "
-        "por investimento, prazo preferido, ou ativar investimento automático. "
+        "por investimento, prazo preferido, nível preferido ou ativar investimento automático. "
         "Também use para registrar um novo investidor na plataforma."
     )
     parameters = {
@@ -81,10 +81,11 @@ class ConfigurarPerfilInvestidor(Tool):
                     "Padrão: false (recebe notificação e decide)."
                 ),
             },
-            "group_id": {
+            "level_id": {
                 "type": "integer",
                 "description": (
-                    "ID do fundo de preferência. Omitir = aceita qualquer fundo."
+                    "ID do nível (fundo) de preferência (1–10). "
+                    "Omitir = aceita qualquer nível."
                 ),
             },
         },
@@ -100,7 +101,7 @@ class ConfigurarPerfilInvestidor(Tool):
         min_term_days: int = 1,
         max_term_days: int = 365,
         auto_invest: bool = False,
-        group_id: int | None = None,
+        level_id: int | None = None,
     ) -> str:
         from db.connection import get_db
         from db.repositories.investor_profiles import InvestorProfileRepository
@@ -118,10 +119,10 @@ class ConfigurarPerfilInvestidor(Tool):
         max_amt = Decimal(str(max_investment_amount)) if max_investment_amount else None
 
         try:
-            repo = InvestorProfileRepository(db)
+            repo       = InvestorProfileRepository(db)
             profile_id = await repo.upsert(
                 user_id=user_id,
-                group_id=group_id,
+                level_id=level_id,
                 risk_tolerance=risk_tolerance,
                 min_investment_amount=min_amt,
                 max_investment_amount=max_amt,
@@ -137,7 +138,7 @@ class ConfigurarPerfilInvestidor(Tool):
             }
             auto_label  = "✅ Ativo (investe automaticamente)" if auto_invest else "❌ Manual (você confirma cada oferta)"
             max_label   = _fmt_brl(max_amt) if max_amt else "Sem limite (usa saldo disponível)"
-            group_label = f"Fundo #{group_id}" if group_id else "Qualquer fundo"
+            level_label = f"Nível {level_id}" if level_id else "Qualquer nível"
 
             return (
                 f"✅ *Perfil de investidor salvo!*\n\n"
@@ -145,7 +146,7 @@ class ConfigurarPerfilInvestidor(Tool):
                 f"  Valor mínimo por investimento: {_fmt_brl(min_amt)}\n"
                 f"  Valor máximo por investimento: {max_label}\n"
                 f"  Prazo aceito: {min_term_days} a {max_term_days} dias\n"
-                f"  Fundo preferido: {group_label}\n"
+                f"  Nível preferido: {level_label}\n"
                 f"  Investimento automático: {auto_label}\n\n"
                 f"Quando surgir uma oportunidade compatível, você será notificado "
                 f"{'e o investimento será realizado automaticamente' if auto_invest else 'pelo WhatsApp'}. 🎯"
@@ -192,10 +193,10 @@ class ConsultarPerfilInvestidor(Tool):
                 "moderate":     "Moderado 🟡",
                 "aggressive":   "Arrojado 🔴",
             }
-            auto_label  = "✅ Automático" if profile["auto_invest"] else "✋ Manual"
-            max_label   = _fmt_brl(profile["max_investment_amount"]) if profile["max_investment_amount"] else "Sem limite"
-            group_label = f"Fundo #{profile['group_id']}" if profile["group_id"] else "Qualquer fundo"
-            status      = "✅ Ativo" if profile["is_active"] else "⏸️ Pausado"
+            auto_label   = "✅ Automático" if profile["auto_invest"] else "✋ Manual"
+            max_label    = _fmt_brl(profile["max_investment_amount"]) if profile["max_investment_amount"] else "Sem limite"
+            level_label  = f"Nível {profile['level_id']}" if profile["level_id"] else "Qualquer nível"
+            status       = "✅ Ativo" if profile["is_active"] else "⏸️ Pausado"
 
             lines = [
                 f"📋 *Seu perfil de investidor:*\n",
@@ -203,11 +204,10 @@ class ConsultarPerfilInvestidor(Tool):
                 f"  Risco: {risk_labels.get(profile['risk_tolerance'], profile['risk_tolerance'])}",
                 f"  Valor por investimento: {_fmt_brl(profile['min_investment_amount'])} → {max_label}",
                 f"  Prazo aceito: {profile['min_term_days']} a {profile['max_term_days']} dias",
-                f"  Fundo preferido: {group_label}",
+                f"  Nível preferido: {level_label}",
                 f"  Modo: {auto_label}",
             ]
 
-            # Métricas históricas
             if profile.get("last_metrics_at"):
                 lines.append(f"\n📊 *Histórico:*")
                 if profile.get("avg_investment_amount"):
@@ -248,10 +248,10 @@ class ListarOfertasPendentes(Tool):
         try:
             offers = await db.fetch_all(
                 """
-                SELECT io.*, o.expected_rate, g.name AS group_name
+                SELECT io.*, o.expected_rate, lv.name AS level_name
                 FROM investment_offers io
                 JOIN investment_opportunities o ON o.id = io.opportunity_id
-                JOIN groups g ON g.id = io.group_id
+                JOIN levels lv ON lv.id = io.level_id
                 WHERE io.user_id = $1
                   AND io.status = 'pending'
                   AND io.expires_at > NOW()
@@ -273,7 +273,7 @@ class ListarOfertasPendentes(Tool):
                 mat = o["maturity_at"].strftime("%d/%m/%Y") if o.get("maturity_at") else "—"
                 exp = o["expires_at"].strftime("%d/%m %H:%M") if o.get("expires_at") else "—"
                 lines.append(
-                    f"🔹 *Oferta #{o['id']}* — {o['group_name']}\n"
+                    f"🔹 *Oferta #{o['id']}* — {o['level_name']}\n"
                     f"  Valor sugerido: {_fmt_brl(o['suggested_amount'])}\n"
                     f"  Taxa: {rate_pct:.2f}% a.a. | Vencimento: {mat}\n"
                     f"  Expira: {exp}"

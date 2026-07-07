@@ -19,17 +19,17 @@ class LoanRepository:
     async def create_request(
         self,
         user_id: int,
-        group_id: int,
+        level_id: int,
         requested_amount: Decimal,
     ) -> int:
         """Cria uma solicitação de empréstimo no status 'pending'. Retorna o id."""
         return await self._db.fetch_val(
             """
-            INSERT INTO loan_requests (user_id, group_id, requested_amount)
+            INSERT INTO loan_requests (user_id, level_id, requested_amount)
             VALUES ($1, $2, $3)
             RETURNING id
             """,
-            user_id, group_id, requested_amount,
+            user_id, level_id, requested_amount,
         )
 
     async def get_by_id(self, request_id: int) -> asyncpg.Record | None:
@@ -77,18 +77,18 @@ class LoanRepository:
             status, decided_by, rejection_reason, request_id,
         )
 
-    async def active_debt_total(self, user_id: int, group_id: int) -> Decimal:
-        """Soma do principal de dívidas ativas do usuário neste grupo (para validação de limite)."""
+    async def active_debt_total(self, user_id: int, level_id: int) -> Decimal:
+        """Soma do principal de dívidas ativas do usuário neste nível (para validação de limite)."""
         val = await self._db.fetch_val(
             """
             SELECT COALESCE(SUM(d.principal), 0)
             FROM debts d
             JOIN loan_requests lr ON lr.id = d.loan_request_id
             WHERE lr.user_id  = $1
-              AND lr.group_id = $2
+              AND lr.level_id = $2
               AND d.status    = 'active'
             """,
-            user_id, group_id,
+            user_id, level_id,
         )
         return Decimal(str(val or 0))
 

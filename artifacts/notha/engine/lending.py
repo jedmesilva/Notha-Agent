@@ -1,5 +1,5 @@
 """
-LendingEngine — núcleo financeiro da plataforma (seções 5, 6, 10 do documento).
+LendingEngine — núcleo financeiro da plataforma.
 
 Fluxos implementados:
   1. approve_loan        — valida limites → persiste debt → installments → wallet_txs
@@ -7,8 +7,8 @@ Fluxos implementados:
   3. get_loan_summary    — visão consolidada de uma dívida para o usuário
 
 Limite individual:
-  Resolvido dinamicamente via score_limit_bands (score → percentual × max_per_user_limit).
-  Ao atingir 95% do teto do grupo, o usuário é sinalizado como candidato a upgrade.
+  Resolvido dinamicamente via score → percentual × max_per_user_limit do nível.
+  Ao atingir 95% do teto, o usuário é sinalizado como candidato a upgrade de nível.
 
 Princípio: LLM propõe, código financeiro executa deterministicamente.
 Nenhum valor financeiro é decidido pelo LLM — apenas pelo código abaixo.
@@ -30,18 +30,18 @@ async def approve_loan(
     approved_by: str = "system",
 ) -> dict:
     """
-    Fluxo completo de aprovação (seção 10, passos 2b–4):
+    Fluxo completo de aprovação:
 
       1. Resolve score atual do usuário
-      2. Valida limites (score_band/percentage/fixed + pool)
+      2. Valida limites (score_band/percentage/fixed + pool do nível)
       3. Obtém/calcula cotação de taxa
       4. Cria debts com interest_rate_applied congelado
       5. Gera debt_installments a partir de proposed_installments
-      6. Registra wallet_transactions (débito grupo, crédito usuário)
-      7. Atualiza group_pool_limits.current_exposure_cache
-      8. Detecta candidato a upgrade de grupo
+      6. Registra wallet_transactions (débito nível, crédito usuário)
+      7. Atualiza level_policies.current_exposure_cache
+      8. Detecta candidato a upgrade de nível
 
-    Retorna dict: {ok, debt_id, final_rate, rejection_reason, upgrade_candidate}
+    Retorna dict: {ok, debt_id, final_rate, rejection_reason, level_upgrade_candidate}
     """
     from db.repositories.loans import LoanRepository
     from db.repositories.debts import DebtRepository
@@ -65,7 +65,7 @@ async def approve_loan(
         return {"ok": False, "rejection_reason": f"Solicitação já está '{req['status']}'"}
 
     user_id          = req["user_id"]
-    group_id         = req["group_id"]
+    level_id         = req["level_id"]
     requested_amount = Decimal(str(req["requested_amount"]))
 
     # ── Proposta de parcelas ──────────────────────────────────────────────────
@@ -81,12 +81,12 @@ async def approve_loan(
     # ── Score atual do usuário (necessário para resolver o limite) ────────────
     user_risk_score = await get_or_compute_score(db, user_id)
 
-    # ── Validação de limites (seção 6) ────────────────────────────────────────
-    active_debt_total = await loan_repo.active_debt_total(user_id, group_id)
+    # ── Validação de limites ──────────────────────────────────────────────────
+    active_debt_total = await loan_repo.active_debt_total(user_id, level_id)
     limits_ok, rejection_reason, limit_ctx = await limit_repo.validate_limits(
         borrower_type="user",
         borrower_id=user_id,
-        group_id=group_id,
+        level_id=level_id,
         requested_amount=requested_amount,
         active_debt_total=active_debt_total,
         user_risk_score=user_risk_score,
@@ -110,7 +110,7 @@ async def approve_loan(
         quote_result = await compute_loan_quote(
             db=db,
             loan_request_id=loan_request_id,
-            group_id=group_id,
+            level_id=level_id,
             term_days=term_days,
             user_risk_score=user_risk_score,
         )
@@ -118,16 +118,16 @@ async def approve_loan(
         quote_id   = quote_result["quote_id"]
 
     # ── Wallets ───────────────────────────────────────────────────────────────
-    group_wallet = await wallet_repo.get_or_create("group", group_id)
+    level_wallet = await wallet_repo.get_or_create("level", level_id)
     user_wallet  = await wallet_repo.get_or_create("user",  user_id)
 
-    group_wallet_id = group_wallet["id"]
+    level_wallet_id = level_wallet["id"]
     user_wallet_id  = user_wallet["id"]
 
-    group_true_balance = await wallet_repo.true_balance(group_wallet_id)
-    if group_true_balance < requested_amount:
+    level_true_balance = await wallet_repo.true_balance(level_wallet_id)
+    if level_true_balance < requested_amount:
         reason = (
-            f"Saldo insuficiente no grupo: disponível R$ {group_true_balance:.2f}, "
+            f"Saldo insuficiente no nível {level_id}: disponível R$ {level_true_balance:.2f}, "
             f"solicitado R$ {requested_amount:.2f}"
         )
         await loan_repo.update_status(
@@ -140,7 +140,7 @@ async def approve_loan(
     # ── Cria dívida (interest_rate_applied = snapshot imutável) ──────────────
     debt_id = await debt_repo.create(
         loan_request_id=loan_request_id,
-        from_wallet_id=group_wallet_id,
+        from_wallet_id=level_wallet_id,
         to_wallet_id=user_wallet_id,
         principal=requested_amount,
         interest_rate_applied=final_rate,
@@ -161,7 +161,7 @@ async def approve_loan(
     # ── Wallet transactions ───────────────────────────────────────────────────
     ref = str(loan_request_id)
     await wallet_repo.add_transaction(
-        wallet_id=group_wallet_id,
+        wallet_id=level_wallet_id,
         amount=-requested_amount,
         tx_type="loan_disbursement",
         reference_id=ref,
@@ -177,40 +177,36 @@ async def approve_loan(
         description=f"Empréstimo recebido — solicitação #{loan_request_id}",
     )
 
-    # ── Exposição do pool ─────────────────────────────────────────────────────
-    await limit_repo.increment_exposure(group_id, requested_amount)
+    # ── Exposição do pool do nível ────────────────────────────────────────────
+    await limit_repo.increment_exposure(level_id, requested_amount)
 
     # ── Aprova solicitação ────────────────────────────────────────────────────
     await loan_repo.update_status(
         loan_request_id, "approved", decided_by=approved_by
     )
 
-    # ── Snapshot de liquidez em tempo real ────────────────────────────────────
-    # Fire-and-forget: atualiza liquidity_snapshots agora que o saldo do grupo mudou.
-    # O multiplicador de liquidez das próximas cotações refletirá o desembolso imediatamente.
+    # ── Snapshot de liquidez em tempo real (fire-and-forget) ──────────────────
     try:
         import asyncio as _asyncio
-        from engine.jobs import snapshot_liquidity_for_group
-        _asyncio.create_task(snapshot_liquidity_for_group(db, group_id))
+        from engine.jobs import snapshot_liquidity_for_level
+        _asyncio.create_task(snapshot_liquidity_for_level(db, level_id))
     except Exception:
         pass  # nunca bloqueia a aprovação
 
-    # ── Gera oportunidade de captação para repor saldo do fundo ──────────────
-    # Fire-and-forget: o empréstimo já está concedido; a captação ocorre em
-    # background para não adicionar latência ao fluxo de aprovação.
+    # ── Gera oportunidade de captação (fire-and-forget) ───────────────────────
     opportunity_id: int | None = None
     try:
         import asyncio as _asyncio
         from engine.investment_engine import create_opportunity as _create_opp
 
-        _db_ref = db  # captura para o closure
+        _db_ref = db
 
         async def _create_opp_bg() -> None:
             nonlocal opportunity_id
             try:
                 opp_result = await _create_opp(
                     db=_db_ref,
-                    group_id=group_id,
+                    level_id=level_id,
                     amount_needed=requested_amount,
                     debt_id=debt_id,
                     loan_term_days=term_days,
@@ -229,21 +225,21 @@ async def approve_loan(
     except Exception as e:
         logger.error("Erro ao agendar oportunidade de captação (loan=%d): %s", loan_request_id, e)
 
-    # ── Detecta candidato a upgrade ───────────────────────────────────────────
-    upgrade_candidate = limit_ctx.get("upgrade_candidate", False)
+    # ── Detecta candidato a upgrade de nível ─────────────────────────────────
+    upgrade_candidate = limit_ctx.get("level_upgrade_candidate", False)
     if upgrade_candidate:
-        already_pending = await limit_repo.has_pending_upgrade(user_id, group_id)
+        already_pending = await limit_repo.has_pending_upgrade(user_id, level_id)
         if not already_pending:
             pct = limit_ctx.get("pct")
             await limit_repo.record_upgrade_suggestion(
                 user_id=user_id,
-                from_group_id=group_id,
+                from_level_id=level_id,
                 trigger_score=user_risk_score,
                 trigger_pct=pct,
             )
             logger.info(
-                "Upgrade candidate: user_id=%d group_id=%d score=%.1f pct=%s",
-                user_id, group_id, float(user_risk_score), pct,
+                "Level upgrade candidate: user_id=%d level_id=%d score=%.1f pct=%s",
+                user_id, level_id, float(user_risk_score), pct,
             )
 
     logger.info(
@@ -253,17 +249,17 @@ async def approve_loan(
     )
 
     return {
-        "ok":               True,
-        "debt_id":          debt_id,
-        "final_rate":       final_rate,
-        "term_days":        term_days,
-        "installments":     len(proposed),
-        "quote_id":         quote_id,
-        "effective_limit":  limit_ctx.get("effective_limit"),
-        "limit_mode":       limit_ctx.get("mode"),
-        "limit_pct":        limit_ctx.get("pct"),
-        "upgrade_candidate":  upgrade_candidate,
-        "opportunity_id":     opportunity_id,
+        "ok":                    True,
+        "debt_id":               debt_id,
+        "final_rate":            final_rate,
+        "term_days":             term_days,
+        "installments":          len(proposed),
+        "quote_id":              quote_id,
+        "effective_limit":       limit_ctx.get("effective_limit"),
+        "limit_mode":            limit_ctx.get("mode"),
+        "limit_pct":             limit_ctx.get("pct"),
+        "level_upgrade_candidate": upgrade_candidate,
+        "opportunity_id":        opportunity_id,
     }
 
 
@@ -280,7 +276,7 @@ async def allocate_payment(
     """
     Registra um pagamento e distribui entre as parcelas em aberto (FIFO).
 
-    Algoritmo (seção 5 do documento):
+    Algoritmo:
       1. Cria payments record
       2. Busca parcelas abertas ordenadas por due_date ASC (mais antiga primeiro)
       3. Para cada parcela, aloca o mínimo entre (remaining_amount, saldo restante)
@@ -373,13 +369,13 @@ async def allocate_payment(
             from db.repositories.credit_limits import CreditLimitRepository
             limit_repo = CreditLimitRepository(db)
             await limit_repo.decrement_exposure(
-                req["group_id"], Decimal(str(debt["principal"]))
+                req["level_id"], Decimal(str(debt["principal"]))
             )
         logger.info("Dívida %d totalmente quitada.", debt_id)
 
     # ── Wallet transactions de repagamento ────────────────────────────────────
     user_wallet  = await wallet_repo.get_by_id(debt["to_wallet_id"])
-    group_wallet = await wallet_repo.get_by_id(debt["from_wallet_id"])
+    level_wallet = await wallet_repo.get_by_id(debt["from_wallet_id"])
 
     if user_wallet:
         await wallet_repo.add_transaction(
@@ -390,9 +386,9 @@ async def allocate_payment(
             reference_type="payment",
             description=f"Pagamento da dívida #{debt_id}",
         )
-    if group_wallet:
+    if level_wallet:
         await wallet_repo.add_transaction(
-            wallet_id=group_wallet["id"],
+            wallet_id=level_wallet["id"],
             amount=amount_paid,
             tx_type="loan_repayment",
             reference_id=str(payment_id),
@@ -446,7 +442,7 @@ async def get_loan_summary(db, debt_id: int) -> dict:
         "debt_id":              debt_id,
         "loan_request_id":      debt["loan_request_id"],
         "user_id":              req["user_id"] if req else None,
-        "group_id":             req["group_id"] if req else None,
+        "level_id":             req["level_id"] if req else None,
         "principal":            Decimal(str(debt["principal"])),
         "interest_rate":        Decimal(str(debt["interest_rate_applied"])),
         "term_days":            debt["term_days"],

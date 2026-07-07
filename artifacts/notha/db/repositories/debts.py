@@ -47,26 +47,26 @@ class DebtRepository:
             "SELECT * FROM debts WHERE loan_request_id = $1", loan_request_id
         )
 
-    async def list_active_by_group(self, group_id: int) -> list[asyncpg.Record]:
+    async def list_active_by_level(self, level_id: int) -> list[asyncpg.Record]:
         return await self._db.fetch_all(
             """
             SELECT d.* FROM debts d
             JOIN loan_requests lr ON lr.id = d.loan_request_id
-            WHERE lr.group_id = $1 AND d.status = 'active'
+            WHERE lr.level_id = $1 AND d.status = 'active'
             """,
-            group_id,
+            level_id,
         )
 
-    async def total_active_principal_by_group(self, group_id: int) -> Decimal:
-        """Exposição total ativa de um grupo (para group_pool_limits)."""
+    async def total_active_principal_by_level(self, level_id: int) -> Decimal:
+        """Exposição total ativa de um nível (para level_policies)."""
         val = await self._db.fetch_val(
             """
             SELECT COALESCE(SUM(d.principal), 0)
             FROM debts d
             JOIN loan_requests lr ON lr.id = d.loan_request_id
-            WHERE lr.group_id = $1 AND d.status = 'active'
+            WHERE lr.level_id = $1 AND d.status = 'active'
             """,
-            group_id,
+            level_id,
         )
         return Decimal(str(val or 0))
 

@@ -21,7 +21,7 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("notha.investor_matching")
 
-_ZERO      = Decimal("0")
+_ZERO           = Decimal("0")
 OFFER_TTL_HOURS = 24   # oferta expira em 24 horas
 
 
@@ -34,9 +34,6 @@ def _compute_score(profile: dict, capacity: Decimal, amount_needed: Decimal) -> 
     Pesos:
       40% — capacidade: quanto do amount_needed o candidato pode cobrir
       30% — histórico: total_invested_lifetime normalizado (teto = R$100k)
-      20% — utilização da faixa de prazo: quanto mais centrado, melhor (não usado aqui,
-             pois o filtro de prazo já foi aplicado na query — todos os candidatos
-             estão dentro da faixa)
       10% — bonus auto_invest (prioridade operacional)
     """
     cap_score  = min(float(capacity / amount_needed), 1.0) if amount_needed > _ZERO else 0.0
@@ -56,11 +53,9 @@ def _allocate(candidates: list[dict], amount_needed: Decimal) -> list[dict]:
     Para cada candidato (ordenado por score desc):
       suggested = min(capacity, remaining)
       inclui somente se suggested ≥ min_investment_amount do perfil
-
-    Retorna lista com campo 'suggested_amount' preenchido.
     """
-    remaining  = amount_needed
-    result     = []
+    remaining = amount_needed
+    result    = []
 
     for c in sorted(candidates, key=lambda x: x["score"], reverse=True):
         if remaining <= _ZERO:
@@ -93,13 +88,13 @@ async def _send_offer_notification(
     from whatsapp import send_message
 
     rate_pct   = float(opp.get("expected_rate", 0)) * 100
-    group_name = opp.get("group_name") or f"Grupo #{opp.get('group_id', '?')}"
+    level_name = opp.get("level_name") or f"Nível {opp.get('level_id', '?')}"
     mat_str    = maturity_at.strftime("%d/%m/%Y %H:%M") if maturity_at else "—"
     exp_str    = expires_at.strftime("%d/%m %H:%M") if expires_at else "—"
 
     text = (
         f"📊 *Nova oportunidade de investimento!*\n\n"
-        f"  Fundo: *{group_name}*\n"
+        f"  Fundo: *{level_name}*\n"
         f"  Valor reservado para você: *R$ {suggested_amount:,.2f}*\n"
         f"  Taxa: {rate_pct:.2f}% a.a.\n"
         f"  Vencimento: {mat_str}\n\n"
@@ -119,14 +114,14 @@ async def _send_offer_notification(
 async def match_and_notify(
     db,
     opportunity_id: int,
-    group_id: int,
+    level_id: int,
     amount_needed: Decimal,
     expected_rate: Decimal,
     maturity_at: datetime,
     risk_level: str = "moderate",
 ) -> dict:
     """
-    Seleciona investidores compatíveis, distribui o valor e notifica.
+    Seleciona investidores compatíveis com o nível, distribui o valor e notifica.
 
     Para auto_invest=True  → accept_investment() chamado imediatamente.
     Para auto_invest=False → cria investment_offer + envia mensagem WhatsApp.
@@ -160,9 +155,9 @@ async def match_and_notify(
     )
     exclude = [r["uid"] for r in already]
 
-    # Candidatos compatíveis
+    # Candidatos compatíveis com o nível
     candidates = await profile_repo.find_candidates(
-        group_id=group_id,
+        level_id=level_id,
         maturity_days=term_days,
         risk_level=risk_level,
         exclude_user_ids=exclude,
@@ -259,13 +254,13 @@ async def match_and_notify(
                 offer_id = await db.fetch_val(
                     """
                     INSERT INTO investment_offers
-                        (opportunity_id, user_id, group_id, suggested_amount,
+                        (opportunity_id, user_id, level_id, suggested_amount,
                          maturity_at, expires_at, status)
                     VALUES ($1, $2, $3, $4, $5, $6, 'pending')
                     ON CONFLICT (opportunity_id, user_id) WHERE status = 'pending' DO NOTHING
                     RETURNING id
                     """,
-                    opportunity_id, user_id, group_id,
+                    opportunity_id, user_id, level_id,
                     suggested, maturity_tz, expires_at,
                 )
                 if offer_id:
@@ -324,9 +319,6 @@ async def process_offer_response(
     """
     now = datetime.now(timezone.utc)
 
-    # ── CAS atômico: tenta reclamar a oferta antes de fazer qualquer operação ──
-    # Um único UPDATE ... WHERE status='pending' AND expires_at > NOW() garante
-    # que dois requests concorrentes não aceitem a mesma oferta simultaneamente.
     if action == "decline":
         claimed = await db.fetch_val(
             """
@@ -348,7 +340,7 @@ async def process_offer_response(
             return {"ok": False, "error": f"Oferta indisponível (status: {row['status']})."}
         return {"ok": True, "action": "declined", "message": "Oferta recusada com sucesso."}
 
-    # Para accept / modify: atômica transição pending → processing antes de investir
+    # Para accept / modify: transição atômica pending → processing
     claimed = await db.fetch_val(
         """
         UPDATE investment_offers
@@ -371,7 +363,6 @@ async def process_offer_response(
             return {"ok": False, "error": "Esta oferta já está sendo processada. Aguarde."}
         return {"ok": False, "error": f"Oferta indisponível (status: {status})."}
 
-    # Carrega dados completos (perfil + oferta) após a posse da oferta
     row = await db.fetch_one(
         """
         SELECT o.*, ip.min_investment_amount, ip.max_investment_amount
@@ -385,7 +376,6 @@ async def process_offer_response(
     if not row:
         return {"ok": False, "error": "Oferta não encontrada ou não pertence a você."}
 
-    # accept ou modify
     final_amount = (
         Decimal(str(custom_amount))
         if action == "modify" and custom_amount is not None
@@ -429,7 +419,7 @@ async def process_offer_response(
             "maturity_at":          result["maturity_at"],
         }
 
-    # Reverte status processing → pending para que o investidor possa tentar novamente
+    # Reverte status processing → pending
     await db.execute(
         "UPDATE investment_offers SET status = 'pending' WHERE id = $1 AND status = 'processing'",
         offer_id,

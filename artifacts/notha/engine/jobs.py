@@ -4,11 +4,16 @@ NOTHA periodic background jobs — financial platform.
 Jobs:
   check_overdue_installments    : marca parcelas vencidas como 'overdue' (a cada hora)
   check_expired_loan_requests   : expira solicitações pendentes > 7 dias (a cada hora)
-  snapshot_liquidity            : registra snapshot de liquidez por grupo (a cada 6h)
-  recalculate_behavior_metrics  : recalcula métricas comportamentais de todos os usuários (diário)
-  recalculate_risk_scores       : recalcula scores de risco de todos os usuários (diário)
-  recalculate_location_metrics  : recalcula location_market_metrics por geohash (a cada 4h)
+  snapshot_liquidity            : registra snapshot de liquidez por nível (a cada 5 min)
+  snapshot_liquidity_for_level  : snapshot pontual fire-and-forget para um nível
+  recalculate_behavior_metrics  : recalcula métricas comportamentais (diário)
+  recalculate_risk_scores       : recalcula scores de risco (diário)
+  recalculate_location_metrics  : recalcula location_market_metrics (a cada 4h)
   reconcile_wallet_caches       : reconcilia balance_cache de todas as wallets (diário)
+  expire_opportunities          : expira oportunidades abertas fora do prazo (a cada hora)
+  distribute_investment_payouts : processa payouts de investimento vencidos (a cada minuto)
+  recalculate_investor_metrics  : recalcula métricas de investidores (a cada hora)
+  expire_investment_offers      : expira ofertas de investimento vencidas (a cada 5 min)
 """
 import asyncio
 import logging
@@ -62,45 +67,45 @@ async def check_expired_loan_requests() -> None:
 
 
 async def snapshot_liquidity() -> None:
-    """Registra um snapshot de liquidez para cada grupo ativo."""
+    """Registra um snapshot de liquidez para cada nível ativo."""
     db = get_db()
     if not db:
         return
     try:
         await db.execute("""
             INSERT INTO liquidity_snapshots
-                        (group_id, total_available_investment, total_active_loan_demand, captured_at)
+                        (level_id, total_available_investment, total_active_loan_demand, captured_at)
             SELECT
-                g.id,
+                lv.id,
                 COALESCE((
                     SELECT SUM(wt.amount)
                     FROM   wallet_transactions wt
                     JOIN   wallets w ON w.id = wt.wallet_id
-                    WHERE  w.owner_type = 'group' AND w.owner_id = g.id
+                    WHERE  w.owner_type = 'level' AND w.owner_id = lv.id
                 ), 0),
                 COALESCE((
                     SELECT SUM(d.principal)
                     FROM   debts d
                     JOIN   loan_requests lr ON lr.id = d.loan_request_id
-                    WHERE  lr.group_id = g.id
+                    WHERE  lr.level_id = lv.id
                       AND  d.status   = 'active'
                 ), 0),
                 NOW()
-            FROM groups g
-            WHERE g.status = 'active'
+            FROM levels lv
+            WHERE lv.status = 'active'
         """)
-        logger.info("snapshot_liquidity: snapshot de liquidez registrado.")
+        logger.info("snapshot_liquidity: snapshot de liquidez registrado para todos os níveis.")
     except Exception as e:
         logger.error("Error in snapshot_liquidity: %s", e)
 
 
-async def snapshot_liquidity_for_group(db, group_id: int) -> None:
+async def snapshot_liquidity_for_level(db, level_id: int) -> None:
     """
-    Snapshot pontual de liquidez para um grupo específico.
+    Snapshot pontual de liquidez para um nível específico.
 
     Chamado de forma fire-and-forget via asyncio.create_task() pelos engines
-    logo após qualquer evento que mude a liquidez do grupo (desembolso de
-    empréstimo, aporte de investimento, pagamento recebido).  Isso torna o
+    logo após qualquer evento que mude a liquidez do nível (desembolso de
+    empréstimo, aporte de investimento, pagamento recebido). Isso torna o
     liquidity_multiplier das cotações praticamente em tempo real, sem depender
     exclusivamente do job periódico de 5 min.
     """
@@ -110,34 +115,34 @@ async def snapshot_liquidity_for_group(db, group_id: int) -> None:
         await db.execute(
             """
             INSERT INTO liquidity_snapshots
-                        (group_id, total_available_investment, total_active_loan_demand, captured_at)
+                        (level_id, total_available_investment, total_active_loan_demand, captured_at)
             SELECT
-                g.id,
+                lv.id,
                 COALESCE((
                     SELECT SUM(wt.amount)
                     FROM   wallet_transactions wt
                     JOIN   wallets w ON w.id = wt.wallet_id
-                    WHERE  w.owner_type = 'group' AND w.owner_id = g.id
+                    WHERE  w.owner_type = 'level' AND w.owner_id = lv.id
                 ), 0),
                 COALESCE((
                     SELECT SUM(d.principal)
                     FROM   debts d
                     JOIN   loan_requests lr ON lr.id = d.loan_request_id
-                    WHERE  lr.group_id = g.id
+                    WHERE  lr.level_id = lv.id
                       AND  d.status   = 'active'
                 ), 0),
                 NOW()
-            FROM groups g
-            WHERE g.id = $1
+            FROM levels lv
+            WHERE lv.id = $1
             """,
-            group_id,
+            level_id,
         )
-        logger.debug("snapshot_liquidity_for_group: grupo %d atualizado.", group_id)
+        logger.debug("snapshot_liquidity_for_level: nível %d atualizado.", level_id)
     except Exception as e:
-        logger.error("snapshot_liquidity_for_group group_id=%d: %s", group_id, e)
+        logger.error("snapshot_liquidity_for_level level_id=%d: %s", level_id, e)
 
 
-# ── Novos jobs — Scoring ──────────────────────────────────────────────────────
+# ── Jobs — Scoring ────────────────────────────────────────────────────────────
 
 async def recalculate_behavior_metrics() -> None:
     """
@@ -150,7 +155,6 @@ async def recalculate_behavior_metrics() -> None:
     try:
         from engine.scoring_engine import recalculate_behavior_metrics as _recalc
 
-        # Busca todos os usuários que têm pelo menos uma loan_request
         rows = await db.fetch_all(
             "SELECT DISTINCT user_id FROM loan_requests ORDER BY user_id"
         )
@@ -226,7 +230,7 @@ async def recalculate_location_metrics() -> None:
         logger.error("Error in recalculate_location_metrics job: %s", e)
 
 
-# ── Novo job — Reconciliação de wallets ──────────────────────────────────────
+# ── Job — Reconciliação de wallets ────────────────────────────────────────────
 
 async def reconcile_wallet_caches() -> None:
     """
@@ -289,11 +293,7 @@ async def expire_opportunities() -> None:
 
 async def recalculate_investor_metrics() -> None:
     """
-    Recalcula métricas históricas de todos os perfis de investidor ativos:
-      - avg_investment_amount   (média dos investimentos encerrados/ativos)
-      - avg_term_days           (prazo médio em dias)
-      - total_invested_lifetime (soma acumulada)
-      - active_investment_count (posições com status='active')
+    Recalcula métricas históricas de todos os perfis de investidor ativos.
     """
     db = get_db()
     if not db:
@@ -381,23 +381,17 @@ async def start_all_jobs() -> None:
     """Inicia todos os jobs periódicos como asyncio tasks."""
     logger.info("Iniciando jobs periódicos da NOTHA...")
 
-    # Infraestrutura existente
     asyncio.create_task(_run_job("check_overdue_installments",  check_overdue_installments,  3600))
     asyncio.create_task(_run_job("check_expired_loan_requests", check_expired_loan_requests, 3600))
-    # 5 min — doc §11 pede 5–15 min; eventos financeiros já disparam snapshot pontual
-    asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,          300))
+    asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,           300))
 
-    # Scoring e reconciliação
     asyncio.create_task(_run_job("recalculate_behavior_metrics", recalculate_behavior_metrics, 86400))
     asyncio.create_task(_run_job("recalculate_risk_scores",      recalculate_risk_scores,      86400))
     asyncio.create_task(_run_job("recalculate_location_metrics", recalculate_location_metrics, 14400))
     asyncio.create_task(_run_job("reconcile_wallet_caches",      reconcile_wallet_caches,      86400))
 
-    # Investimentos — distribute roda a cada minuto para cobrir vencimentos de curto prazo
     asyncio.create_task(_run_job("expire_opportunities",          expire_opportunities,          3600))
     asyncio.create_task(_run_job("distribute_investment_payouts", distribute_investment_payouts,   60))
-
-    # Perfis de investidor
     asyncio.create_task(_run_job("recalculate_investor_metrics",  recalculate_investor_metrics,  3600))
     asyncio.create_task(_run_job("expire_investment_offers",      expire_investment_offers,       300))
 

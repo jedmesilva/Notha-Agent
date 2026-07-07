@@ -1,12 +1,13 @@
 """
-RateRepository — group_rate_policies, term_rate_curve, liquidity_snapshots,
+RateRepository — level_policies, level_term_curve, liquidity_snapshots,
                  loan_rate_quotes, investment_rate_quotes.
 
-Camadas 1, 2 e 3 da estrutura de taxas (seção 7).
+Camadas 1, 2 e 3 da estrutura de taxas.
+As políticas financeiras são controladas por nível (levels),
+não mais por grupos.
 """
 import asyncpg
 from decimal import Decimal
-from datetime import datetime
 from db.connection import DB
 
 
@@ -14,53 +15,33 @@ class RateRepository:
     def __init__(self, db: DB):
         self._db = db
 
-    # ── group_rate_policies (Camada 1 — política) ─────────────────────────────
+    # ── level_policies (Camada 1 — política) ─────────────────────────────────
 
-    async def get_active_policy(self, group_id: int) -> asyncpg.Record | None:
-        """Política mais recente do grupo."""
+    async def get_active_policy(self, level_id: int) -> asyncpg.Record | None:
+        """Política mais recente do nível."""
         return await self._db.fetch_one(
             """
-            SELECT * FROM group_rate_policies
-            WHERE group_id = $1
+            SELECT * FROM level_policies
+            WHERE level_id = $1
             ORDER BY effective_from DESC
             LIMIT 1
             """,
-            group_id,
+            level_id,
         )
 
-    async def create_policy(
-        self,
-        group_id: int,
-        base_borrowing_rate: Decimal,
-        base_investment_rate: Decimal,
-        min_spread: Decimal,
-        spread_violation_strategy: str = "reject_investment",
-    ) -> int:
-        return await self._db.fetch_val(
-            """
-            INSERT INTO group_rate_policies
-                (group_id, base_borrowing_rate, base_investment_rate,
-                 min_spread, spread_violation_strategy)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id
-            """,
-            group_id, base_borrowing_rate, base_investment_rate,
-            min_spread, spread_violation_strategy,
-        )
-
-    # ── term_rate_curve (Camada 1 — ajuste por prazo) ────────────────────────
+    # ── level_term_curve (Camada 1 — ajuste por prazo) ───────────────────────
 
     async def get_term_adjustment(
         self,
-        group_id: int,
+        level_id: int,
         term_days: int,
         policy=None,
     ) -> int:
         """
         Retorna o ajuste em basis points para o prazo dado.
 
-        Estratégias (campo term_rate_formula em group_rate_policies):
-          'bands'  — lookup em term_rate_curve (padrão).
+        Estratégias (campo term_rate_formula em level_policies):
+          'bands'  — lookup em level_term_curve (padrão).
                      Lança ValueError se o prazo não estiver coberto.
           'linear' — base_bps + scale × term_days
           'log'    — base_bps + scale × ln(term_days)   (prazo > 0)
@@ -71,7 +52,7 @@ class RateRepository:
         """
         import math
 
-        _policy = policy or await self.get_active_policy(group_id)
+        _policy = policy or await self.get_active_policy(level_id)
         formula = (
             _policy["term_rate_formula"]
             if _policy and _policy["term_rate_formula"]
@@ -81,18 +62,18 @@ class RateRepository:
         if formula == "bands":
             row = await self._db.fetch_one(
                 """
-                SELECT adjustment_bps FROM term_rate_curve
-                WHERE group_id     = $1
+                SELECT adjustment_bps FROM level_term_curve
+                WHERE level_id     = $1
                   AND min_term_days <= $2
                   AND max_term_days >= $2
                 LIMIT 1
                 """,
-                group_id, term_days,
+                level_id, term_days,
             )
             if row is None:
                 raise ValueError(
-                    f"Prazo de {term_days} dias não coberto pela term_rate_curve "
-                    f"do grupo {group_id}. Configure uma faixa ou altere "
+                    f"Prazo de {term_days} dias não coberto pela level_term_curve "
+                    f"do nível {level_id}. Configure uma faixa ou altere "
                     f"term_rate_formula para 'linear', 'log' ou 'sqrt'."
                 )
             return int(row["adjustment_bps"])
@@ -124,32 +105,17 @@ class RateRepository:
 
         return round(result)
 
-    async def upsert_term_curve(
-        self,
-        group_id: int,
-        min_term_days: int,
-        max_term_days: int,
-        adjustment_bps: int,
-    ) -> None:
-        await self._db.execute(
-            """
-            INSERT INTO term_rate_curve (group_id, min_term_days, max_term_days, adjustment_bps)
-            VALUES ($1, $2, $3, $4)
-            """,
-            group_id, min_term_days, max_term_days, adjustment_bps,
-        )
-
     # ── liquidity_snapshots (Camada 2 — liquidez em tempo real) ──────────────
 
-    async def get_latest_liquidity(self, group_id: int) -> asyncpg.Record | None:
+    async def get_latest_liquidity(self, level_id: int) -> asyncpg.Record | None:
         return await self._db.fetch_one(
             """
             SELECT * FROM liquidity_snapshots
-            WHERE group_id = $1
+            WHERE level_id = $1
             ORDER BY captured_at DESC
             LIMIT 1
             """,
-            group_id,
+            level_id,
         )
 
     # ── loan_rate_quotes (Camada 3 — cotação) ────────────────────────────────

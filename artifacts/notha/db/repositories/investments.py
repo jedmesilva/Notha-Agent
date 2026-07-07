@@ -1,10 +1,10 @@
 """
 InvestmentRepository — investments + investment_payouts.
 
-Investimento = posição de um investidor no fundo (grupo).
+Investimento = posição de um investidor no fundo (nível).
 Vinculado a uma oportunidade específica (debt_id rastreável) ou geral.
 
-Payouts são agendados mensalmente e pagos via job periódico.
+Payouts são agendados no vencimento e pagos via job periódico.
 """
 from decimal import Decimal
 from datetime import date
@@ -20,23 +20,23 @@ class InvestmentRepository:
     async def create(
         self,
         investor_user_id: int,
-        group_id: int,
+        level_id: int,
         amount_invested: Decimal,
         rate_agreed: Decimal,
         opportunity_id: int | None = None,
-        debt_id: int | None = None,          # FK direta à dívida coberta (1-JOIN traceability)
+        debt_id: int | None = None,
         maturity_date: date | None = None,
         maturity_at=None,                    # datetime | None — precisão de minutos/horas
     ) -> int:
         return await self._db.fetch_val(
             """
             INSERT INTO investments
-                (investor_user_id, group_id, opportunity_id, debt_id,
+                (investor_user_id, level_id, opportunity_id, debt_id,
                  amount_invested, rate_agreed, status, maturity_date, maturity_at)
             VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
             RETURNING id
             """,
-            investor_user_id, group_id, opportunity_id, debt_id,
+            investor_user_id, level_id, opportunity_id, debt_id,
             amount_invested, rate_agreed, maturity_date, maturity_at,
         )
 
@@ -54,9 +54,9 @@ class InvestmentRepository:
         if status:
             return await self._db.fetch_all(
                 """
-                SELECT i.*, g.name AS group_name
+                SELECT i.*, lv.name AS level_name
                 FROM investments i
-                JOIN groups g ON g.id = i.group_id
+                JOIN levels lv ON lv.id = i.level_id
                 WHERE i.investor_user_id = $1 AND i.status = $2
                 ORDER BY i.invested_at DESC
                 LIMIT $3
@@ -65,9 +65,9 @@ class InvestmentRepository:
             )
         return await self._db.fetch_all(
             """
-            SELECT i.*, g.name AS group_name
+            SELECT i.*, lv.name AS level_name
             FROM investments i
-            JOIN groups g ON g.id = i.group_id
+            JOIN levels lv ON lv.id = i.level_id
             WHERE i.investor_user_id = $1
             ORDER BY i.invested_at DESC
             LIMIT $2
@@ -113,7 +113,7 @@ class InvestmentRepository:
         debt = await self._db.fetch_one(
             "SELECT principal FROM debts WHERE id = $1", debt_id
         )
-        total = Decimal(str(row["total_invested"])) if row else Decimal("0")
+        total     = Decimal(str(row["total_invested"])) if row else Decimal("0")
         principal = Decimal(str(debt["principal"])) if debt else Decimal("0")
         return {
             "debt_id":        debt_id,
@@ -124,27 +124,27 @@ class InvestmentRepository:
             "coverage_pct":   float(total / principal * 100) if principal > 0 else 0.0,
         }
 
-    async def list_by_group(self, group_id: int, status: str | None = None) -> list:
+    async def list_by_level(self, level_id: int, status: str | None = None) -> list:
         if status:
             return await self._db.fetch_all(
                 """
                 SELECT i.*, u.full_name, u.nickname
                 FROM investments i
                 JOIN users u ON u.id = i.investor_user_id
-                WHERE i.group_id = $1 AND i.status = $2
+                WHERE i.level_id = $1 AND i.status = $2
                 ORDER BY i.invested_at DESC
                 """,
-                group_id, status,
+                level_id, status,
             )
         return await self._db.fetch_all(
             """
             SELECT i.*, u.full_name, u.nickname
             FROM investments i
             JOIN users u ON u.id = i.investor_user_id
-            WHERE i.group_id = $1
+            WHERE i.level_id = $1
             ORDER BY i.invested_at DESC
             """,
-            group_id,
+            level_id,
         )
 
     async def update_status(self, investment_id: int, status: str) -> None:
@@ -153,30 +153,36 @@ class InvestmentRepository:
         )
 
     async def total_active_by_investor(
-        self, investor_user_id: int, group_id: int
+        self, investor_user_id: int, level_id: int
     ) -> Decimal:
         val = await self._db.fetch_val(
             """
             SELECT COALESCE(SUM(amount_invested), 0)
             FROM investments
             WHERE investor_user_id = $1
-              AND group_id         = $2
+              AND level_id         = $2
               AND status           = 'active'
             """,
-            investor_user_id, group_id,
+            investor_user_id, level_id,
         )
         return Decimal(str(val or 0))
 
-    async def total_active_by_group(self, group_id: int) -> Decimal:
+    async def total_active_by_level(self, level_id: int) -> Decimal:
         val = await self._db.fetch_val(
             """
             SELECT COALESCE(SUM(amount_invested), 0)
             FROM investments
-            WHERE group_id = $1 AND status = 'active'
+            WHERE level_id = $1 AND status = 'active'
             """,
-            group_id,
+            level_id,
         )
         return Decimal(str(val or 0))
+
+    async def list_all_user_ids(self) -> list[int]:
+        rows = await self._db.fetch_all(
+            "SELECT DISTINCT investor_user_id FROM investments ORDER BY investor_user_id"
+        )
+        return [r["investor_user_id"] for r in rows]
 
     # ── investment_payouts ────────────────────────────────────────────────────
 
@@ -193,7 +199,7 @@ class InvestmentRepository:
         Agenda o payout de vencimento do investimento.
 
         scheduled_at (TIMESTAMPTZ) tem prioridade sobre scheduled_date (DATE) para
-        investimentos de curto prazo (minutos, horas).  O job de distribuição usa
+        investimentos de curto prazo (minutos, horas). O job de distribuição usa
         scheduled_at <= NOW() quando disponível.
         """
         return await self._db.fetch_val(
@@ -210,12 +216,12 @@ class InvestmentRepository:
 
     async def list_pending_payouts(self, up_to_date: date | None = None) -> list:
         """
-        Retorna payouts vencidos.  Usa scheduled_at <= NOW() quando definido
+        Retorna payouts vencidos. Usa scheduled_at <= NOW() quando definido
         (precisão de minutos/horas); caso contrário, scheduled_date <= up_to_date.
         """
         return await self._db.fetch_all(
             """
-            SELECT p.*, i.investor_user_id, i.group_id, i.amount_invested
+            SELECT p.*, i.investor_user_id, i.level_id, i.amount_invested
             FROM investment_payouts p
             JOIN investments i ON i.id = p.investment_id
             WHERE p.status = 'scheduled'
@@ -251,9 +257,9 @@ class InvestmentRepository:
 
     # ── visão consolidada do investidor ───────────────────────────────────────
 
-    async def get_investor_position(self, investor_user_id: int, group_id: int) -> dict:
-        """Posição consolidada de um investidor em um grupo."""
-        total_invested = await self.total_active_by_investor(investor_user_id, group_id)
+    async def get_investor_position(self, investor_user_id: int, level_id: int) -> dict:
+        """Posição consolidada de um investidor em um nível."""
+        total_invested = await self.total_active_by_investor(investor_user_id, level_id)
         total_returned = await self.total_paid_to_investor(investor_user_id)
 
         pending_payouts = await self._db.fetch_val(
@@ -262,24 +268,24 @@ class InvestmentRepository:
             FROM investment_payouts p
             JOIN investments i ON i.id = p.investment_id
             WHERE i.investor_user_id = $1
-              AND i.group_id         = $2
+              AND i.level_id         = $2
               AND p.status           = 'scheduled'
             """,
-            investor_user_id, group_id,
+            investor_user_id, level_id,
         ) or 0
 
         active_count = await self._db.fetch_val(
             """
             SELECT COUNT(*) FROM investments
-            WHERE investor_user_id = $1 AND group_id = $2 AND status = 'active'
+            WHERE investor_user_id = $1 AND level_id = $2 AND status = 'active'
             """,
-            investor_user_id, group_id,
+            investor_user_id, level_id,
         ) or 0
 
         return {
-            "total_invested":         total_invested,
-            "total_returned":         Decimal(str(total_returned)),
-            "pending_payouts":        Decimal(str(pending_payouts)),
-            "active_investments":     int(active_count),
-            "net_position":           total_invested - Decimal(str(total_returned)),
+            "total_invested":     total_invested,
+            "total_returned":     Decimal(str(total_returned)),
+            "pending_payouts":    Decimal(str(pending_payouts)),
+            "active_investments": int(active_count),
+            "net_position":       total_invested - Decimal(str(total_returned)),
         }

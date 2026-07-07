@@ -34,14 +34,14 @@ DEFAULT_OPPORTUNITY_TTL_DAYS = 30
 
 async def create_opportunity(
     db,
-    group_id: int,
+    level_id: int,
     amount_needed: Decimal,
     debt_id: int | None = None,
     ttl_days: int = DEFAULT_OPPORTUNITY_TTL_DAYS,
     loan_term_days: int | None = None,
 ) -> dict:
     """
-    Cria uma investment_opportunity para repor o saldo retirado do fundo.
+    Cria uma investment_opportunity para repor o saldo retirado do pool do nível.
     Chamada automaticamente ao final de approve_loan().
 
     Retorna: {opportunity_id, amount_needed, expected_rate, expires_at}
@@ -52,8 +52,8 @@ async def create_opportunity(
     opp_repo  = OpportunityRepository(db)
     rate_repo = RateRepository(db)
 
-    # Snapshot da taxa de investimento do grupo no momento da criação
-    policy = await rate_repo.get_active_policy(group_id)
+    # Snapshot da taxa de investimento do nível no momento da criação
+    policy = await rate_repo.get_active_policy(level_id)
     expected_rate = (
         Decimal(str(policy["base_investment_rate"])) if policy else Decimal("0.02")
     )
@@ -61,7 +61,7 @@ async def create_opportunity(
     expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
 
     opp_id = await opp_repo.create(
-        group_id=group_id,
+        level_id=level_id,
         amount_needed=amount_needed,
         expected_rate=expected_rate,
         expires_at=expires_at,
@@ -77,21 +77,19 @@ async def create_opportunity(
     )
 
     logger.info(
-        "Oportunidade de investimento criada: id=%d group=%d amount=R$%.2f debt=%s maturity=%s",
-        opp_id, group_id, float(amount_needed), debt_id,
+        "Oportunidade de investimento criada: id=%d level=%d amount=R$%.2f debt=%s maturity=%s",
+        opp_id, level_id, float(amount_needed), debt_id,
         investment_maturity_at.isoformat(),
     )
 
-    # ── Matching e notificação de investidores ────────────────────────────────
-    # Fire-and-forget: seleciona investidores compatíveis, distribui o valor e
-    # envia notificações WhatsApp (ou investe automaticamente para auto_invest=True).
+    # ── Matching e notificação de investidores (fire-and-forget) ─────────────
     async def _run_matching() -> None:
         try:
             from engine.investor_matching import match_and_notify
             result = await match_and_notify(
                 db=db,
                 opportunity_id=opp_id,
-                group_id=group_id,
+                level_id=level_id,
                 amount_needed=amount_needed,
                 expected_rate=expected_rate,
                 maturity_at=investment_maturity_at,
@@ -131,10 +129,10 @@ async def accept_investment(
     Ações:
       1. Valida oportunidade (aberta, não expirada, amount <= remaining)
       2. Debita wallet do investidor
-      3. Credita wallet do grupo (fundo reabastecido)
+      3. Credita wallet do nível (pool reabastecido)
       4. Cria registro em investments
       5. Atualiza amount_committed na oportunidade
-      6. Agenda payout mensal proporcional
+      6. Agenda payout único no vencimento
 
     Retorna: {ok, investment_id, new_opportunity_status}
     """
@@ -168,17 +166,10 @@ async def accept_investment(
     term_years   = term_seconds / _YEAR_SECONDS
 
     # ── Garante que wallets existam ANTES da transação ────────────────────────
-    # get_or_create pode fazer INSERT; executar fora do bloco atômico evita
-    # deadlock com a tabela wallets caso seja chamado em paralelo.
     _wallet_repo_pre = WalletRepository(db)
-    investor_wallet = await _wallet_repo_pre.get_or_create("user",  investor_user_id)
-    group_wallet_id_holder: list[int] = []  # preenchido dentro da tx após saber group_id
+    investor_wallet = await _wallet_repo_pre.get_or_create("user", investor_user_id)
+    level_wallet_id_holder: list[int] = []
 
-    # ── Bloco atômico: SELECT FOR UPDATE + todas as mutações ─────────────────
-    # SELECT FOR UPDATE na oportunidade evita que dois aceites concorrentes
-    # confirmem mais do que o amount_needed (double-commit).
-    # Toda a cadeia (validações, inv_repo.create, add_transaction × 2,
-    # add_commitment, schedule_payout) é commitada ou revertida em conjunto.
     result_payload: dict = {}
 
     async with db.atomic() as tx:
@@ -210,14 +201,13 @@ async def accept_investment(
                     "error": f"Valor excede o restante da oportunidade: disponível R$ {remaining:.2f}",
                 }
             else:
-                group_id    = opp["group_id"]
+                level_id    = opp["level_id"]
                 rate_agreed = Decimal(str(opp["expected_rate"]))
-                # debt_id propagado diretamente — FK de 1 salto para rastreabilidade
                 opp_debt_id = opp["debt_id"] if opp["debt_id"] else None
 
-                # Garante wallet do grupo dentro da transação
-                group_wallet = await wallet_repo_tx.get_or_create("group", group_id)
-                group_wallet_id_holder.append(group_wallet["id"])
+                # Garante wallet do nível dentro da transação
+                level_wallet = await wallet_repo_tx.get_or_create("level", level_id)
+                level_wallet_id_holder.append(level_wallet["id"])
 
                 # Verifica saldo atual dentro da transação (leitura consistente)
                 investor_balance = await wallet_repo_tx.true_balance(investor_wallet["id"])
@@ -230,10 +220,9 @@ async def accept_investment(
                         ),
                     }
                 else:
-                    # Registra investimento com FK direta à dívida coberta
                     inv_id = await inv_repo_tx.create(
                         investor_user_id=investor_user_id,
-                        group_id=group_id,
+                        level_id=level_id,
                         amount_invested=amount,
                         rate_agreed=rate_agreed,
                         opportunity_id=opportunity_id,
@@ -249,10 +238,10 @@ async def accept_investment(
                         tx_type="investment_deposit",
                         reference_id=ref,
                         reference_type="investment",
-                        description=f"Investimento no fundo — oportunidade #{opportunity_id}",
+                        description=f"Investimento no fundo nível {level_id} — oportunidade #{opportunity_id}",
                     )
                     await wallet_repo_tx.add_transaction(
-                        wallet_id=group_wallet["id"],
+                        wallet_id=level_wallet["id"],
                         amount=amount,
                         tx_type="investment_deposit",
                         reference_id=ref,
@@ -291,7 +280,7 @@ async def accept_investment(
                         "interest_at_maturity":   interest_amount,
                         "maturity_at":            maturity_dt.isoformat(),
                         "new_opportunity_status": new_status,
-                        "_group_id":              group_id,
+                        "_level_id":              level_id,
                     }
 
     if not result_payload.get("ok"):
@@ -300,10 +289,10 @@ async def accept_investment(
     # ── Efeitos colaterais pós-commit (fire-and-forget) ───────────────────────
     try:
         import asyncio as _asyncio
-        from engine.jobs import snapshot_liquidity_for_group
-        _group_id = result_payload.pop("_group_id", None)
-        if _group_id:
-            _asyncio.create_task(snapshot_liquidity_for_group(db, _group_id))
+        from engine.jobs import snapshot_liquidity_for_level
+        _level_id = result_payload.pop("_level_id", None)
+        if _level_id:
+            _asyncio.create_task(snapshot_liquidity_for_level(db, _level_id))
     except Exception:
         pass
 
@@ -317,10 +306,11 @@ async def distribute_payouts(db) -> dict:
     Processa todos os investment_payouts com scheduled_date <= hoje.
 
     Para cada payout:
-      1. Debita wallet do grupo (interest_payout)
+      1. Debita wallet do nível (interest_payout)
       2. Credita wallet do investidor (interest_payout)
-      3. Marca payout como 'paid'
-      4. Agenda próximo payout mensal (se investimento ainda ativo)
+      3. Debita wallet do nível (devolução de principal)
+      4. Credita wallet do investidor (devolução de principal)
+      5. Marca payout como 'paid' e investimento como 'matured'
 
     Retorna: {paid_count, total_distributed, errors}
     """
@@ -332,7 +322,7 @@ async def distribute_payouts(db) -> dict:
 
     payouts = await inv_repo.list_pending_payouts(up_to_date=date.today())
 
-    paid_count       = 0
+    paid_count        = 0
     total_distributed = _ZERO
     errors: list[str] = []
 
@@ -340,27 +330,25 @@ async def distribute_payouts(db) -> dict:
         payout_id   = payout["id"]
         inv_id      = payout["investment_id"]
         investor_id = payout["investor_user_id"]
-        group_id    = payout["group_id"]
+        level_id    = payout["level_id"]
         interest    = Decimal(str(payout["amount"]))
 
         try:
             inv = await inv_repo.get_by_id(inv_id)
             if not inv or inv["status"] != "active":
-                # Já processado ou cancelado; marca e segue
                 await inv_repo.mark_payout_paid(payout_id)
                 continue
 
             principal = Decimal(str(inv["amount_invested"]))
-            total_due = principal + interest  # devolução de principal + juros
+            total_due = principal + interest
 
-            group_wallet    = await wallet_repo.get_or_create("group", group_id)
+            level_wallet    = await wallet_repo.get_or_create("level", level_id)
             investor_wallet = await wallet_repo.get_or_create("user",  investor_id)
 
-            # Verifica saldo do grupo (deve cobrir principal + juros)
-            group_balance = await wallet_repo.true_balance(group_wallet["id"])
+            group_balance = await wallet_repo.true_balance(level_wallet["id"])
             if group_balance < total_due:
                 errors.append(
-                    f"Payout #{payout_id} ignorado: saldo do grupo insuficiente "
+                    f"Payout #{payout_id} ignorado: saldo do nível {level_id} insuficiente "
                     f"(R$ {group_balance:.2f} < juros R$ {interest:.2f} + "
                     f"principal R$ {principal:.2f} = R$ {total_due:.2f})"
                 )
@@ -368,19 +356,15 @@ async def distribute_payouts(db) -> dict:
 
             ref = str(payout_id)
 
-            # ── Bloco atômico: 4 movimentações + status ───────────────────
-            # atomic() adquire uma única conexão + transação asyncpg.
-            # Falha em qualquer passo reverte tudo — o payout permanece
-            # 'scheduled' e será reprocessado sem dupla postagem.
             async with db.atomic() as tx:
                 from db.repositories.wallets import WalletRepository as _WR
                 from db.repositories.investments import InvestmentRepository as _IR
                 wallet_tx = _WR(tx)
                 inv_tx    = _IR(tx)
 
-                # Juros: grupo → investidor
+                # Juros: nível → investidor
                 await wallet_tx.add_transaction(
-                    wallet_id=group_wallet["id"],
+                    wallet_id=level_wallet["id"],
                     amount=-interest,
                     tx_type="interest_payout",
                     reference_id=ref,
@@ -396,9 +380,9 @@ async def distribute_payouts(db) -> dict:
                     description=f"Juros recebidos no vencimento — investimento #{inv_id}",
                 )
 
-                # Devolução de principal: grupo → investidor
+                # Devolução de principal: nível → investidor
                 await wallet_tx.add_transaction(
-                    wallet_id=group_wallet["id"],
+                    wallet_id=level_wallet["id"],
                     amount=-principal,
                     tx_type="investment_withdrawal",
                     reference_id=ref,
@@ -415,7 +399,6 @@ async def distribute_payouts(db) -> dict:
                 )
 
                 await inv_tx.mark_payout_paid(payout_id)
-                # Modelo de payout único: sem ciclo. Marca o investimento como 'matured'.
                 await inv_tx.update_status(inv_id, "matured")
 
             paid_count        += 1
@@ -439,8 +422,8 @@ async def distribute_payouts(db) -> dict:
 
 # ── 4. Visão do investidor ────────────────────────────────────────────────────
 
-async def get_investor_summary(db, investor_user_id: int, group_id: int) -> dict:
-    """Posição consolidada de um investidor em um grupo com oportunidades abertas."""
+async def get_investor_summary(db, investor_user_id: int, level_id: int) -> dict:
+    """Posição consolidada de um investidor em um nível com oportunidades abertas."""
     from db.repositories.investments import InvestmentRepository
     from db.repositories.opportunities import OpportunityRepository
     from db.repositories.wallets import WalletRepository
@@ -449,16 +432,16 @@ async def get_investor_summary(db, investor_user_id: int, group_id: int) -> dict
     opp_repo    = OpportunityRepository(db)
     wallet_repo = WalletRepository(db)
 
-    position     = await inv_repo.get_investor_position(investor_user_id, group_id)
-    open_opps    = await opp_repo.list_open(group_id=group_id, limit=5)
-    active_inv   = await inv_repo.list_by_investor(investor_user_id, status="active", limit=10)
+    position   = await inv_repo.get_investor_position(investor_user_id, level_id)
+    open_opps  = await opp_repo.list_open(level_id=level_id, limit=5)
+    active_inv = await inv_repo.list_by_investor(investor_user_id, status="active", limit=10)
 
-    wallet = await wallet_repo.get_by_owner("user", investor_user_id)
+    wallet  = await wallet_repo.get_by_owner("user", investor_user_id)
     balance = await wallet_repo.true_balance(wallet["id"]) if wallet else _ZERO
 
     return {
-        "wallet_balance":    balance,
-        "position":          position,
+        "wallet_balance":     balance,
+        "position":           position,
         "active_investments": [dict(i) for i in active_inv],
         "open_opportunities": [dict(o) for o in open_opps],
     }
