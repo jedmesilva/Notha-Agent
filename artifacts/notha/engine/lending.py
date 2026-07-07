@@ -213,6 +213,7 @@ async def approve_loan(
                     group_id=group_id,
                     amount_needed=requested_amount,
                     debt_id=debt_id,
+                    loan_term_days=term_days,
                 )
                 logger.info(
                     "Oportunidade de captação gerada: opp_id=%d amount=R$%.2f",

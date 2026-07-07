@@ -38,6 +38,7 @@ async def create_opportunity(
     amount_needed: Decimal,
     debt_id: int | None = None,
     ttl_days: int = DEFAULT_OPPORTUNITY_TTL_DAYS,
+    loan_term_days: int | None = None,
 ) -> dict:
     """
     Cria uma investment_opportunity para repor o saldo retirado do fundo.
@@ -67,10 +68,44 @@ async def create_opportunity(
         debt_id=debt_id,
     )
 
-    logger.info(
-        "Oportunidade de investimento criada: id=%d group=%d amount=R$%.2f debt=%s",
-        opp_id, group_id, float(amount_needed), debt_id,
+    # Vencimento real dos investimentos: prazo do empréstimo subjacente.
+    # Se loan_term_days não for passado (criação manual), usa o TTL da oportunidade.
+    investment_maturity_at = (
+        datetime.now(timezone.utc) + timedelta(days=loan_term_days)
+        if loan_term_days
+        else expires_at
     )
+
+    logger.info(
+        "Oportunidade de investimento criada: id=%d group=%d amount=R$%.2f debt=%s maturity=%s",
+        opp_id, group_id, float(amount_needed), debt_id,
+        investment_maturity_at.isoformat(),
+    )
+
+    # ── Matching e notificação de investidores ────────────────────────────────
+    # Fire-and-forget: seleciona investidores compatíveis, distribui o valor e
+    # envia notificações WhatsApp (ou investe automaticamente para auto_invest=True).
+    async def _run_matching() -> None:
+        try:
+            from engine.investor_matching import match_and_notify
+            result = await match_and_notify(
+                db=db,
+                opportunity_id=opp_id,
+                group_id=group_id,
+                amount_needed=amount_needed,
+                expected_rate=expected_rate,
+                maturity_at=investment_maturity_at,
+            )
+            logger.info(
+                "investor_matching opp=%d: alocado=R$%.2f (%.1f%%) auto=%d notificados=%d",
+                opp_id, float(result["total_allocated"]), result["coverage_pct"],
+                result["auto_invested"], result["notified"],
+            )
+        except Exception as exc:
+            logger.error("investor_matching opp=%d: %s", opp_id, exc)
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run_matching())
 
     return {
         "opportunity_id": opp_id,
@@ -107,12 +142,7 @@ async def accept_investment(
     from db.repositories.investments import InvestmentRepository
     from db.repositories.wallets import WalletRepository
 
-    opp_repo    = OpportunityRepository(db)
-    inv_repo    = InvestmentRepository(db)
-    wallet_repo = WalletRepository(db)
-
     # ── Valida maturity_at ANTES de qualquer mutação no banco ────────────────
-    # (evitar inconsistência financeira se o parâmetro for inválido)
     now_dt = datetime.now(timezone.utc)
     if maturity_at is None:
         return {
@@ -132,122 +162,149 @@ async def accept_investment(
         maturity_dt = maturity_at
 
     if maturity_dt <= now_dt:
-        return {
-            "ok":    False,
-            "error": "maturity_at deve ser uma data/hora futura.",
-        }
+        return {"ok": False, "error": "maturity_at deve ser uma data/hora futura."}
 
     term_seconds = Decimal(str((maturity_dt - now_dt).total_seconds()))
     term_years   = term_seconds / _YEAR_SECONDS
 
-    # Valida oportunidade
-    opp = await opp_repo.get_by_id(opportunity_id)
-    if not opp:
-        return {"ok": False, "error": "Oportunidade não encontrada"}
-    if opp["status"] not in ("open", "partially_funded"):
-        return {"ok": False, "error": f"Oportunidade não está aberta (status={opp['status']})"}
-    if opp["expires_at"] < datetime.now(timezone.utc):
-        await opp_repo.expire_stale()
-        return {"ok": False, "error": "Oportunidade expirada"}
+    # ── Garante que wallets existam ANTES da transação ────────────────────────
+    # get_or_create pode fazer INSERT; executar fora do bloco atômico evita
+    # deadlock com a tabela wallets caso seja chamado em paralelo.
+    _wallet_repo_pre = WalletRepository(db)
+    investor_wallet = await _wallet_repo_pre.get_or_create("user",  investor_user_id)
+    group_wallet_id_holder: list[int] = []  # preenchido dentro da tx após saber group_id
 
-    remaining = Decimal(str(opp["amount_needed"])) - Decimal(str(opp["amount_committed"]))
-    if amount > remaining:
-        return {
-            "ok":    False,
-            "error": f"Valor excede o restante da oportunidade: disponível R$ {remaining:.2f}",
-        }
+    # ── Bloco atômico: SELECT FOR UPDATE + todas as mutações ─────────────────
+    # SELECT FOR UPDATE na oportunidade evita que dois aceites concorrentes
+    # confirmem mais do que o amount_needed (double-commit).
+    # Toda a cadeia (validações, inv_repo.create, add_transaction × 2,
+    # add_commitment, schedule_payout) é commitada ou revertida em conjunto.
+    result_payload: dict = {}
 
-    group_id    = opp["group_id"]
-    rate_agreed = Decimal(str(opp["expected_rate"]))
+    async with db.atomic() as tx:
+        opp_repo_tx    = OpportunityRepository(tx)
+        inv_repo_tx    = InvestmentRepository(tx)
+        wallet_repo_tx = WalletRepository(tx)
 
-    # Wallets
-    investor_wallet = await wallet_repo.get_or_create("user",  investor_user_id)
-    group_wallet    = await wallet_repo.get_or_create("group", group_id)
+        # Lock de linha — impede aceitações concorrentes desta oportunidade
+        opp = await tx.fetch_one(
+            "SELECT * FROM investment_opportunities WHERE id = $1 FOR UPDATE",
+            opportunity_id,
+        )
+        if not opp:
+            result_payload = {"ok": False, "error": "Oportunidade não encontrada"}
+        elif opp["status"] not in ("open", "partially_funded"):
+            result_payload = {
+                "ok":    False,
+                "error": f"Oportunidade não está aberta (status={opp['status']})",
+            }
+        elif opp["expires_at"] < now_dt:
+            result_payload = {"ok": False, "error": "Oportunidade expirada"}
+        else:
+            remaining = (
+                Decimal(str(opp["amount_needed"])) - Decimal(str(opp["amount_committed"]))
+            )
+            if amount > remaining:
+                result_payload = {
+                    "ok":    False,
+                    "error": f"Valor excede o restante da oportunidade: disponível R$ {remaining:.2f}",
+                }
+            else:
+                group_id    = opp["group_id"]
+                rate_agreed = Decimal(str(opp["expected_rate"]))
 
-    # Verifica saldo do investidor
-    investor_balance = await wallet_repo.true_balance(investor_wallet["id"])
-    if investor_balance < amount:
-        return {
-            "ok":    False,
-            "error": f"Saldo insuficiente: disponível R$ {investor_balance:.2f}, solicitado R$ {amount:.2f}",
-        }
+                # Garante wallet do grupo dentro da transação
+                group_wallet = await wallet_repo_tx.get_or_create("group", group_id)
+                group_wallet_id_holder.append(group_wallet["id"])
 
-    # Registra investimento — maturity_at tem prioridade; maturity_date como fallback
-    inv_id = await inv_repo.create(
-        investor_user_id=investor_user_id,
-        group_id=group_id,
-        amount_invested=amount,
-        rate_agreed=rate_agreed,
-        opportunity_id=opportunity_id,
-        maturity_date=maturity_date,
-        maturity_at=maturity_at,
-    )
+                # Verifica saldo atual dentro da transação (leitura consistente)
+                investor_balance = await wallet_repo_tx.true_balance(investor_wallet["id"])
+                if investor_balance < amount:
+                    result_payload = {
+                        "ok":    False,
+                        "error": (
+                            f"Saldo insuficiente: disponível R$ {investor_balance:.2f}, "
+                            f"solicitado R$ {amount:.2f}"
+                        ),
+                    }
+                else:
+                    # Registra investimento
+                    inv_id = await inv_repo_tx.create(
+                        investor_user_id=investor_user_id,
+                        group_id=group_id,
+                        amount_invested=amount,
+                        rate_agreed=rate_agreed,
+                        opportunity_id=opportunity_id,
+                        maturity_date=maturity_date,
+                        maturity_at=maturity_at,
+                    )
 
-    # Wallet transactions
-    ref = str(inv_id)
-    await wallet_repo.add_transaction(
-        wallet_id=investor_wallet["id"],
-        amount=-amount,
-        tx_type="investment_deposit",
-        reference_id=ref,
-        reference_type="investment",
-        description=f"Investimento no fundo — oportunidade #{opportunity_id}",
-    )
-    await wallet_repo.add_transaction(
-        wallet_id=group_wallet["id"],
-        amount=amount,
-        tx_type="investment_deposit",
-        reference_id=ref,
-        reference_type="investment",
-        description=f"Captação de investimento #{inv_id}",
-    )
+                    ref = str(inv_id)
+                    await wallet_repo_tx.add_transaction(
+                        wallet_id=investor_wallet["id"],
+                        amount=-amount,
+                        tx_type="investment_deposit",
+                        reference_id=ref,
+                        reference_type="investment",
+                        description=f"Investimento no fundo — oportunidade #{opportunity_id}",
+                    )
+                    await wallet_repo_tx.add_transaction(
+                        wallet_id=group_wallet["id"],
+                        amount=amount,
+                        tx_type="investment_deposit",
+                        reference_id=ref,
+                        reference_type="investment",
+                        description=f"Captação de investimento #{inv_id}",
+                    )
 
-    # Atualiza oportunidade
-    new_status = await opp_repo.add_commitment(opportunity_id, amount)
+                    new_status = await opp_repo_tx.add_commitment(opportunity_id, amount)
 
-    # ── Snapshot de liquidez em tempo real ────────────────────────────────────
-    # O aporte do investidor aumenta o saldo do grupo — dispara snapshot pontual
-    # para que as próximas cotações reflitam a nova liquidez imediatamente.
+                    # Juros simples: I = P × r × t
+                    interest_amount = (amount * rate_agreed * term_years).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
+                    await inv_repo_tx.schedule_payout(
+                        investment_id=inv_id,
+                        amount=interest_amount,
+                        period_start=now_dt.date(),
+                        period_end=maturity_dt.date(),
+                        scheduled_date=maturity_dt.date(),
+                        scheduled_at=maturity_dt,
+                    )
+
+                    logger.info(
+                        "Investimento aceito: inv_id=%d opp=%d investor=%d amount=R$%.2f "
+                        "rate=%.4f%% juros=R$%.2f vencimento=%s opp_status=%s",
+                        inv_id, opportunity_id, investor_user_id,
+                        float(amount), float(rate_agreed) * 100,
+                        float(interest_amount), maturity_dt.isoformat(), new_status,
+                    )
+
+                    result_payload = {
+                        "ok":                     True,
+                        "investment_id":          inv_id,
+                        "amount_invested":        amount,
+                        "rate_agreed":            rate_agreed,
+                        "interest_at_maturity":   interest_amount,
+                        "maturity_at":            maturity_dt.isoformat(),
+                        "new_opportunity_status": new_status,
+                        "_group_id":              group_id,
+                    }
+
+    if not result_payload.get("ok"):
+        return result_payload
+
+    # ── Efeitos colaterais pós-commit (fire-and-forget) ───────────────────────
     try:
         import asyncio as _asyncio
         from engine.jobs import snapshot_liquidity_for_group
-        _asyncio.create_task(snapshot_liquidity_for_group(db, group_id))
+        _group_id = result_payload.pop("_group_id", None)
+        if _group_id:
+            _asyncio.create_task(snapshot_liquidity_for_group(db, _group_id))
     except Exception:
         pass
 
-    # ── Agenda payout único no vencimento ────────────────────────────────────
-    # maturity_dt e term_years já foram computados na validação antecipada acima.
-    # Juros simples: I = P × r × t   onde t = fração do ano gregoriano.
-    interest_amount = (amount * rate_agreed * term_years).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
-
-    await inv_repo.schedule_payout(
-        investment_id=inv_id,
-        amount=interest_amount,
-        period_start=now_dt.date(),
-        period_end=maturity_dt.date(),
-        scheduled_date=maturity_dt.date(),
-        scheduled_at=maturity_dt,
-    )
-
-    logger.info(
-        "Investimento aceito: inv_id=%d opp=%d investor=%d amount=R$%.2f "
-        "rate=%.4f%% juros=R$%.2f vencimento=%s opp_status=%s",
-        inv_id, opportunity_id, investor_user_id,
-        float(amount), float(rate_agreed) * 100,
-        float(interest_amount), maturity_dt.isoformat(), new_status,
-    )
-
-    return {
-        "ok":                    True,
-        "investment_id":         inv_id,
-        "amount_invested":       amount,
-        "rate_agreed":           rate_agreed,
-        "interest_at_maturity":  interest_amount,
-        "maturity_at":           maturity_dt.isoformat(),
-        "new_opportunity_status": new_status,
-    }
+    return result_payload
 
 
 # ── 3. Distribuir payouts vencidos ────────────────────────────────────────────

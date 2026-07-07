@@ -236,6 +236,104 @@ async def _migrate_pending_confirmations_table() -> None:
     logger.info("Pending confirmations table ready.")
 
 
+async def _migrate_investor_profile_tables() -> None:
+    """
+    Cria as tabelas de perfil de investidor e ofertas de investimento.
+
+    investor_profiles — preferências e métricas históricas por usuário.
+    investment_offers — ofertas pendentes enviadas a investidores específicos.
+    """
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS investor_profiles (
+                id                      SERIAL PRIMARY KEY,
+                user_id                 INT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                group_id                INT REFERENCES groups(id) ON DELETE SET NULL,
+                risk_tolerance          VARCHAR(20)    NOT NULL DEFAULT 'moderate',
+                min_investment_amount   NUMERIC(15,2)  NOT NULL DEFAULT 50,
+                max_investment_amount   NUMERIC(15,2),
+                min_term_days           INT            NOT NULL DEFAULT 1,
+                max_term_days           INT            NOT NULL DEFAULT 365,
+                auto_invest             BOOLEAN        NOT NULL DEFAULT FALSE,
+                is_active               BOOLEAN        NOT NULL DEFAULT TRUE,
+                avg_investment_amount   NUMERIC(15,2),
+                avg_term_days           INT,
+                total_invested_lifetime NUMERIC(15,2)  NOT NULL DEFAULT 0,
+                active_investment_count INT            NOT NULL DEFAULT 0,
+                last_metrics_at         TIMESTAMPTZ,
+                created_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+                updated_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS investment_offers (
+                id               SERIAL PRIMARY KEY,
+                opportunity_id   INT           NOT NULL REFERENCES investment_opportunities(id),
+                user_id          INT           NOT NULL REFERENCES users(id),
+                group_id         INT           NOT NULL,
+                suggested_amount NUMERIC(15,2) NOT NULL,
+                maturity_at      TIMESTAMPTZ   NOT NULL,
+                status           VARCHAR(20)   NOT NULL DEFAULT 'pending',
+                message_sent_at  TIMESTAMPTZ,
+                expires_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+                responded_at     TIMESTAMPTZ,
+                final_amount     NUMERIC(15,2),
+                investment_id    INT REFERENCES investments(id),
+                created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+                UNIQUE(opportunity_id, user_id)
+            )
+            """
+        )
+        # Índices e restrições — cada DDL isolado para resiliência a falhas parciais.
+        # Cada bloco captura UniqueViolationError que ocorre quando dois processos
+        # (hot-reload do uvicorn) tentam criar o mesmo objeto simultaneamente —
+        # o IF NOT EXISTS não é atômico entre processos no pg_class.
+        import asyncpg as _asyncpg
+
+        _idx_ddls = [
+            ("CREATE INDEX IF NOT EXISTS idx_investor_profiles_active "
+             "ON investor_profiles(is_active, group_id)"),
+
+            ("CREATE INDEX IF NOT EXISTS idx_investment_offers_lookup "
+             "ON investment_offers(user_id, status, expires_at)"),
+        ]
+        for _ddl in _idx_ddls:
+            try:
+                await conn.execute(_ddl)
+            except (_asyncpg.exceptions.UniqueViolationError,
+                    _asyncpg.exceptions.DuplicateTableError,
+                    _asyncpg.exceptions.DuplicateObjectError):
+                pass
+
+        # Troca a constraint UNIQUE global pela restrição parcial (apenas 'pending').
+        # Isso permite ao mesmo investidor receber nova oferta após decline/expire.
+        try:
+            await conn.execute(
+                "ALTER TABLE investment_offers "
+                "DROP CONSTRAINT IF EXISTS investment_offers_opportunity_id_user_id_key"
+            )
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_offers_pending_unique "
+                "ON investment_offers(opportunity_id, user_id) WHERE status = 'pending'"
+            )
+        except (_asyncpg.exceptions.UniqueViolationError,
+                _asyncpg.exceptions.DuplicateTableError,
+                _asyncpg.exceptions.DuplicateObjectError):
+            pass  # índice já existe — criado por processo concorrente
+
+    logger.info("Investor profile tables ready.")
+
+
 async def _migrate_financial_schema_extensions() -> None:
     """
     Adiciona colunas novas à estrutura financeira existente.
@@ -335,6 +433,7 @@ async def lifespan(app: FastAPI):
     await _migrate_pending_confirmations_table()
     await _migrate_turn_state_table()
     await _migrate_financial_schema_extensions()
+    await _migrate_investor_profile_tables()
 
     # Pluggy — Open Finance
     from pluggy_flow import init_pluggy_tables
@@ -1784,6 +1883,196 @@ async def grupos_do_usuario(user_id: int, todos: bool = False) -> dict:
 
     grupos = await GroupRepository(db).get_user_groups(user_id, active_only=not todos)
     return {"user_id": user_id, "grupos": [dict(g) for g in grupos], "total": len(grupos)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADMIN — Perfis de investidor e ofertas
+# ══════════════════════════════════════════════════════════════════════════════
+
+class InvestorProfileInput(BaseModel):
+    user_id:                int
+    group_id:               int | None = None
+    risk_tolerance:         str = "moderate"        # conservative | moderate | aggressive
+    min_investment_amount:  float = 50.0
+    max_investment_amount:  float | None = None
+    min_term_days:          int = 1
+    max_term_days:          int = 365
+    auto_invest:            bool = False
+
+
+@app.post("/admin/investor-profiles", status_code=201)
+async def admin_create_investor_profile(request: Request, body: InvestorProfileInput) -> dict:
+    """
+    Cria ou atualiza o perfil de investidor de um usuário.
+    Upsert por user_id — pode ser chamado para criar ou editar.
+    """
+    _require_admin_key(request)
+    from db.connection import get_db
+    from db.repositories.investor_profiles import InvestorProfileRepository
+    from decimal import Decimal
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+    if body.risk_tolerance not in ("conservative", "moderate", "aggressive"):
+        raise HTTPException(status_code=422, detail="risk_tolerance inválido")
+    if body.min_term_days > body.max_term_days:
+        raise HTTPException(status_code=422, detail="min_term_days > max_term_days")
+
+    repo = InvestorProfileRepository(db)
+    profile_id = await repo.upsert(
+        user_id=body.user_id,
+        group_id=body.group_id,
+        risk_tolerance=body.risk_tolerance,
+        min_investment_amount=Decimal(str(body.min_investment_amount)),
+        max_investment_amount=Decimal(str(body.max_investment_amount)) if body.max_investment_amount else None,
+        min_term_days=body.min_term_days,
+        max_term_days=body.max_term_days,
+        auto_invest=body.auto_invest,
+    )
+    return {"ok": True, "profile_id": profile_id, "user_id": body.user_id}
+
+
+@app.get("/admin/investor-profiles")
+async def admin_list_investor_profiles(request: Request, group_id: int | None = None) -> dict:
+    """
+    Lista perfis de investidor ativos.
+    ?group_id=N filtra por fundo preferido.
+    """
+    _require_admin_key(request)
+    from db.connection import get_db
+    from db.repositories.investor_profiles import InvestorProfileRepository
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    profiles = await InvestorProfileRepository(db).list_active(group_id=group_id)
+    return {
+        "profiles": [dict(p) for p in profiles],
+        "total": len(profiles),
+        "group_id": group_id,
+    }
+
+
+@app.get("/admin/investor-profiles/{user_id}")
+async def admin_get_investor_profile(request: Request, user_id: int) -> dict:
+    """Retorna o perfil de investidor de um usuário específico."""
+    _require_admin_key(request)
+    from db.connection import get_db
+    from db.repositories.investor_profiles import InvestorProfileRepository
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    profile = await InvestorProfileRepository(db).get_by_user(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Perfil não encontrado")
+    return dict(profile)
+
+
+@app.delete("/admin/investor-profiles/{user_id}", status_code=200)
+async def admin_deactivate_investor_profile(request: Request, user_id: int) -> dict:
+    """Desativa o perfil de investidor de um usuário (não exclui)."""
+    _require_admin_key(request)
+    from db.connection import get_db
+    from db.repositories.investor_profiles import InvestorProfileRepository
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+    await InvestorProfileRepository(db).deactivate(user_id)
+    return {"ok": True, "user_id": user_id, "status": "deactivated"}
+
+
+@app.get("/admin/investment-offers")
+async def admin_list_investment_offers(
+    request: Request,
+    status: str | None = None,
+    group_id: int | None = None,
+    opportunity_id: int | None = None,
+    limit: int = 50,
+) -> dict:
+    """
+    Lista ofertas de investimento com filtros opcionais.
+    ?status=pending|accepted|declined|expired
+    ?group_id=N ?opportunity_id=N
+    """
+    _require_admin_key(request)
+    from db.connection import get_db
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    clauses = []
+    params: list = []
+    idx = 1
+
+    if status:
+        clauses.append(f"io.status = ${idx}"); params.append(status); idx += 1
+    if group_id:
+        clauses.append(f"io.group_id = ${idx}"); params.append(group_id); idx += 1
+    if opportunity_id:
+        clauses.append(f"io.opportunity_id = ${idx}"); params.append(opportunity_id); idx += 1
+
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    params.append(limit); limit_idx = idx
+
+    offers = await db.fetch_all(
+        f"""
+        SELECT io.*, u.name AS user_name, u.phone
+        FROM investment_offers io
+        JOIN users u ON u.id = io.user_id
+        {where}
+        ORDER BY io.created_at DESC
+        LIMIT ${limit_idx}
+        """,
+        *params,
+    )
+    return {"offers": [dict(o) for o in offers], "total": len(offers)}
+
+
+@app.post("/admin/investor-matching/{opportunity_id}")
+async def admin_trigger_matching(request: Request, opportunity_id: int) -> dict:
+    """
+    Dispara manualmente o matching de investidores para uma oportunidade aberta.
+    Útil para re-tentar captação de oportunidades com cobertura incompleta.
+    """
+    _require_admin_key(request)
+    from db.connection import get_db
+    from engine.investor_matching import match_and_notify
+    from decimal import Decimal
+
+    db = get_db()
+    if not db:
+        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
+
+    opp = await db.fetch_one(
+        "SELECT * FROM investment_opportunities WHERE id = $1", opportunity_id
+    )
+    if not opp:
+        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
+    if opp["status"] not in ("open", "partially_funded"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Oportunidade não elegível para matching (status={opp['status']})"
+        )
+
+    remaining = Decimal(str(opp["amount_needed"])) - Decimal(str(opp["amount_committed"] or 0))
+    if remaining <= 0:
+        return {"ok": True, "message": "Oportunidade já totalmente financiada.", "coverage_pct": 100.0}
+
+    result = await match_and_notify(
+        db=db,
+        opportunity_id=opportunity_id,
+        group_id=opp["group_id"],
+        amount_needed=remaining,
+        expected_rate=Decimal(str(opp["expected_rate"])),
+        maturity_at=opp["expires_at"],
+    )
+    return {"ok": True, "opportunity_id": opportunity_id, **result}
 
 
 @app.post("/admin/identidade/{doc_id}/rejeitar")

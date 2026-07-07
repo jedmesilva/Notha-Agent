@@ -287,6 +287,79 @@ async def expire_opportunities() -> None:
         logger.error("Error in expire_opportunities: %s", e)
 
 
+async def recalculate_investor_metrics() -> None:
+    """
+    Recalcula métricas históricas de todos os perfis de investidor ativos:
+      - avg_investment_amount   (média dos investimentos encerrados/ativos)
+      - avg_term_days           (prazo médio em dias)
+      - total_invested_lifetime (soma acumulada)
+      - active_investment_count (posições com status='active')
+    """
+    db = get_db()
+    if not db:
+        return
+    try:
+        from db.repositories.investor_profiles import InvestorProfileRepository
+        profile_repo = InvestorProfileRepository(db)
+        user_ids = await profile_repo.list_all_user_ids()
+        updated = 0
+        for uid in user_ids:
+            row = await db.fetch_one(
+                """
+                SELECT
+                    AVG(amount_invested)::NUMERIC(15,2)                     AS avg_amount,
+                    AVG(
+                        EXTRACT(EPOCH FROM (
+                            COALESCE(maturity_at, NOW()) - created_at
+                        )) / 86400
+                    )::INT                                                   AS avg_days,
+                    COALESCE(SUM(amount_invested), 0)::NUMERIC(15,2)        AS total_lifetime,
+                    COUNT(*) FILTER (WHERE status = 'active')::INT          AS active_count
+                FROM investments
+                WHERE investor_user_id = $1
+                """,
+                uid,
+            )
+            if row:
+                await profile_repo.update_metrics(
+                    user_id=uid,
+                    avg_investment_amount=row["avg_amount"],
+                    avg_term_days=row["avg_days"],
+                    total_invested_lifetime=row["total_lifetime"] or 0,
+                    active_investment_count=row["active_count"] or 0,
+                )
+                updated += 1
+        if updated:
+            logger.info("recalculate_investor_metrics: %d perfil(is) atualizado(s).", updated)
+    except Exception as e:
+        logger.error("Error in recalculate_investor_metrics: %s", e)
+
+
+async def expire_investment_offers() -> None:
+    """
+    Marca como 'expired' as ofertas de investimento cujo expires_at já passou
+    e ainda estão com status 'pending'.
+    """
+    db = get_db()
+    if not db:
+        return
+    try:
+        result = await db.execute(
+            """
+            UPDATE investment_offers
+               SET status       = 'expired',
+                   responded_at = NOW()
+             WHERE status    = 'pending'
+               AND expires_at < NOW()
+            """
+        )
+        count = int(result.split()[-1]) if result else 0
+        if count:
+            logger.info("expire_investment_offers: %d oferta(s) expirada(s).", count)
+    except Exception as e:
+        logger.error("Error in expire_investment_offers: %s", e)
+
+
 async def distribute_investment_payouts() -> None:
     """Processa rendimentos de investimento com scheduled_date <= hoje."""
     db = get_db()
@@ -321,7 +394,11 @@ async def start_all_jobs() -> None:
     asyncio.create_task(_run_job("reconcile_wallet_caches",      reconcile_wallet_caches,      86400))
 
     # Investimentos — distribute roda a cada minuto para cobrir vencimentos de curto prazo
-    asyncio.create_task(_run_job("expire_opportunities",           expire_opportunities,          3600))
-    asyncio.create_task(_run_job("distribute_investment_payouts",  distribute_investment_payouts,   60))
+    asyncio.create_task(_run_job("expire_opportunities",          expire_opportunities,          3600))
+    asyncio.create_task(_run_job("distribute_investment_payouts", distribute_investment_payouts,   60))
 
-    logger.info("Jobs periódicos iniciados: 9 jobs ativos.")
+    # Perfis de investidor
+    asyncio.create_task(_run_job("recalculate_investor_metrics",  recalculate_investor_metrics,  3600))
+    asyncio.create_task(_run_job("expire_investment_offers",      expire_investment_offers,       300))
+
+    logger.info("Jobs periódicos iniciados: 11 jobs ativos.")
