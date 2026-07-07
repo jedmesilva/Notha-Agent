@@ -852,6 +852,100 @@ WHERE di.status IN ('pending', 'partially_paid')
   AND di.due_date < CURRENT_DATE;
 
 -- ============================================================
+-- MÓDULO 11 — FUNDOS DE CRÉDITO
+-- ============================================================
+--
+-- Funds are credit pools from which borrowers take loans.
+-- Investors have NO direct relationship with funds.
+-- Investors see investment_opportunities filtered by the borrower's segment.
+--
+-- Flow:
+--   user → added to fund (fund_users) → takes loan from fund (loan_requests.fund_id)
+--       → debt created → investment_opportunity created (opportunity.fund_id)
+--           → investor sees opportunity (filtered by borrower's segment) → invests
+
+-- 11.1 Fund — credit pool entity
+CREATE TABLE IF NOT EXISTS funds (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(200) NOT NULL,
+    description TEXT,
+    status      VARCHAR(20) NOT NULL DEFAULT 'active',
+        -- active | paused | closed
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_fund_status CHECK (status IN ('active', 'paused', 'closed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_funds_status ON funds(status);
+
+-- 11.2 Fund policies — eligibility criteria to add a user to a fund
+--
+-- Multiple rows per fund define a boolean expression:
+--   rows sharing the same logic_group are AND-ed together;
+--   rows in different logic_groups are OR-ed.
+--
+-- Example: (min_level >= 3 AND segment = 'rural') OR (min_level >= 7)
+--   group 0: criteria_type='min_level',        criteria_value='3', operator='gte'
+--   group 0: criteria_type='segment_membership', criteria_value='rural', operator='eq'
+--   group 1: criteria_type='min_level',        criteria_value='7', operator='gte'
+--
+-- Supported criteria_type values:
+--   'min_level'          — users.current_level
+--   'segment_membership' — user must belong to segment (criteria_value = segment name or id)
+--   'min_kyc_tier'       — users.identity_status (criteria_value = tier number)
+--   'min_account_age_days' — days since users.created_at
+--   'manual_only'        — no automatic rule; admin adds manually (criteria_value ignored)
+CREATE TABLE IF NOT EXISTS fund_policies (
+    id             SERIAL PRIMARY KEY,
+    fund_id        INT NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
+    criteria_type  VARCHAR(50) NOT NULL,
+    criteria_value TEXT NOT NULL DEFAULT '',
+    operator       VARCHAR(10) NOT NULL DEFAULT 'eq',
+        -- eq | gte | lte | in
+    logic_group    SMALLINT NOT NULL DEFAULT 0,
+    CONSTRAINT chk_fp_operator CHECK (operator IN ('eq', 'gte', 'lte', 'in'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_fund_policies_fund ON fund_policies(fund_id);
+
+-- 11.3 Fund users — users allocated to a fund (soft delete for removal history)
+--
+-- A user may belong to multiple funds simultaneously.
+-- removed_at IS NULL  → currently active in fund
+-- removed_at IS NOT NULL → removed (historical record kept)
+CREATE TABLE IF NOT EXISTS fund_users (
+    id             BIGSERIAL PRIMARY KEY,
+    fund_id        INT NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
+    user_id        INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    added_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    added_by       VARCHAR(50) NOT NULL DEFAULT 'system',
+        -- system | admin | auto
+    removed_at     TIMESTAMPTZ,
+    removal_reason TEXT,
+    CONSTRAINT chk_fu_added_by CHECK (added_by IN ('system', 'admin', 'auto'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fund_users_active
+    ON fund_users(fund_id, user_id)
+    WHERE removed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_fund_users_fund   ON fund_users(fund_id);
+CREATE INDEX IF NOT EXISTS idx_fund_users_user   ON fund_users(user_id);
+CREATE INDEX IF NOT EXISTS idx_fund_users_active_bool
+    ON fund_users(fund_id, removed_at);
+
+-- 11.4 Attach fund_id to loan_requests and investment_opportunities
+--      (nullable: existing rows are unaffected)
+ALTER TABLE loan_requests
+    ADD COLUMN IF NOT EXISTS fund_id INT REFERENCES funds(id) ON DELETE SET NULL;
+
+ALTER TABLE investment_opportunities
+    ADD COLUMN IF NOT EXISTS fund_id INT REFERENCES funds(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_loan_requests_fund ON loan_requests(fund_id) WHERE fund_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_investment_opp_fund ON investment_opportunities(fund_id) WHERE fund_id IS NOT NULL;
+
+-- ============================================================
 -- SEED: restricted_items
 -- ============================================================
 
