@@ -1,17 +1,18 @@
 """
 InvestorMatchingEngine — seleção, distribuição e notificação de investidores.
 
-Fluxo após create_opportunity:
-  1. match_and_notify(db, opportunity_id, ...)
+Fluxo após launch_capture_order:
+  1. match_and_notify(db, capture_order_id, ...)
      ├── Busca candidatos via InvestorProfileRepository.find_candidates()
      ├── Enriquece com saldo real da wallet
      ├── Calcula score de compatibilidade
      ├── Distribui amount_needed (first-fit decreasing por score)
-     ├── auto_invest=True  → accept_investment() imediato
+     ├── auto_invest=True  → commit_creditor_position() imediato
      └── auto_invest=False → cria investment_offer + WhatsApp
 
   2. Investidor responde no WhatsApp
      └── process_offer_response(db, offer_id, user_id, action, custom_amount)
+         → commit_creditor_position() se aceito
 
 Princípio: distribuição e scoring são 100% determinísticos, nunca via LLM.
 """
@@ -82,22 +83,22 @@ async def _send_offer_notification(
     offer_id: int,
     suggested_amount: Decimal,
     expires_at: datetime,
-    opp: dict,
+    capture_order_id: int,
+    expected_rate: Decimal,
     maturity_at: datetime,
 ) -> None:
     from whatsapp import send_message
 
-    rate_pct   = float(opp.get("expected_rate", 0)) * 100
-    level_name = opp.get("level_name") or f"Nível {opp.get('level_id', '?')}"
-    mat_str    = maturity_at.strftime("%d/%m/%Y %H:%M") if maturity_at else "—"
-    exp_str    = expires_at.strftime("%d/%m %H:%M") if expires_at else "—"
+    rate_pct = float(expected_rate) * 100
+    mat_str  = maturity_at.strftime("%d/%m/%Y") if maturity_at else "—"
+    exp_str  = expires_at.strftime("%d/%m %H:%M") if expires_at else "—"
 
     text = (
-        f"📊 *Nova oportunidade de investimento!*\n\n"
-        f"  Fundo: *{level_name}*\n"
+        f"📊 *Nova oportunidade de investimento P2P!*\n\n"
+        f"  Ordem de captação: *#{capture_order_id}*\n"
         f"  Valor reservado para você: *R$ {suggested_amount:,.2f}*\n"
-        f"  Taxa: {rate_pct:.2f}% a.a.\n"
-        f"  Vencimento: {mat_str}\n\n"
+        f"  Taxa: {rate_pct:.2f}% a.m.\n"
+        f"  Vencimento estimado: {mat_str}\n\n"
         f"Selecionamos você com base no seu perfil de investidor. 🎯\n\n"
         f"Responda aqui:\n"
         f"  ✅ *confirmar* — aceitar R$ {suggested_amount:,.2f}\n"
@@ -113,7 +114,7 @@ async def _send_offer_notification(
 
 async def match_and_notify(
     db,
-    opportunity_id: int,
+    capture_order_id: int,
     level_id: int,
     amount_needed: Decimal,
     expected_rate: Decimal,
@@ -123,18 +124,16 @@ async def match_and_notify(
     """
     Seleciona investidores compatíveis com o nível, distribui o valor e notifica.
 
-    Para auto_invest=True  → accept_investment() chamado imediatamente.
+    Para auto_invest=True  → commit_creditor_position() chamado imediatamente.
     Para auto_invest=False → cria investment_offer + envia mensagem WhatsApp.
 
     Retorna: {total_allocated, coverage_pct, auto_invested, notified, underfunded}
     """
     from db.repositories.investor_profiles import InvestorProfileRepository
     from db.repositories.wallets import WalletRepository
-    from db.repositories.opportunities import OpportunityRepository
 
     profile_repo = InvestorProfileRepository(db)
     wallet_repo  = WalletRepository(db)
-    opp_repo     = OpportunityRepository(db)
 
     now = datetime.now(timezone.utc)
     maturity_tz = (
@@ -143,15 +142,16 @@ async def match_and_notify(
     )
     term_days = max(int((maturity_tz - now).total_seconds() / 86400), 1)
 
-    # Usuários que já têm participação ou oferta nesta oportunidade
+    # Usuários que já têm posição ou oferta pendente nesta capture_order
     already = await db.fetch_all(
         """
-        SELECT investor_user_id AS uid FROM investments WHERE opportunity_id = $1
+        SELECT creditor_user_id AS uid FROM creditor_positions
+        WHERE capture_order_id = $1 AND status IN ('reserved', 'confirmed')
         UNION
         SELECT user_id AS uid FROM investment_offers
-        WHERE opportunity_id = $1 AND status = 'pending'
+        WHERE capture_order_id = $1 AND status = 'pending'
         """,
-        opportunity_id,
+        capture_order_id,
     )
     exclude = [r["uid"] for r in already]
 
@@ -164,7 +164,9 @@ async def match_and_notify(
     )
 
     if not candidates:
-        logger.info("match_and_notify opp=%d: sem candidatos compatíveis.", opportunity_id)
+        logger.info(
+            "match_and_notify order=%d: sem candidatos compatíveis.", capture_order_id
+        )
         return {"total_allocated": _ZERO, "coverage_pct": 0.0,
                 "auto_invested": 0, "notified": 0, "underfunded": True}
 
@@ -189,7 +191,9 @@ async def match_and_notify(
         })
 
     if not enriched:
-        logger.info("match_and_notify opp=%d: candidatos sem saldo suficiente.", opportunity_id)
+        logger.info(
+            "match_and_notify order=%d: candidatos sem saldo suficiente.", capture_order_id
+        )
         return {"total_allocated": _ZERO, "coverage_pct": 0.0,
                 "auto_invested": 0, "notified": 0, "underfunded": True}
 
@@ -197,8 +201,6 @@ async def match_and_notify(
     total_allocated = sum(a["suggested_amount"] for a in allocations)
     coverage_pct    = float(total_allocated / amount_needed * 100) if amount_needed > _ZERO else 0.0
 
-    opp        = await opp_repo.get_by_id(opportunity_id)
-    opp_dict   = dict(opp) if opp else {}
     expires_at = now + timedelta(hours=OFFER_TTL_HOURS)
 
     auto_count   = 0
@@ -210,43 +212,44 @@ async def match_and_notify(
         phone     = alloc.get("phone") or ""
 
         if alloc.get("auto_invest"):
-            # ── Investimento automático ────────────────────────────────────
-            from engine.investment_engine import accept_investment
+            # ── Investimento automático via commit_creditor_position ────────
+            from engine.p2p_engine import commit_creditor_position
             try:
-                res = await accept_investment(
+                res = await commit_creditor_position(
                     db=db,
-                    opportunity_id=opportunity_id,
-                    investor_user_id=user_id,
+                    capture_order_id=capture_order_id,
+                    creditor_user_id=user_id,
                     amount=suggested,
-                    maturity_at=maturity_tz,
+                    origin="auto_mandate",
                 )
                 if res.get("ok"):
                     auto_count += 1
                     logger.info(
-                        "auto_invest: user=%d opp=%d amount=R$%.2f inv=%d",
-                        user_id, opportunity_id, float(suggested), res["investment_id"],
+                        "auto_invest: user=%d order=%d amount=R$%.2f pos=%d",
+                        user_id, capture_order_id, float(suggested), res["position_id"],
                     )
                     if phone:
                         from whatsapp import send_message
                         try:
                             await send_message(
                                 phone,
-                                f"✅ Investimento automático realizado!\n\n"
-                                f"  Oportunidade #{opportunity_id}\n"
+                                f"✅ Investimento automático registrado!\n\n"
+                                f"  Captação #{capture_order_id}\n"
                                 f"  Valor: R$ {suggested:,.2f}\n"
-                                f"  Juros no vencimento: R$ {res['interest_at_maturity']:,.2f}\n"
-                                f"  Vencimento: {maturity_tz.strftime('%d/%m/%Y')}\n\n"
-                                f"Use *consultar_investimentos* para ver sua posição. 📊",
+                                f"  Posição #{res['position_id']} criada (aguardando confirmação Pix).\n\n"
+                                f"Use *view_creditor_positions* para acompanhar sua posição. 📊",
                             )
                         except Exception:
                             pass
                 else:
                     logger.warning(
-                        "auto_invest falhou user=%d opp=%d: %s",
-                        user_id, opportunity_id, res.get("error"),
+                        "auto_invest falhou user=%d order=%d: %s",
+                        user_id, capture_order_id, res.get("error"),
                     )
             except Exception as exc:
-                logger.error("auto_invest erro user=%d opp=%d: %s", user_id, opportunity_id, exc)
+                logger.error(
+                    "auto_invest erro user=%d order=%d: %s", user_id, capture_order_id, exc
+                )
 
         else:
             # ── Oferta pendente + notificação WhatsApp ─────────────────────
@@ -254,13 +257,13 @@ async def match_and_notify(
                 offer_id = await db.fetch_val(
                     """
                     INSERT INTO investment_offers
-                        (opportunity_id, user_id, level_id, suggested_amount,
+                        (capture_order_id, user_id, level_id, suggested_amount,
                          maturity_at, expires_at, status)
                     VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-                    ON CONFLICT (opportunity_id, user_id) WHERE status = 'pending' DO NOTHING
+                    ON CONFLICT (capture_order_id, user_id) WHERE status = 'pending' DO NOTHING
                     RETURNING id
                     """,
-                    opportunity_id, user_id, level_id,
+                    capture_order_id, user_id, level_id,
                     suggested, maturity_tz, expires_at,
                 )
                 if offer_id:
@@ -270,7 +273,8 @@ async def match_and_notify(
                             offer_id=offer_id,
                             suggested_amount=suggested,
                             expires_at=expires_at,
-                            opp=opp_dict,
+                            capture_order_id=capture_order_id,
+                            expected_rate=expected_rate,
                             maturity_at=maturity_tz,
                         )
                         await db.execute(
@@ -279,18 +283,18 @@ async def match_and_notify(
                         )
                     notify_count += 1
                     logger.info(
-                        "offer criada: id=%d user=%d opp=%d amount=R$%.2f",
-                        offer_id, user_id, opportunity_id, float(suggested),
+                        "offer criada: id=%d user=%d order=%d amount=R$%.2f",
+                        offer_id, user_id, capture_order_id, float(suggested),
                     )
             except Exception as exc:
                 logger.error(
-                    "offer notify erro user=%d opp=%d: %s",
-                    user_id, opportunity_id, exc,
+                    "offer notify erro user=%d order=%d: %s",
+                    user_id, capture_order_id, exc,
                 )
 
     logger.info(
-        "match_and_notify opp=%d: alocado=R$%.2f (%.1f%%) auto=%d notificados=%d",
-        opportunity_id, float(total_allocated), coverage_pct, auto_count, notify_count,
+        "match_and_notify order=%d: alocado=R$%.2f (%.1f%%) auto=%d notificados=%d",
+        capture_order_id, float(total_allocated), coverage_pct, auto_count, notify_count,
     )
     return {
         "total_allocated": total_allocated,
@@ -313,12 +317,10 @@ async def process_offer_response(
     """
     Processa a resposta de um investidor a uma oferta pendente.
 
-      accept  → investe o valor sugerido na oferta
-      modify  → investe custom_amount (validado contra limites do perfil)
+      accept  → commit_creditor_position com o valor sugerido
+      modify  → commit_creditor_position com custom_amount (validado)
       decline → marca oferta como recusada
     """
-    now = datetime.now(timezone.utc)
-
     if action == "decline":
         claimed = await db.fetch_val(
             """
@@ -374,7 +376,7 @@ async def process_offer_response(
     )
 
     if not row:
-        return {"ok": False, "error": "Oferta não encontrada ou não pertence a você."}
+        return {"ok": False, "error": "Oferta não encontrada."}
 
     final_amount = (
         Decimal(str(custom_amount))
@@ -386,37 +388,48 @@ async def process_offer_response(
     max_inv = row.get("max_investment_amount")
 
     if final_amount < min_inv:
+        await db.execute(
+            "UPDATE investment_offers SET status = 'pending' WHERE id = $1 AND status = 'processing'",
+            offer_id,
+        )
         return {"ok": False, "error": f"Valor mínimo do seu perfil: R$ {min_inv:,.2f}."}
     if max_inv and final_amount > Decimal(str(max_inv)):
+        await db.execute(
+            "UPDATE investment_offers SET status = 'pending' WHERE id = $1 AND status = 'processing'",
+            offer_id,
+        )
         return {"ok": False, "error": f"Valor máximo do seu perfil: R$ {Decimal(str(max_inv)):,.2f}."}
 
-    from engine.investment_engine import accept_investment
-    result = await accept_investment(
+    from engine.p2p_engine import commit_creditor_position
+    result = await commit_creditor_position(
         db=db,
-        opportunity_id=row["opportunity_id"],
-        investor_user_id=user_id,
+        capture_order_id=row["capture_order_id"],
+        creditor_user_id=user_id,
         amount=final_amount,
-        maturity_at=row["maturity_at"],
+        origin="manual",
     )
 
     if result.get("ok"):
+        position_id = result["position_id"]
         await db.execute(
             """
             UPDATE investment_offers SET
-                status        = 'accepted',
-                final_amount  = $2,
-                investment_id = $3
+                status      = 'accepted',
+                final_amount = $2,
+                position_id  = $3
             WHERE id = $1
             """,
-            offer_id, final_amount, result["investment_id"],
+            offer_id, final_amount, position_id,
         )
         return {
-            "ok":                   True,
-            "action":               "accepted",
-            "investment_id":        result["investment_id"],
-            "final_amount":         final_amount,
-            "interest_at_maturity": result["interest_at_maturity"],
-            "maturity_at":          result["maturity_at"],
+            "ok":          True,
+            "action":      "accepted",
+            "position_id": position_id,
+            "final_amount": final_amount,
+            "message": (
+                f"Posição #{position_id} criada! "
+                f"Seus fundos estão em escrow aguardando confirmação Pix."
+            ),
         }
 
     # Reverte status processing → pending
@@ -424,4 +437,4 @@ async def process_offer_response(
         "UPDATE investment_offers SET status = 'pending' WHERE id = $1 AND status = 'processing'",
         offer_id,
     )
-    return {"ok": False, "error": result.get("error", "Erro ao registrar investimento.")}
+    return {"ok": False, "error": result.get("error", "Erro ao registrar posição.")}

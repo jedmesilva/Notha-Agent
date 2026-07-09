@@ -2,17 +2,14 @@
 NOTHA periodic background jobs — financial platform.
 
 Jobs:
-  check_overdue_installments    : marca parcelas vencidas como 'overdue' (a cada hora)
-  check_expired_loan_requests   : expira solicitações pendentes > 7 dias (a cada hora)
+  check_overdue_installments    : marca parcelas P2P vencidas como 'overdue' (a cada hora)
   snapshot_liquidity            : registra snapshot de liquidez por nível (a cada 5 min)
   snapshot_liquidity_for_level  : snapshot pontual fire-and-forget para um nível
   recalculate_behavior_metrics  : recalcula métricas comportamentais (diário)
   recalculate_risk_scores       : recalcula scores de risco (diário)
   recalculate_location_metrics  : recalcula location_market_metrics (a cada 4h)
   reconcile_wallet_caches       : reconcilia balance_cache de todas as wallets (diário)
-  expire_opportunities          : expira oportunidades abertas fora do prazo (a cada hora)
-  distribute_investment_payouts : processa payouts de investimento vencidos (a cada minuto)
-  recalculate_investor_metrics  : recalcula métricas de investidores (a cada hora)
+  recalculate_investor_metrics  : recalcula métricas de investidores P2P (a cada hora)
   expire_investment_offers      : expira ofertas de investimento vencidas (a cada 5 min)
   expire_stale_p2p_orders       : expira capture_orders P2P sem quórum após deadline (a cada hora)
 """
@@ -25,50 +22,40 @@ from db.connection import get_db
 logger = logging.getLogger("notha.jobs")
 
 
-# ── Jobs existentes ───────────────────────────────────────────────────────────
+# ── Jobs — Parcelas P2P ───────────────────────────────────────────────────────
 
 async def check_overdue_installments() -> None:
-    """Marca parcelas cujo due_date passou e status ainda é 'pending'."""
+    """
+    Marca parcelas de instrumentos de crédito P2P cujo due_date já passou
+    e status ainda é 'pending' como 'overdue'.
+    """
     db = get_db()
     if not db:
         return
     try:
         result = await db.execute("""
-            UPDATE debt_installments
+            UPDATE credit_instrument_installments
                SET status   = 'overdue'
              WHERE status   = 'pending'
                AND due_date < CURRENT_DATE
         """)
         count = int(result.split()[-1]) if result else 0
         if count:
-            logger.info("check_overdue_installments: %d parcela(s) marcada(s) como overdue.", count)
+            logger.info(
+                "check_overdue_installments: %d parcela(s) P2P marcada(s) como overdue.", count
+            )
     except Exception as e:
         logger.error("Error in check_overdue_installments: %s", e)
 
 
-async def check_expired_loan_requests() -> None:
-    """Expira solicitações de empréstimo pendentes há mais de 7 dias."""
-    db = get_db()
-    if not db:
-        return
-    try:
-        result = await db.execute("""
-            UPDATE loan_requests
-               SET status       = 'expired',
-                   decided_at   = NOW(),
-                   decided_by   = 'system'
-             WHERE status       = 'pending'
-               AND requested_at < NOW() - INTERVAL '7 days'
-        """)
-        count = int(result.split()[-1]) if result else 0
-        if count:
-            logger.info("check_expired_loan_requests: %d solicitação(ões) expirada(s).", count)
-    except Exception as e:
-        logger.error("Error in check_expired_loan_requests: %s", e)
-
+# ── Jobs — Liquidez ───────────────────────────────────────────────────────────
 
 async def snapshot_liquidity() -> None:
-    """Registra um snapshot de liquidez para cada nível ativo."""
+    """
+    Registra um snapshot de liquidez para cada nível ativo.
+    Demanda ativa = total de capture_requests em captação.
+    Oferta disponível = saldo da wallet do nível.
+    """
     db = get_db()
     if not db:
         return
@@ -85,11 +72,10 @@ async def snapshot_liquidity() -> None:
                     WHERE  w.owner_type = 'level' AND w.owner_id = lv.id
                 ), 0),
                 COALESCE((
-                    SELECT SUM(d.principal)
-                    FROM   debts d
-                    JOIN   loan_requests lr ON lr.id = d.loan_request_id
-                    WHERE  lr.level_id = lv.id
-                      AND  d.status   = 'active'
+                    SELECT SUM(cr.requested_amount)
+                    FROM   capture_requests cr
+                    WHERE  cr.level_id = lv.id
+                      AND  cr.status   = 'in_capture'
                 ), 0),
                 NOW()
             FROM levels lv
@@ -104,10 +90,8 @@ async def snapshot_liquidity_for_level(db, level_id: int) -> None:
     Snapshot pontual de liquidez para um nível específico.
 
     Chamado de forma fire-and-forget via asyncio.create_task() pelos engines
-    logo após qualquer evento que mude a liquidez do nível (desembolso de
-    empréstimo, aporte de investimento, pagamento recebido). Isso torna o
-    liquidity_multiplier das cotações praticamente em tempo real, sem depender
-    exclusivamente do job periódico de 5 min.
+    logo após qualquer evento que mude a liquidez do nível (desembolso,
+    aporte, pagamento). Torna o liquidity_multiplier praticamente em tempo real.
     """
     if not db:
         return
@@ -125,11 +109,10 @@ async def snapshot_liquidity_for_level(db, level_id: int) -> None:
                     WHERE  w.owner_type = 'level' AND w.owner_id = lv.id
                 ), 0),
                 COALESCE((
-                    SELECT SUM(d.principal)
-                    FROM   debts d
-                    JOIN   loan_requests lr ON lr.id = d.loan_request_id
-                    WHERE  lr.level_id = lv.id
-                      AND  d.status   = 'active'
+                    SELECT SUM(cr.requested_amount)
+                    FROM   capture_requests cr
+                    WHERE  cr.level_id = lv.id
+                      AND  cr.status   = 'in_capture'
                 ), 0),
                 NOW()
             FROM levels lv
@@ -146,7 +129,7 @@ async def snapshot_liquidity_for_level(db, level_id: int) -> None:
 
 async def recalculate_behavior_metrics() -> None:
     """
-    Recalcula user_behavior_metrics para todos os usuários com atividade financeira.
+    Recalcula user_behavior_metrics para todos os usuários com atividade P2P.
     Roda diariamente ou após eventos-chave (pagamento, inadimplência).
     """
     db = get_db()
@@ -155,8 +138,16 @@ async def recalculate_behavior_metrics() -> None:
     try:
         from engine.scoring_engine import recalculate_behavior_metrics as _recalc
 
+        # Usuários com qualquer atividade P2P (como tomador ou credor)
         rows = await db.fetch_all(
-            "SELECT DISTINCT user_id FROM loan_requests ORDER BY user_id"
+            """
+            SELECT DISTINCT user_id FROM (
+                SELECT user_id FROM capture_requests
+                UNION
+                SELECT creditor_user_id AS user_id FROM creditor_positions
+            ) t
+            ORDER BY user_id
+            """
         )
         count = 0
         for row in rows:
@@ -185,8 +176,16 @@ async def recalculate_risk_scores() -> None:
 
         scoring_repo = ScoringRepository(db)
 
+        # Usuários com qualquer atividade P2P
         rows = await db.fetch_all(
-            "SELECT DISTINCT user_id FROM loan_requests ORDER BY user_id"
+            """
+            SELECT DISTINCT user_id FROM (
+                SELECT user_id FROM capture_requests
+                UNION
+                SELECT creditor_user_id AS user_id FROM creditor_positions
+            ) t
+            ORDER BY user_id
+            """
         )
         count = 0
         for row in rows:
@@ -277,23 +276,12 @@ async def _run_job(name: str, coro_fn, interval_seconds: int) -> None:
         await asyncio.sleep(interval_seconds)
 
 
-async def expire_opportunities() -> None:
-    """Marca investment_opportunities abertas que passaram do prazo como 'expired'."""
-    db = get_db()
-    if not db:
-        return
-    try:
-        from db.repositories.opportunities import OpportunityRepository
-        count = await OpportunityRepository(db).expire_stale()
-        if count:
-            logger.info("expire_opportunities: %d oportunidade(s) expirada(s).", count)
-    except Exception as e:
-        logger.error("Error in expire_opportunities: %s", e)
-
+# ── Jobs — Investidor P2P ─────────────────────────────────────────────────────
 
 async def recalculate_investor_metrics() -> None:
     """
-    Recalcula métricas históricas de todos os perfis de investidor ativos.
+    Recalcula métricas históricas de todos os perfis de investidor ativos
+    usando dados de creditor_positions (modelo P2P).
     """
     db = get_db()
     if not db:
@@ -307,16 +295,17 @@ async def recalculate_investor_metrics() -> None:
             row = await db.fetch_one(
                 """
                 SELECT
-                    AVG(amount_invested)::NUMERIC(15,2)                     AS avg_amount,
+                    AVG(cp.committed_amount)::NUMERIC(15,2)                     AS avg_amount,
                     AVG(
                         EXTRACT(EPOCH FROM (
-                            COALESCE(maturity_at, NOW()) - created_at
+                            COALESCE(co.capture_deadline, NOW()) - cp.reserved_at
                         )) / 86400
-                    )::INT                                                   AS avg_days,
-                    COALESCE(SUM(amount_invested), 0)::NUMERIC(15,2)        AS total_lifetime,
-                    COUNT(*) FILTER (WHERE status = 'active')::INT          AS active_count
-                FROM investments
-                WHERE investor_user_id = $1
+                    )::INT                                                        AS avg_days,
+                    COALESCE(SUM(cp.committed_amount), 0)::NUMERIC(15,2)         AS total_lifetime,
+                    COUNT(*) FILTER (WHERE cp.status = 'confirmed')::INT          AS active_count
+                FROM creditor_positions cp
+                JOIN capture_orders co ON co.id = cp.capture_order_id
+                WHERE cp.creditor_user_id = $1
                 """,
                 uid,
             )
@@ -360,23 +349,6 @@ async def expire_investment_offers() -> None:
         logger.error("Error in expire_investment_offers: %s", e)
 
 
-async def distribute_investment_payouts() -> None:
-    """Processa rendimentos de investimento com scheduled_date <= hoje."""
-    db = get_db()
-    if not db:
-        return
-    try:
-        from engine.investment_engine import distribute_payouts
-        result = await distribute_payouts(db)
-        if result["paid_count"] or result["errors"]:
-            logger.info(
-                "distribute_investment_payouts: %d pago(s), R$%.2f distribuído(s), %d erro(s).",
-                result["paid_count"], float(result["total_distributed"]), len(result["errors"]),
-            )
-    except Exception as e:
-        logger.error("Error in distribute_investment_payouts: %s", e)
-
-
 async def _expire_stale_p2p_orders() -> None:
     """Expire P2P capture_orders that passed their deadline without reaching the target amount."""
     db = get_db()
@@ -397,7 +369,6 @@ async def start_all_jobs() -> None:
     logger.info("Iniciando jobs periódicos da NOTHA...")
 
     asyncio.create_task(_run_job("check_overdue_installments",  check_overdue_installments,  3600))
-    asyncio.create_task(_run_job("check_expired_loan_requests", check_expired_loan_requests, 3600))
     asyncio.create_task(_run_job("snapshot_liquidity",          snapshot_liquidity,           300))
 
     asyncio.create_task(_run_job("recalculate_behavior_metrics", recalculate_behavior_metrics, 86400))
@@ -405,12 +376,10 @@ async def start_all_jobs() -> None:
     asyncio.create_task(_run_job("recalculate_location_metrics", recalculate_location_metrics, 14400))
     asyncio.create_task(_run_job("reconcile_wallet_caches",      reconcile_wallet_caches,      86400))
 
-    asyncio.create_task(_run_job("expire_opportunities",          expire_opportunities,          3600))
-    asyncio.create_task(_run_job("distribute_investment_payouts", distribute_investment_payouts,   60))
-    asyncio.create_task(_run_job("recalculate_investor_metrics",  recalculate_investor_metrics,  3600))
-    asyncio.create_task(_run_job("expire_investment_offers",      expire_investment_offers,       300))
+    asyncio.create_task(_run_job("recalculate_investor_metrics",  recalculate_investor_metrics, 3600))
+    asyncio.create_task(_run_job("expire_investment_offers",      expire_investment_offers,      300))
 
     # P2P jobs
-    asyncio.create_task(_run_job("expire_stale_p2p_orders",     _expire_stale_p2p_orders,     3600))
+    asyncio.create_task(_run_job("expire_stale_p2p_orders",      _expire_stale_p2p_orders,    3600))
 
-    logger.info("Jobs periódicos iniciados: 12 jobs ativos.")
+    logger.info("Jobs periódicos iniciados: 9 jobs ativos.")

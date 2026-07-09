@@ -3,9 +3,6 @@ from db.repositories.conversations import ConversationRepository
 from db.repositories.sessions import SessionRepository
 from db.repositories.turn_state import TurnStateRepository
 from db.repositories.wallets import WalletRepository
-from db.repositories.loans import LoanRepository
-from db.repositories.debts import DebtRepository
-from db.repositories.payments import PaymentRepository
 from db.repositories.credit_limits import CreditLimitRepository
 from db.repositories.scoring import ScoringRepository
 from db.repositories.rates import RateRepository
@@ -17,9 +14,6 @@ __all__ = [
     "SessionRepository",
     "TurnStateRepository",
     "WalletRepository",
-    "LoanRepository",
-    "DebtRepository",
-    "PaymentRepository",
     "CreditLimitRepository",
     "ScoringRepository",
     "RateRepository",

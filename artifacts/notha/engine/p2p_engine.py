@@ -144,16 +144,12 @@ async def launch_capture_order(
     from db.repositories.capture_requests import CaptureRequestRepository
     from db.repositories.capture_orders import CaptureOrderRepository
     from db.repositories.credit_limits import CreditLimitRepository
-    from db.repositories.loans import LoanRepository
-    from db.repositories.rates import RateRepository
     from engine.scoring_engine import get_or_compute_score
-    from engine.rate_engine import compute_loan_quote
+    from engine.rate_engine import compute_rate_for_level
 
-    req_repo    = CaptureRequestRepository(db)
-    order_repo  = CaptureOrderRepository(db)
-    limit_repo  = CreditLimitRepository(db)
-    loan_repo   = LoanRepository(db)
-    rate_repo   = RateRepository(db)
+    req_repo   = CaptureRequestRepository(db)
+    order_repo = CaptureOrderRepository(db)
+    limit_repo = CreditLimitRepository(db)
 
     req = await req_repo.get_by_id(capture_request_id)
     if not req:
@@ -188,40 +184,17 @@ async def launch_capture_order(
         return {"ok": False, "rejection_reason": rejection_reason}
 
     # ── Compute approved interest rate ────────────────────────────────────────
-    # We create a temporary loan_request to reuse the existing rate engine
-    # (which already computes base_rate + risk_premium + term_adj + liquidity_mult)
-    tmp_loan_id = await loan_repo.create_request(
-        user_id=user_id,
-        level_id=level_id,
-        requested_amount=requested_amount,
-    )
-    # Add placeholder installments (required by rate engine)
     payment_plan = req.get("payment_plan") or []
     if isinstance(payment_plan, str):
         payment_plan = json.loads(payment_plan)
 
-    tmp_installments = [
-        {
-            "sequence":          p["sequence"],
-            "proposed_due_date": date.fromisoformat(p["due_date"]) if isinstance(p["due_date"], str) else p["due_date"],
-            "proposed_amount":   Decimal(str(p["amount_due"])),
-            "distribution_type": "equal",
-        }
-        for p in payment_plan
-    ]
-    await loan_repo.add_proposed_installments_bulk(tmp_loan_id, tmp_installments)
-
-    quote = await compute_loan_quote(
+    quote = await compute_rate_for_level(
         db=db,
-        loan_request_id=tmp_loan_id,
         level_id=level_id,
         term_days=term_days,
         user_risk_score=credit_score,
     )
     approved_rate = Decimal(str(quote["final_rate"]))
-
-    # Clean up temporary loan request
-    await db.execute("DELETE FROM loan_requests WHERE id = $1", tmp_loan_id)
 
     # creditor_rate = approved_rate minus origination spread
     # (origination fee is a one-off lump sum, not embedded in yield)
@@ -264,22 +237,10 @@ async def launch_capture_order(
     async def _run_matching():
         try:
             from engine.investor_matching import match_and_notify
-            from db.repositories.opportunities import OpportunityRepository
-
-            # Create a compatible investment_opportunity record for the existing
-            # matching engine to use (bridge between old and new systems)
-            opp_repo = OpportunityRepository(db)
-            opp_id = await opp_repo.create(
-                level_id=level_id,
-                amount_needed=requested_amount,
-                expected_rate=creditor_rate,
-                expires_at=capture_deadline,
-                debt_id=None,
-            )
 
             result = await match_and_notify(
                 db=db,
-                opportunity_id=opp_id,
+                capture_order_id=order_id,
                 level_id=level_id,
                 amount_needed=requested_amount,
                 expected_rate=creditor_rate,

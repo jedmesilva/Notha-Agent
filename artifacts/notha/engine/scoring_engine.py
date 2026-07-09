@@ -1,13 +1,13 @@
 """
-ScoringEngine — engine de scoring multi-fator (seção 8 do documento).
+ScoringEngine — engine de scoring multi-fator.
 
 Sub-camadas:
-  8.1 Feature Store comportamental (agregações sobre debts/payments)
+  8.1 Feature Store comportamental (agregações sobre capture_requests,
+      credit_instruments, credit_instrument_installments, creditor_positions)
   8.2 Contexto geográfico (location_risk_events + location_market_metrics)
   8.3 Scorecard ponderado versionado (risk_score_models + risk_score_weights)
 
 Tudo determinístico — não é ML. Os pesos ficam em risk_score_weights.
-Trocar por ML no futuro = só mudar a fonte dos pesos; a interface permanece igual.
 """
 import logging
 from decimal import Decimal, ROUND_HALF_UP
@@ -22,28 +22,23 @@ _ONE  = Decimal("1")
 
 async def recalculate_behavior_metrics(db, user_id: int) -> dict:
     """
-    Recalcula user_behavior_metrics via COUNT/SUM/AVG sobre debts, payments,
-    payment_allocations. Persiste o resultado. Retorna o dict calculado.
+    Recalcula user_behavior_metrics via COUNT/SUM/AVG sobre as tabelas P2P:
+      capture_requests, credit_instruments, credit_instrument_installments,
+      installment_passthroughs, creditor_positions.
     """
     from db.repositories.scoring import ScoringRepository
 
     scoring_repo = ScoringRepository(db)
 
-    # Total emprestado e pago
+    # Total captado (como devedor) e total repago
     row_amounts = await db.fetch_one(
         """
         SELECT
-            COALESCE(SUM(d.principal), 0)  AS total_borrowed,
-            COALESCE((
-                SELECT SUM(p.amount_paid)
-                FROM payments p
-                JOIN debts d2 ON d2.id = p.debt_id
-                JOIN loan_requests lr2 ON lr2.id = d2.loan_request_id
-                WHERE lr2.user_id = $1
-            ), 0) AS total_repaid
-        FROM debts d
-        JOIN loan_requests lr ON lr.id = d.loan_request_id
-        WHERE lr.user_id = $1
+            COALESCE(SUM(ci.total_amount), 0)          AS total_borrowed,
+            COALESCE(SUM(ip.total_amount_received), 0) AS total_repaid
+        FROM credit_instruments ci
+        LEFT JOIN installment_passthroughs ip ON ip.credit_instrument_id = ci.id
+        WHERE ci.debtor_id = $1
         """,
         user_id,
     )
@@ -51,33 +46,34 @@ async def recalculate_behavior_metrics(db, user_id: int) -> dict:
     # Frequência de solicitações nos últimos 90 dias
     freq_90d = await db.fetch_val(
         """
-        SELECT COUNT(*) FROM loan_requests
+        SELECT COUNT(*) FROM capture_requests
         WHERE user_id = $1
-          AND requested_at >= NOW() - INTERVAL '90 days'
+          AND created_at >= NOW() - INTERVAL '90 days'
         """,
         user_id,
     ) or 0
 
-    # Pagamentos: pontualidade (parcelas pagas na data vs. total pago)
+    # Pagamentos: pontualidade (parcelas P2P)
     pay_stats = await db.fetch_one(
         """
         SELECT
-            COUNT(*) FILTER (WHERE di.status = 'paid')                    AS paid_count,
-            COUNT(*) FILTER (WHERE di.status IN ('overdue','defaulted'))   AS late_count,
-            COUNT(*) FILTER (WHERE di.status = 'paid'
-                               AND di.due_date >= CURRENT_DATE
-                               AND di.remaining_amount = 0)                AS on_time_count
-        FROM debt_installments di
-        JOIN debts d ON d.id = di.debt_id
-        JOIN loan_requests lr ON lr.id = d.loan_request_id
-        WHERE lr.user_id = $1
+            COUNT(*) FILTER (WHERE cii.status = 'paid')             AS paid_count,
+            COUNT(*) FILTER (WHERE cii.status = 'overdue')          AS late_count,
+            COUNT(*) FILTER (
+                WHERE cii.status = 'paid'
+                  AND cii.due_date >= CURRENT_DATE
+                  AND cii.remaining_amount = 0
+            )                                                        AS on_time_count
+        FROM credit_instrument_installments cii
+        JOIN credit_instruments ci ON ci.id = cii.credit_instrument_id
+        WHERE ci.debtor_id = $1
         """,
         user_id,
     )
 
-    paid_count   = int(pay_stats["paid_count"] or 0)   if pay_stats else 0
-    late_count   = int(pay_stats["late_count"] or 0)   if pay_stats else 0
-    on_time      = int(pay_stats["on_time_count"] or 0) if pay_stats else 0
+    paid_count = int(pay_stats["paid_count"] or 0)  if pay_stats else 0
+    late_count = int(pay_stats["late_count"] or 0)  if pay_stats else 0
+    on_time    = int(pay_stats["on_time_count"] or 0) if pay_stats else 0
 
     total_closed = paid_count + late_count
     payment_frequency_score = (
@@ -85,27 +81,26 @@ async def recalculate_behavior_metrics(db, user_id: int) -> dict:
         if total_closed > 0 else _ZERO
     )
 
-    # Inadimplências (dívidas com status 'defaulted')
+    # Inadimplências (instrumentos com status 'defaulted')
     defaults_count = await db.fetch_val(
         """
-        SELECT COUNT(*) FROM debts d
-        JOIN loan_requests lr ON lr.id = d.loan_request_id
-        WHERE lr.user_id = $1 AND d.status = 'defaulted'
+        SELECT COUNT(*) FROM credit_instruments
+        WHERE debtor_id = $1 AND status = 'defaulted'
         """,
         user_id,
     ) or 0
 
-    # Total investido e frequência de investimentos nos últimos 90 dias
+    # Total investido como credor e frequência nos últimos 90 dias
     inv_row = await db.fetch_one(
         """
         SELECT
-            COALESCE(SUM(i.amount_invested), 0) AS total_invested,
+            COALESCE(SUM(cp.committed_amount), 0)               AS total_invested,
             COUNT(*) FILTER (
-                WHERE i.invested_at >= NOW() - INTERVAL '90 days'
-            ) AS inv_freq_90d
-        FROM investments i
-        WHERE i.investor_user_id = $1
-          AND i.status IN ('active', 'matured')
+                WHERE cp.reserved_at >= NOW() - INTERVAL '90 days'
+            )                                                    AS inv_freq_90d
+        FROM creditor_positions cp
+        WHERE cp.creditor_user_id = $1
+          AND cp.status = 'confirmed'
         """,
         user_id,
     )
@@ -133,7 +128,7 @@ async def recalculate_behavior_metrics(db, user_id: int) -> dict:
 async def recalculate_location_market_metrics(db, geohash: str) -> None:
     """
     Recalcula location_market_metrics para um geohash específico via agregação
-    sobre loan_requests e wallets dos usuários nessa localização.
+    sobre capture_requests e wallets dos usuários nessa localização.
     """
     from db.repositories.scoring import ScoringRepository
 
@@ -142,16 +137,16 @@ async def recalculate_location_market_metrics(db, geohash: str) -> None:
     row = await db.fetch_one(
         """
         SELECT
-            COALESCE(SUM(lr.requested_amount) FILTER (WHERE lr.status = 'pending'), 0)
+            COALESCE(SUM(cr.requested_amount) FILTER (WHERE cr.status = 'in_capture'), 0)
                 AS active_demand,
-            COALESCE(AVG(lr.requested_amount), 0)
+            COALESCE(AVG(cr.requested_amount), 0)
                 AS avg_requested,
-            COUNT(DISTINCT ul.user_id) FILTER (WHERE lr.status = 'pending')
+            COUNT(DISTINCT ul.user_id) FILTER (WHERE cr.status = 'in_capture')
                 AS investor_count,
             COALESCE(SUM(w.balance_cache) FILTER (WHERE w.owner_type = 'user'), 0)
                 AS available_investment
         FROM user_locations ul
-        JOIN loan_requests lr ON lr.user_id = ul.user_id
+        JOIN capture_requests cr ON cr.user_id = ul.user_id
         LEFT JOIN wallets w ON w.owner_type = 'user' AND w.owner_id = ul.user_id
         WHERE ul.geohash = $1
         """,
@@ -186,13 +181,13 @@ async def recalculate_risk_score(db, user_id: int) -> Decimal:
 
     score = Σ (factor_value_normalizado × weight)
 
-    Fatores suportados (mapeados abaixo para campos de behavior_metrics):
+    Fatores suportados:
       - payment_frequency_score      (8.1, peso positivo)
       - defaults_count               (8.1, peso negativo)
-      - loan_request_frequency_90d   (8.1, pode ser positivo ou negativo)
-      - investment_frequency_90d     (8.1, peso positivo — confiança na plataforma)
-      - location_severity            (8.2, peso negativo — incidentes recentes)
-      - local_liquidity_pressure     (8.2, pressão demanda/oferta local)
+      - loan_request_frequency_90d   (8.1)
+      - investment_frequency_90d     (8.1, peso positivo)
+      - location_severity            (8.2, peso negativo)
+      - local_liquidity_pressure     (8.2)
 
     Retorna o score calculado (escala 0–1000).
     """
@@ -226,7 +221,7 @@ async def recalculate_risk_score(db, user_id: int) -> Decimal:
     location = await scoring_repo.get_user_location(user_id)
     geohash  = location["geohash"] if location else None
 
-    max_severity = 0
+    max_severity   = 0
     local_pressure = 1.0  # neutro
     if geohash:
         risk_events = await scoring_repo.get_recent_risk_events(geohash, days=30)
@@ -238,29 +233,19 @@ async def recalculate_risk_score(db, user_id: int) -> Decimal:
             supply = float(market["available_investment_local"] or 1)
             local_pressure = demand / supply if supply > 0 else 3.0
 
-    # Mapeamento de fatores para valores normalizados [0, 1]
     factor_values: dict[str, float] = {
-        # Proporção de pagamentos em dia: 0 (ruim) → 1 (perfeito)
         "payment_frequency_score": float(behavior_dict.get("payment_frequency_score", 0)),
-        # Inadimplências: normaliza 0→0 defaults (bom) / 5+ → 1 (muito ruim)
-        "defaults_count": _normalize(
-            float(behavior_dict.get("defaults_count", 0)), 0, 5
-        ),
-        # Frequência de solicitações 90d: normaliza 0→0 / 10+ → 1
+        "defaults_count": _normalize(float(behavior_dict.get("defaults_count", 0)), 0, 5),
         "loan_request_frequency_90d": _normalize(
             float(behavior_dict.get("loan_request_frequency_90d", 0)), 0, 10
         ),
-        # Frequência de investimento: 0→0 / 12+ → 1 (bom, confiança)
         "investment_frequency_90d": _normalize(
             float(behavior_dict.get("investment_frequency_90d", 0)), 0, 12
         ),
-        # Severidade de eventos: 0→0 / 5 → 1 (muito negativo)
         "location_severity": _normalize(float(max_severity), 0, 5),
-        # Pressão de liquidez local: 0→0 / 3+ → 1 (negativo)
         "local_liquidity_pressure": _normalize(float(local_pressure), 0, 3),
     }
 
-    # Scorecard: soma ponderada
     raw_score = 0.0
     factors_snapshot: dict = {}
     for factor_name, weight in weights.items():
@@ -273,16 +258,13 @@ async def recalculate_risk_score(db, user_id: int) -> Decimal:
             "contribution": round(contribution, 4),
         }
 
-    # Normaliza para escala 0–1000
-    # raw_score pode ser negativo (pesos negativos em fatores ruins)
-    # Clipa para [0, 1] antes de multiplicar por 1000
     score_normalized = max(0.0, min(1.0, raw_score))
     final_score = Decimal(str(round(score_normalized * 1000, 2)))
 
     factors_snapshot["_meta"] = {
-        "raw_score": round(raw_score, 6),
+        "raw_score":        round(raw_score, 6),
         "score_normalized": round(score_normalized, 6),
-        "model_version": model["version"],
+        "model_version":    model["version"],
     }
 
     await scoring_repo.insert_score(
@@ -300,7 +282,6 @@ async def recalculate_risk_score(db, user_id: int) -> Decimal:
 async def get_or_compute_score(db, user_id: int) -> Decimal:
     """
     Retorna o score válido existente ou recalcula se expirado/ausente.
-    Usado no fluxo síncrono de cotação (seção 11 do documento).
     """
     from db.repositories.scoring import ScoringRepository
 

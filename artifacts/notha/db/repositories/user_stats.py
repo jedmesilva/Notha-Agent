@@ -102,7 +102,8 @@ class UserStatsRepository:
 
     async def compute_and_upsert_loan_stats(self, user_id: int) -> None:
         """
-        Compute loan stats directly from raw tables and upsert.
+        Compute loan stats from P2P tables and upsert.
+        Requests = capture_requests; grants = credit_instruments issued.
         Called by the periodic recalculation job.
         """
         row = await self._db.fetch_one(
@@ -110,26 +111,25 @@ class UserStatsRepository:
             WITH
             requests AS (
                 SELECT
-                    COUNT(*)                                         AS total_requests,
-                    COUNT(*) FILTER (WHERE requested_at >= NOW() - INTERVAL '30 days')  AS req_30d,
-                    COUNT(*) FILTER (WHERE requested_at >= NOW() - INTERVAL '90 days')  AS req_90d,
-                    COUNT(*) FILTER (WHERE requested_at >= NOW() - INTERVAL '365 days') AS req_365d,
-                    COALESCE(SUM(requested_amount), 0)               AS total_req_amount,
-                    COALESCE(AVG(requested_amount), 0)               AS avg_req_amount
-                FROM loan_requests
+                    COUNT(*)                                                              AS total_requests,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')     AS req_30d,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '90 days')     AS req_90d,
+                    COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '365 days')    AS req_365d,
+                    COALESCE(SUM(requested_amount), 0)                                   AS total_req_amount,
+                    COALESCE(AVG(requested_amount), 0)                                   AS avg_req_amount
+                FROM capture_requests
                 WHERE user_id = $1
             ),
             grants AS (
                 SELECT
-                    COUNT(*)                                          AS total_grants,
-                    COUNT(*) FILTER (WHERE d.created_at >= NOW() - INTERVAL '30 days')  AS gr_30d,
-                    COUNT(*) FILTER (WHERE d.created_at >= NOW() - INTERVAL '90 days')  AS gr_90d,
-                    COUNT(*) FILTER (WHERE d.created_at >= NOW() - INTERVAL '365 days') AS gr_365d,
-                    COALESCE(SUM(d.principal), 0)                    AS total_gr_amount,
-                    COALESCE(AVG(d.principal), 0)                    AS avg_gr_amount
-                FROM debts d
-                JOIN loan_requests lr ON lr.id = d.loan_request_id
-                WHERE lr.user_id = $1
+                    COUNT(*)                                                              AS total_grants,
+                    COUNT(*) FILTER (WHERE ci.issued_at >= NOW() - INTERVAL '30 days')   AS gr_30d,
+                    COUNT(*) FILTER (WHERE ci.issued_at >= NOW() - INTERVAL '90 days')   AS gr_90d,
+                    COUNT(*) FILTER (WHERE ci.issued_at >= NOW() - INTERVAL '365 days')  AS gr_365d,
+                    COALESCE(SUM(ci.total_amount), 0)                                    AS total_gr_amount,
+                    COALESCE(AVG(ci.total_amount), 0)                                    AS avg_gr_amount
+                FROM credit_instruments ci
+                WHERE ci.debtor_id = $1
             ),
             credit AS (
                 SELECT COALESCE(credit_limit, 0) AS lim
@@ -236,41 +236,40 @@ class UserStatsRepository:
 
     async def compute_and_upsert_payment_stats(self, user_id: int) -> None:
         """
-        Compute payment stats directly from raw installment data and upsert.
+        Compute payment stats from P2P installment data and upsert.
+        Source: credit_instrument_installments (replaces debt_installments).
         """
         row = await self._db.fetch_one(
             """
             WITH installments AS (
                 SELECT
-                    di.status,
-                    di.due_date,
-                    p.paid_at::DATE AS paid_date,
-                    (p.paid_at::DATE - di.due_date) AS days_diff
-                FROM debt_installments di
-                LEFT JOIN payments p ON p.debt_installment_id = di.id
-                JOIN debts d  ON d.id  = di.debt_id
-                JOIN loan_requests lr ON lr.id = d.loan_request_id
-                WHERE lr.user_id = $1
-                  AND di.status IN ('paid','overdue','partially_paid','pending')
+                    cii.status,
+                    cii.due_date,
+                    cii.paid_at::DATE                     AS paid_date,
+                    (cii.paid_at::DATE - cii.due_date)    AS days_diff
+                FROM credit_instrument_installments cii
+                JOIN credit_instruments ci ON ci.id = cii.credit_instrument_id
+                WHERE ci.debtor_id = $1
+                  AND cii.status IN ('paid','overdue','partially_paid','pending')
             ),
             paid AS (
                 SELECT * FROM installments WHERE status = 'paid'
             ),
             totals AS (
                 SELECT
-                    COUNT(*) FILTER (WHERE days_diff <= 0)  AS on_time_count,
-                    COUNT(*) FILTER (WHERE days_diff < 0)   AS early_count,
-                    COUNT(*) FILTER (WHERE days_diff > 0)   AS late_count,
-                    COUNT(*)                                 AS total_paid,
-                    COALESCE(AVG(days_diff) FILTER (WHERE days_diff < 0), 0) AS avg_early,
-                    COALESCE(AVG(days_diff) FILTER (WHERE days_diff > 0), 0) AS avg_late,
-                    COALESCE(STDDEV(days_diff), 0)           AS variance_days
+                    COUNT(*) FILTER (WHERE days_diff <= 0)                       AS on_time_count,
+                    COUNT(*) FILTER (WHERE days_diff < 0)                        AS early_count,
+                    COUNT(*) FILTER (WHERE days_diff > 0)                        AS late_count,
+                    COUNT(*)                                                      AS total_paid,
+                    COALESCE(AVG(days_diff) FILTER (WHERE days_diff < 0), 0)     AS avg_early,
+                    COALESCE(AVG(days_diff) FILTER (WHERE days_diff > 0), 0)     AS avg_late,
+                    COALESCE(STDDEV(days_diff), 0)                               AS variance_days
                 FROM paid
             ),
             defaults AS (
                 SELECT
-                    COUNT(*) FILTER (WHERE status = 'overdue') AS active_def,
-                    COUNT(*) FILTER (WHERE status IN ('overdue','paid') AND days_diff > 30) AS total_def
+                    COUNT(*) FILTER (WHERE status = 'overdue')                                          AS active_def,
+                    COUNT(*) FILTER (WHERE status IN ('overdue','paid') AND days_diff > 30)             AS total_def
                 FROM installments
             )
             SELECT
@@ -278,8 +277,8 @@ class UserStatsRepository:
                 t.avg_early, t.avg_late, t.variance_days,
                 d.active_def, d.total_def,
                 CASE WHEN t.total_paid > 0 THEN t.on_time_count::NUMERIC / t.total_paid ELSE 0 END AS on_time_rate,
-                CASE WHEN t.total_paid > 0 THEN t.early_count::NUMERIC  / t.total_paid ELSE 0 END AS early_rate,
-                CASE WHEN t.total_paid > 0 THEN t.late_count::NUMERIC   / t.total_paid ELSE 0 END AS late_rate
+                CASE WHEN t.total_paid > 0 THEN t.early_count::NUMERIC   / t.total_paid ELSE 0 END AS early_rate,
+                CASE WHEN t.total_paid > 0 THEN t.late_count::NUMERIC    / t.total_paid ELSE 0 END AS late_rate
             FROM totals t, defaults d
             """,
             user_id,
@@ -287,19 +286,17 @@ class UserStatsRepository:
         if not row:
             return
 
-        # Compute consecutive_on_time streak from ordered installments
+        # Compute consecutive_on_time streak from ordered P2P installments
         streak_row = await self._db.fetch_one(
             """
             WITH ordered AS (
                 SELECT
-                    (p.paid_at::DATE - di.due_date) <= 0 AS on_time,
-                    di.due_date
-                FROM debt_installments di
-                LEFT JOIN payments p ON p.debt_installment_id = di.id
-                JOIN debts d ON d.id = di.debt_id
-                JOIN loan_requests lr ON lr.id = d.loan_request_id
-                WHERE lr.user_id = $1 AND di.status = 'paid'
-                ORDER BY di.due_date DESC
+                    (cii.paid_at::DATE - cii.due_date) <= 0 AS on_time,
+                    cii.due_date
+                FROM credit_instrument_installments cii
+                JOIN credit_instruments ci ON ci.id = cii.credit_instrument_id
+                WHERE ci.debtor_id = $1 AND cii.status = 'paid'
+                ORDER BY cii.due_date DESC
             ),
             streaks AS (
                 SELECT on_time,
@@ -394,34 +391,42 @@ class UserStatsRepository:
         return dict(row) if row else None
 
     async def compute_and_upsert_investment_stats(self, user_id: int) -> None:
+        """
+        Compute investment stats from P2P creditor_positions and upsert.
+        Replaces legacy investments table.
+        """
         row = await self._db.fetch_one(
             """
-            WITH inv AS (
+            WITH pos AS (
                 SELECT
-                    COUNT(*)                                          AS total_count,
-                    COUNT(*) FILTER (WHERE status = 'active')        AS active_count,
-                    COUNT(*) FILTER (WHERE status = 'matured')       AS matured_count,
-                    COALESCE(SUM(amount_invested), 0)                AS total_amount,
-                    COALESCE(SUM(amount_invested) FILTER (WHERE status = 'active'), 0) AS active_amount,
-                    COALESCE(AVG(amount_invested), 0)                AS avg_amount
-                FROM investments
-                WHERE investor_user_id = $1
+                    COUNT(*)                                                          AS total_count,
+                    COUNT(*) FILTER (WHERE cp.status = 'confirmed')                  AS active_count,
+                    COUNT(*) FILTER (WHERE ci.status = 'settled')                    AS matured_count,
+                    COALESCE(SUM(cp.committed_amount), 0)                            AS total_amount,
+                    COALESCE(
+                        SUM(cp.committed_amount) FILTER (WHERE cp.status = 'confirmed'), 0
+                    )                                                                 AS active_amount,
+                    COALESCE(AVG(cp.committed_amount), 0)                            AS avg_amount
+                FROM creditor_positions cp
+                LEFT JOIN credit_instruments ci ON ci.capture_order_id = cp.capture_order_id
+                WHERE cp.creditor_user_id = $1
+                  AND cp.status IN ('confirmed', 'reserved')
             ),
             offers AS (
                 SELECT
-                    COUNT(*)                                          AS received,
-                    COUNT(*) FILTER (WHERE status IN ('accepted','invested')) AS accepted
+                    COUNT(*)                                                          AS received,
+                    COUNT(*) FILTER (WHERE status = 'accepted')                      AS accepted
                 FROM investment_offers
                 WHERE user_id = $1
             )
             SELECT
-                inv.total_count, inv.active_count, inv.matured_count,
-                inv.total_amount, inv.active_amount, inv.avg_amount,
+                pos.total_count, pos.active_count, pos.matured_count,
+                pos.total_amount, pos.active_amount, pos.avg_amount,
                 offers.received, offers.accepted,
                 CASE WHEN offers.received > 0
                      THEN offers.accepted::NUMERIC / offers.received
                      ELSE 0 END AS acceptance_rate
-            FROM inv, offers
+            FROM pos, offers
             """,
             user_id,
         )

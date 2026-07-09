@@ -18,12 +18,9 @@ from engine.turn_state import TurnStateService
 from db.repositories.pending_confirmations import PendingConfirmationsRepository
 from tools.builtin import (
     web_search, currency, math, units, datetime_tool, restriction_check,
-    # borrower — legacy pool-based flow
-    solicitar_emprestimo, consultar_extrato, consultar_dividas,
-    registrar_pagamento, consultar_limite, calcular_cotacao_taxa,
-    aprovar_emprestimo,
-    # creditor/investor — legacy pool-based flow
-    listar_oportunidades, investir, consultar_investimentos,
+    # creditor/investor profile tools
+    configurar_perfil_investidor, consultar_perfil_investidor,
+    listar_ofertas_pendentes, responder_oferta_investimento,
     # P2P — borrower side (SEP-compliant)
     request_loan_p2p, launch_capture_order, view_capture_status,
     pay_p2p_installment, view_user_instruments,
@@ -151,18 +148,11 @@ _BUILTIN_TOOL_MAP = {
     units.name:                units,
     datetime_tool.name:        datetime_tool,
     restriction_check.name:    restriction_check,
-    # borrower — legacy pool-based flow
-    solicitar_emprestimo.name:  solicitar_emprestimo,
-    consultar_extrato.name:     consultar_extrato,
-    consultar_dividas.name:     consultar_dividas,
-    registrar_pagamento.name:   registrar_pagamento,
-    consultar_limite.name:      consultar_limite,
-    calcular_cotacao_taxa.name: calcular_cotacao_taxa,
-    aprovar_emprestimo.name:    aprovar_emprestimo,
-    # creditor/investor — legacy pool-based flow
-    listar_oportunidades.name:    listar_oportunidades,
-    investir.name:                investir,
-    consultar_investimentos.name: consultar_investimentos,
+    # creditor/investor profile tools
+    configurar_perfil_investidor.name:  configurar_perfil_investidor,
+    consultar_perfil_investidor.name:   consultar_perfil_investidor,
+    listar_ofertas_pendentes.name:      listar_ofertas_pendentes,
+    responder_oferta_investimento.name: responder_oferta_investimento,
     # P2P — borrower side (SEP-compliant)
     request_loan_p2p.name:       request_loan_p2p,
     launch_capture_order.name:   launch_capture_order,

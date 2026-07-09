@@ -236,55 +236,13 @@ async def _migrate_pending_confirmations_table() -> None:
     logger.info("Pending confirmations table ready.")
 
 
-async def _migrate_debt_id_on_investments() -> None:
-    """
-    Adiciona debt_id diretamente em investments — FK de 1 salto para a dívida coberta.
-
-    Sem esse campo, rastrear "quais investimentos cobrem esta dívida?" exige 2 JOINs
-    (investments → investment_opportunities → debts). Com debt_id direto, é 1 JOIN
-    e o vínculo persiste mesmo se a oportunidade for cancelada/excluída.
-
-    Backfill automático: preenche debt_id nos registros existentes onde
-    investment_opportunities.debt_id não é NULL.
-    """
-    pool = get_pool()
-    if not pool:
-        return
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "ALTER TABLE investments "
-            "ADD COLUMN IF NOT EXISTS debt_id BIGINT REFERENCES debts(id)"
-        )
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_investments_debt_id "
-            "ON investments(debt_id) WHERE debt_id IS NOT NULL"
-        )
-        # Backfill — preenche debt_id nos investimentos existentes ligados a oportunidades
-        # com debt_id. Idempotente: só atualiza onde debt_id ainda é NULL.
-        result = await conn.execute(
-            """
-            UPDATE investments i
-               SET debt_id = o.debt_id
-              FROM investment_opportunities o
-             WHERE o.id       = i.opportunity_id
-               AND o.debt_id  IS NOT NULL
-               AND i.debt_id  IS NULL
-            """
-        )
-        count = int(result.split()[-1]) if result else 0
-        if count:
-            logger.info(
-                "_migrate_debt_id_on_investments: backfill de %d registro(s).", count
-            )
-    logger.info("investments.debt_id ready.")
-
 
 async def _migrate_investor_profile_tables() -> None:
     """
-    Cria as tabelas de perfil de investidor e ofertas de investimento.
+    Cria as tabelas de perfil de investidor e ofertas de investimento P2P.
 
     investor_profiles — preferências e métricas históricas por usuário.
-    investment_offers — ofertas pendentes enviadas a investidores específicos.
+    investment_offers — ofertas pendentes enviadas a investidores (ligadas a capture_orders).
     """
     pool = get_pool()
     if not pool:
@@ -316,51 +274,47 @@ async def _migrate_investor_profile_tables() -> None:
         await conn.execute(
             """
             CREATE TABLE IF NOT EXISTS investment_offers (
-                id               SERIAL PRIMARY KEY,
-                opportunity_id   INT           NOT NULL REFERENCES investment_opportunities(id),
-                user_id          INT           NOT NULL REFERENCES users(id),
-                level_id         INT           NOT NULL,
-                suggested_amount NUMERIC(15,2) NOT NULL,
-                maturity_at      TIMESTAMPTZ   NOT NULL,
-                status           VARCHAR(20)   NOT NULL DEFAULT 'pending',
-                message_sent_at  TIMESTAMPTZ,
-                expires_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
-                responded_at     TIMESTAMPTZ,
-                final_amount     NUMERIC(15,2),
-                investment_id    INT REFERENCES investments(id),
-                created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-                UNIQUE(opportunity_id, user_id)
+                id                SERIAL PRIMARY KEY,
+                capture_order_id  BIGINT        REFERENCES capture_orders(id) ON DELETE CASCADE,
+                user_id           INT           NOT NULL REFERENCES users(id),
+                level_id          INT,
+                suggested_amount  NUMERIC(15,2) NOT NULL,
+                maturity_at       TIMESTAMPTZ   NOT NULL,
+                status            VARCHAR(20)   NOT NULL DEFAULT 'pending',
+                message_sent_at   TIMESTAMPTZ,
+                expires_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+                responded_at      TIMESTAMPTZ,
+                final_amount      NUMERIC(15,2),
+                position_id       BIGINT        REFERENCES creditor_positions(id) ON DELETE SET NULL,
+                created_at        TIMESTAMPTZ   NOT NULL DEFAULT NOW()
             )
             """
         )
-        # Additive migrations — add columns that may be missing on existing tables.
-        # Each ALTER is wrapped so the server starts even when the column already exists.
         import asyncpg as _asyncpg
 
         _alter_ddls = [
-            # investor_profiles: add level_id column added during group→level migration
+            # investor_profiles: add level_id column if missing
             ("ALTER TABLE investor_profiles "
              "ADD COLUMN IF NOT EXISTS level_id INT REFERENCES levels(id) ON DELETE SET NULL"),
-            # investment_offers: level_id was NOT NULL in DDL but may be absent on old tables;
-            # allow NULL here — old rows simply have no level.
+            # investment_offers: add capture_order_id if migrating from old schema
             ("ALTER TABLE investment_offers "
-             "ADD COLUMN IF NOT EXISTS level_id INT"),
+             "ADD COLUMN IF NOT EXISTS capture_order_id BIGINT REFERENCES capture_orders(id) ON DELETE CASCADE"),
+            # investment_offers: add position_id if migrating from old schema
+            ("ALTER TABLE investment_offers "
+             "ADD COLUMN IF NOT EXISTS position_id BIGINT REFERENCES creditor_positions(id) ON DELETE SET NULL"),
+            # investment_offers: drop legacy columns (safe: idempotent)
+            ("ALTER TABLE investment_offers DROP COLUMN IF EXISTS opportunity_id"),
+            ("ALTER TABLE investment_offers DROP COLUMN IF EXISTS investment_id"),
         ]
         for _ddl in _alter_ddls:
             try:
                 await conn.execute(_ddl)
             except Exception:
-                pass  # column already exists or table not yet created — CREATE TABLE covers it
-
-        # Índices e restrições — cada DDL isolado para resiliência a falhas parciais.
-        # Cada bloco captura UniqueViolationError que ocorre quando dois processos
-        # (hot-reload do uvicorn) tentam criar o mesmo objeto simultaneamente —
-        # o IF NOT EXISTS não é atômico entre processos no pg_class.
+                pass
 
         _idx_ddls = [
             ("CREATE INDEX IF NOT EXISTS idx_investor_profiles_active "
              "ON investor_profiles(is_active, level_id)"),
-
             ("CREATE INDEX IF NOT EXISTS idx_investment_offers_lookup "
              "ON investment_offers(user_id, status, expires_at)"),
         ]
@@ -372,8 +326,7 @@ async def _migrate_investor_profile_tables() -> None:
                     _asyncpg.exceptions.DuplicateObjectError):
                 pass
 
-        # Troca a constraint UNIQUE global pela restrição parcial (apenas 'pending').
-        # Isso permite ao mesmo investidor receber nova oferta após decline/expire.
+        # Drop old global unique constraint and replace with partial (pending only)
         try:
             await conn.execute(
                 "ALTER TABLE investment_offers "
@@ -384,13 +337,21 @@ async def _migrate_investor_profile_tables() -> None:
 
         try:
             await conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_offers_pending_unique "
-                "ON investment_offers(opportunity_id, user_id) WHERE status = 'pending'"
+                "DROP INDEX IF EXISTS idx_investment_offers_pending_unique"
+            )
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_offers_capture_pending_unique "
+                "ON investment_offers(capture_order_id, user_id) "
+                "WHERE status = 'pending' AND capture_order_id IS NOT NULL"
             )
         except (_asyncpg.exceptions.UniqueViolationError,
                 _asyncpg.exceptions.DuplicateTableError,
                 _asyncpg.exceptions.DuplicateObjectError):
-            pass  # índice já existe — criado por processo concorrente
+            pass
 
     logger.info("Investor profile tables ready.")
 
@@ -437,18 +398,6 @@ async def _migrate_financial_schema_extensions() -> None:
                 )
             except Exception:
                 pass  # tabela pode não existir em envs antigos
-
-        # investments — vencimento de alta precisão
-        await conn.execute(
-            "ALTER TABLE investments "
-            "ADD COLUMN IF NOT EXISTS maturity_at TIMESTAMPTZ"
-        )
-
-        # investment_payouts — agendamento de alta precisão
-        await conn.execute(
-            "ALTER TABLE investment_payouts "
-            "ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ"
-        )
 
     logger.info("Financial schema extensions applied.")
 
@@ -545,7 +494,6 @@ async def lifespan(app: FastAPI):
     await _migrate_financial_schema_extensions()
     await _migrate_investor_profile_tables()
     await _migrate_level_upgrade_suggestions()
-    await _migrate_debt_id_on_investments()
 
     # Pluggy — Open Finance
     from pluggy_flow import init_pluggy_tables
@@ -1203,132 +1151,6 @@ async def pluggy_listar_conexoes(phone: str | None = None, limit: int = 50) -> d
 # Investimentos — fluxo de captação
 # ---------------------------------------------------------------------------
 
-@app.get("/oportunidades")
-async def listar_oportunidades_endpoint(level_id: int | None = None, limit: int = 20) -> dict:
-    """
-    Lista oportunidades de investimento abertas.
-    Filtro opcional: ?level_id=1
-    """
-    from db.connection import get_db
-    from db.repositories.opportunities import OpportunityRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    opps = await OpportunityRepository(db).list_open(level_id=level_id, limit=limit)
-    return {
-        "oportunidades": [dict(o) for o in opps],
-        "total": len(opps),
-    }
-
-
-@app.get("/oportunidades/{opp_id}")
-async def detalhe_oportunidade(opp_id: int) -> dict:
-    """Detalhes de uma oportunidade específica."""
-    from db.connection import get_db
-    from db.repositories.opportunities import OpportunityRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    opp = await OpportunityRepository(db).get_by_id(opp_id)
-    if not opp:
-        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
-    return dict(opp)
-
-
-class InvestirBody(BaseModel):
-    investor_user_id: int
-    opportunity_id: int
-    amount: float
-    maturity_at: str  # ISO-8601 datetime — ex: "2025-12-31T23:59:00Z" ou "2025-01-01"
-
-
-@app.post("/investir")
-async def aceitar_investimento(body: InvestirBody) -> dict:
-    """
-    Registra um investimento de um usuário em uma oportunidade.
-
-    Body JSON:
-      investor_user_id — ID do usuário investidor
-      opportunity_id   — ID da oportunidade aberta
-      amount           — Valor investido (R$)
-      maturity_at      — Vencimento do investimento (ISO-8601).
-                         Pode ser curto prazo (minutos/horas) ou longo (meses).
-                         Exemplo: "2025-03-01T10:00:00Z", "2025-06-30", "2025-01-01T00:30:00Z"
-    """
-    from db.connection import get_db
-    from engine.investment_engine import accept_investment
-    from decimal import Decimal
-    from datetime import datetime, timezone
-
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    # Parse maturity_at — aceita date ou datetime ISO-8601
-    try:
-        maturity_str = body.maturity_at.strip().replace(" ", "T")
-        if "T" in maturity_str:
-            maturity_dt = datetime.fromisoformat(maturity_str)
-            if maturity_dt.tzinfo is None:
-                maturity_dt = maturity_dt.replace(tzinfo=timezone.utc)
-        else:
-            from datetime import date as _date, time as _time
-            d = _date.fromisoformat(maturity_str)
-            maturity_dt = datetime.combine(d, _time.max, tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"maturity_at inválido — use formato ISO-8601: {exc}",
-        )
-
-    result = await accept_investment(
-        db=db,
-        opportunity_id=body.opportunity_id,
-        investor_user_id=body.investor_user_id,
-        amount=Decimal(str(body.amount)),
-        maturity_date=None,   # deprecated — usar maturity_at
-        maturity_at=maturity_dt,
-    )
-
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error"))
-
-    return result
-
-
-@app.get("/investimentos/{user_id}")
-async def investimentos_do_usuario(user_id: int, level_id: int | None = None) -> dict:
-    """
-    Posição consolidada de um investidor.
-    ?level_id=1 filtra por nível específico.
-    """
-    from db.connection import get_db
-    from db.repositories.investments import InvestmentRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    inv_repo = InvestmentRepository(db)
-    if level_id:
-        position = await inv_repo.get_investor_position(user_id, level_id)
-        active   = await inv_repo.list_by_investor(user_id, status="active")
-        return {
-            "user_id":     user_id,
-            "level_id":    level_id,
-            "position":    position,
-            "investments": [dict(i) for i in active],
-        }
-
-    # Sem filtro de nível: lista todos os investimentos
-    all_inv = await inv_repo.list_by_investor(user_id)
-    return {
-        "user_id":     user_id,
-        "investments": [dict(i) for i in all_inv],
-        "total":       len(all_inv),
-    }
-
 
 # ---------------------------------------------------------------------------
 # Eventos de risco geográfico — alimentação do motor de scoring (§8.2)
@@ -1521,107 +1343,46 @@ async def list_risk_events(
     }
 
 
-@app.post("/admin/oportunidades")
-async def criar_oportunidade_manual(payload: dict) -> dict:
-    """
-    Cria uma oportunidade de captação manualmente (sem empréstimo vinculado).
-    Útil para captação geral de liquidez do fundo.
-
-    Body: {
-      "level_id": 1,
-      "amount_needed": 10000.00,
-      "ttl_days": 30
-    }
-    """
-    from db.connection import get_db
-    from engine.investment_engine import create_opportunity
-    from decimal import Decimal
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    required = ["level_id", "amount_needed"]
-    missing = [f for f in required if f not in payload]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Campos obrigatórios ausentes: {missing}")
-
-    result = await create_opportunity(
-        db=db,
-        level_id=int(payload["level_id"]),
-        amount_needed=Decimal(str(payload["amount_needed"])),
-        ttl_days=int(payload.get("ttl_days", 30)),
-    )
-    return {"ok": True, **result}
-
-
-@app.get("/admin/niveis/{level_id}/oportunidades")
-async def oportunidades_do_nivel(level_id: int, limit: int = 50) -> dict:
-    """Lista todas as oportunidades de um nível (todos os status)."""
-    from db.connection import get_db
-    from db.repositories.opportunities import OpportunityRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    opps = await OpportunityRepository(db).list_by_level(level_id, limit=limit)
-    return {"level_id": level_id, "oportunidades": [dict(o) for o in opps], "total": len(opps)}
-
-
-@app.delete("/admin/oportunidades/{opp_id}")
-async def cancelar_oportunidade(opp_id: int) -> dict:
-    """Cancela uma oportunidade de investimento aberta."""
-    from db.connection import get_db
-    from db.repositories.opportunities import OpportunityRepository
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    opp = await OpportunityRepository(db).get_by_id(opp_id)
-    if not opp:
-        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
-    if opp["status"] not in ("open", "partially_funded"):
-        raise HTTPException(status_code=400, detail=f"Oportunidade não pode ser cancelada (status={opp['status']})")
-
-    await OpportunityRepository(db).cancel(opp_id)
-    return {"ok": True, "opp_id": opp_id}
-
-
-@app.post("/admin/payouts/distribuir")
-async def distribuir_payouts_manual() -> dict:
-    """Job manual: processa todos os rendimentos de investimento vencidos."""
-    from db.connection import get_db
-    from engine.investment_engine import distribute_payouts
-    db = get_db()
-    if not db:
-        raise HTTPException(status_code=503, detail="Banco de dados indisponível")
-
-    result = await distribute_payouts(db)
-    return result
-
 
 @app.get("/admin/niveis/{level_id}/posicao")
 async def posicao_do_nivel(level_id: int) -> dict:
     """
-    Visão financeira completa do nível:
-    saldo real, exposição, total investido, oportunidades abertas.
+    Visão financeira P2P completa do nível:
+    saldo real da wallet, exposição ativa (créditos ativos), ordens abertas.
     """
     from db.connection import get_db
     from db.repositories.wallets import WalletRepository
-    from db.repositories.opportunities import OpportunityRepository
-    from db.repositories.investments import InvestmentRepository
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
     wallet_repo = WalletRepository(db)
-    opp_repo    = OpportunityRepository(db)
-    inv_repo    = InvestmentRepository(db)
 
     wallet  = await wallet_repo.get_by_owner("level", level_id)
     balance = await wallet_repo.true_balance(wallet["id"]) if wallet else 0
 
-    open_opps      = await opp_repo.list_open(level_id=level_id)
-    total_invested = await inv_repo.total_active_by_level(level_id)
+    # Active P2P exposure: sum of active credit instruments for this level
+    total_exposure = await db.fetch_val(
+        """
+        SELECT COALESCE(SUM(ci.total_amount), 0)
+        FROM credit_instruments ci
+        JOIN capture_orders co ON co.id = ci.capture_order_id
+        JOIN capture_requests cr ON cr.id = co.capture_request_id
+        WHERE cr.level_id = $1 AND ci.status = 'active'
+        """,
+        level_id,
+    ) or 0
+
+    # Open capture orders for this level
+    open_orders = await db.fetch_all(
+        """
+        SELECT co.id, co.target_amount, co.committed_amount, co.capture_deadline
+        FROM capture_orders co
+        JOIN capture_requests cr ON cr.id = co.capture_request_id
+        WHERE cr.level_id = $1 AND co.status = 'open'
+        """,
+        level_id,
+    )
 
     policy = await db.fetch_one(
         """
@@ -1633,15 +1394,15 @@ async def posicao_do_nivel(level_id: int) -> dict:
     )
 
     return {
-        "level_id":              level_id,
-        "wallet_balance":        float(balance),
-        "total_active_invested": float(total_invested),
-        "current_exposure":      float(policy["current_exposure_cache"]) if policy else 0,
-        "max_exposure":          float(policy["max_aggregate_exposure"]) if policy else None,
-        "max_per_user":          float(policy["max_per_user_limit"]) if policy and policy["max_per_user_limit"] else None,
-        "open_opportunities":    len(open_opps),
-        "open_opp_total_needed": float(sum(
-            float(o["amount_needed"]) - float(o["amount_committed"]) for o in open_opps
+        "level_id":            level_id,
+        "wallet_balance":      float(balance),
+        "total_active_exposure": float(total_exposure),
+        "max_exposure":        float(policy["max_aggregate_exposure"]) if policy else None,
+        "max_per_user":        float(policy["max_per_user_limit"]) if policy and policy["max_per_user_limit"] else None,
+        "open_capture_orders": len(open_orders),
+        "open_orders_remaining": float(sum(
+            float(o["target_amount"]) - float(o["committed_amount"] or 0)
+            for o in open_orders
         )),
     }
 
@@ -1949,13 +1710,13 @@ async def admin_list_investment_offers(
     request: Request,
     status: str | None = None,
     level_id: int | None = None,
-    opportunity_id: int | None = None,
+    capture_order_id: int | None = None,
     limit: int = 50,
 ) -> dict:
     """
     Lista ofertas de investimento com filtros opcionais.
     ?status=pending|accepted|declined|expired
-    ?level_id=N ?opportunity_id=N
+    ?level_id=N ?capture_order_id=N
     """
     _require_admin_key(request)
     from db.connection import get_db
@@ -1972,8 +1733,8 @@ async def admin_list_investment_offers(
         clauses.append(f"io.status = ${idx}"); params.append(status); idx += 1
     if level_id:
         clauses.append(f"io.level_id = ${idx}"); params.append(level_id); idx += 1
-    if opportunity_id:
-        clauses.append(f"io.opportunity_id = ${idx}"); params.append(opportunity_id); idx += 1
+    if capture_order_id:
+        clauses.append(f"io.capture_order_id = ${idx}"); params.append(capture_order_id); idx += 1
 
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
     params.append(limit); limit_idx = idx
@@ -1992,45 +1753,57 @@ async def admin_list_investment_offers(
     return {"offers": [dict(o) for o in offers], "total": len(offers)}
 
 
-@app.post("/admin/investor-matching/{opportunity_id}")
-async def admin_trigger_matching(request: Request, opportunity_id: int) -> dict:
+@app.post("/admin/investor-matching/capture-order/{capture_order_id}")
+async def admin_trigger_matching(request: Request, capture_order_id: int) -> dict:
     """
-    Dispara manualmente o matching de investidores para uma oportunidade aberta.
-    Útil para re-tentar captação de oportunidades com cobertura incompleta.
+    Dispara manualmente o matching de investidores para uma capture_order aberta.
+    Útil para re-tentar captação de ordens com cobertura incompleta.
     """
     _require_admin_key(request)
     from db.connection import get_db
     from engine.investor_matching import match_and_notify
     from decimal import Decimal
+    from datetime import timedelta, timezone, datetime
 
     db = get_db()
     if not db:
         raise HTTPException(status_code=503, detail="Banco de dados indisponível")
 
-    opp = await db.fetch_one(
-        "SELECT * FROM investment_opportunities WHERE id = $1", opportunity_id
+    order = await db.fetch_one(
+        """
+        SELECT co.*, cr.level_id, cr.requested_amount, cr.term_days
+        FROM capture_orders co
+        JOIN capture_requests cr ON cr.id = co.capture_request_id
+        WHERE co.id = $1
+        """,
+        capture_order_id,
     )
-    if not opp:
-        raise HTTPException(status_code=404, detail="Oportunidade não encontrada")
-    if opp["status"] not in ("open", "partially_funded"):
+    if not order:
+        raise HTTPException(status_code=404, detail="Ordem de captação não encontrada")
+    if order["status"] != "open":
         raise HTTPException(
             status_code=400,
-            detail=f"Oportunidade não elegível para matching (status={opp['status']})"
+            detail=f"Ordem não elegível para matching (status={order['status']})",
         )
 
-    remaining = Decimal(str(opp["amount_needed"])) - Decimal(str(opp["amount_committed"] or 0))
+    remaining = (
+        Decimal(str(order["target_amount"]))
+        - Decimal(str(order["committed_amount"] or 0))
+    )
     if remaining <= 0:
-        return {"ok": True, "message": "Oportunidade já totalmente financiada.", "coverage_pct": 100.0}
+        return {"ok": True, "message": "Ordem já totalmente financiada.", "coverage_pct": 100.0}
+
+    maturity_at = order["capture_deadline"] + timedelta(days=int(order["term_days"] or 30))
 
     result = await match_and_notify(
         db=db,
-        opportunity_id=opportunity_id,
-        level_id=opp["level_id"],
+        capture_order_id=capture_order_id,
+        level_id=order["level_id"],
         amount_needed=remaining,
-        expected_rate=Decimal(str(opp["expected_rate"])),
-        maturity_at=opp["expires_at"],
+        expected_rate=Decimal(str(order["creditor_rate"])),
+        maturity_at=maturity_at,
     )
-    return {"ok": True, "opportunity_id": opportunity_id, **result}
+    return {"ok": True, "capture_order_id": capture_order_id, **result}
 
 
 @app.post("/admin/identidade/{doc_id}/rejeitar")

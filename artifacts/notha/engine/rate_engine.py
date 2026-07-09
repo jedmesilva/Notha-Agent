@@ -173,6 +173,78 @@ async def compute_loan_quote(
     }
 
 
+async def compute_rate_for_level(
+    db,
+    level_id: int,
+    term_days: int,
+    user_risk_score: "Decimal | None",
+) -> dict:
+    """
+    Computes a borrowing rate for a level without persisting a quote.
+    Used by the P2P capture flow — no loan_request_id required.
+
+    Returns: {base_rate, risk_premium, term_adjustment, liquidity_multiplier,
+              final_rate, investment_rate, spread_ok}
+    """
+    from db.repositories.rates import RateRepository
+    from db.connection import get_db as _get_db
+
+    _db = db or _get_db()
+    rate_repo = RateRepository(_db)
+
+    policy = await rate_repo.get_active_policy(level_id)
+    if not policy:
+        raise ValueError(f"Sem política de taxa configurada para o nível {level_id}")
+
+    base_rate        = Decimal(str(policy["base_borrowing_rate"]))
+    base_invest_rate = Decimal(str(policy["base_investment_rate"]))
+    min_spread       = Decimal(str(policy["min_spread"]))
+    spread_strategy  = policy["spread_violation_strategy"]
+
+    adj_bps = await rate_repo.get_term_adjustment(level_id, term_days, policy=policy)
+    term_adjustment = Decimal(str(adj_bps)) / Decimal("10000")
+
+    liquidity = await rate_repo.get_latest_liquidity(level_id)
+    if liquidity:
+        demand = Decimal(str(liquidity["total_active_loan_demand"]))
+        supply = Decimal(str(liquidity["total_available_investment"]))
+    else:
+        demand, supply = _ONE, _ONE
+
+    liq_mult     = _compute_liquidity_multiplier(demand, supply)
+    score        = user_risk_score if user_risk_score is not None else Decimal("500")
+    risk_premium = _compute_risk_premium(score)
+
+    raw_rate   = (base_rate + risk_premium + term_adjustment) * liq_mult
+    final_rate = raw_rate.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+
+    invest_rate = (base_invest_rate * liq_mult).quantize(
+        Decimal("0.000001"), rounding=ROUND_HALF_UP
+    )
+    spread    = final_rate - invest_rate
+    spread_ok = spread >= min_spread
+
+    if not spread_ok and spread_strategy == "raise_borrowing_rate":
+        final_rate = (invest_rate + min_spread).quantize(
+            Decimal("0.000001"), rounding=ROUND_HALF_UP
+        )
+        spread_ok = True
+        logger.warning(
+            "compute_rate_for_level: spread violation — taxa elevada para %.6f (nível %d)",
+            final_rate, level_id,
+        )
+
+    return {
+        "base_rate":            base_rate,
+        "risk_premium":         risk_premium,
+        "term_adjustment":      term_adjustment,
+        "liquidity_multiplier": liq_mult,
+        "final_rate":           final_rate,
+        "investment_rate":      invest_rate,
+        "spread_ok":            spread_ok,
+    }
+
+
 async def compute_investment_quote(
     db, level_id: int, investment_id: int | None = None
 ) -> dict:
