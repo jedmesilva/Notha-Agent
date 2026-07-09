@@ -1,0 +1,231 @@
+# Especificação de Implementação: Fluxo de Emissão de Dívida P2P
+
+**Objetivo:** documento de referência para engenharia e produto sobre como implementar o fluxo de captação/empréstimo respeitando a estrutura regulatória de SEP, com narrativa de produto ("emitir dívida") mapeada corretamente para os termos jurídicos de fundo (intermediação de mútuo).
+
+---
+
+## 1. Princípio central
+
+**Regra de ouro:** nenhum instrumento de dívida existe antes de existir capital real de credor comprometido. A plataforma nunca adianta, nunca garante, nunca é dona do crédito. Ela é **intermediária de intermediação** — conecta quem quer tomar com quem quer emprestar, e cobra tarifa por isso.
+
+Toda a implementação decorre dessa regra. Se qualquer parte do fluxo violar essa ordem (capital antes de compromisso, ou plataforma assumindo posição própria sem ser via SCD separada), a estrutura deixa de ser SEP.
+
+---
+
+## 2. Glossário: termo de produto (UX) → termo jurídico (contrato/backend)
+
+| Termo de produto (o que o usuário vê) | Termo jurídico (o que o documento/contrato registra) | Observação |
+|---|---|---|
+| "Emitir uma dívida" | Solicitação de operação de crédito / proposta de mútuo | O usuário nunca "emite título" juridicamente — ele solicita uma operação intermediada |
+| "Pedido de empréstimo" | Solicitação de captação | Estado inicial, sem nenhum compromisso financeiro ainda |
+| "Investir em uma dívida" | Aceite de participação em operação de empréstimo | O credor está aceitando os termos de uma operação específica |
+| "Financiar" | Disponibilização de recursos pelo credor | Só a partir daqui o dinheiro entra no fluxo |
+| "Contrato da dívida" | Instrumento representativo do crédito | Só existe após captação completa (ou threshold mínimo) |
+| "Vender minha posição" | Cessão de crédito (Art. 286 CC) | Ato civil entre credores, plataforma só intermedia/registra |
+| "Comprar dívida de outro investidor" | Cessionário em operação de cessão | Sujeito a checagem de elegibilidade (categoria de credor permitida) |
+| "Plataforma" (nas telas) | SEP — Sociedade de Empréstimo entre Pessoas | Nome jurídico correto para termos de uso e contratos |
+| "Solicitar empréstimo" | Solicitação de captação | Termo correto para a ação do tomador — não "emitir" |
+| "Sua dívida foi emitida" | Emissão do instrumento representativo do crédito | Reservado para o *resultado* do processo (quando `InstrumentoCredito` é criado), nunca para a ação inicial do tomador |
+| "Taxa de emissão" | Tarifa de originação/intermediação (cobrada do devedor) | Ver Seção 6 |
+| "Taxa de serviço" | Tarifa de servicing (cobrada do credor, por parcela) | Ver Seção 6 |
+
+**Nota de narrativa (tomador):** usar "solicitar" para a ação do usuário e reservar "emitir/emissão" para o momento em que o `InstrumentoCredito` de fato passa a existir (após captação concluída). Isso evita gerar expectativa de compromisso antes de a captação estar coberta, e evita a leitura jurídica de que o usuário é o emissor do título — juridicamente é a SEP quem instrumentaliza a operação.
+
+**Regra de redação:** a interface pode e deve usar linguagem simples e direta ("emitir", "investir", "sua dívida"). Os documentos legais (contrato, termos de uso, instrumento representativo) **precisam** usar a terminologia jurídica correta. Nunca inverter — um contrato que descreve o usuário como "emissor de título" pode ser lido como oferta pública não registrada.
+
+---
+
+## 3. Entidades do sistema
+
+### 3.1 `SolicitacaoCaptacao`
+Estado inicial. Ainda não existe dívida, nem compromisso de nenhum credor.
+
+- `id`
+- `solicitante_id` (devedor em potencial)
+- `valor_solicitado`
+- `prazo`
+- `plano_pagamento` (parcelas, carência, etc.)
+- `taxa_juros_proposta`
+- `score_credito` (calculado no momento da solicitação)
+- `status`: `rascunho` → `em_captacao` → `captada` | `captacao_parcial_expirada` | `cancelada`
+
+### 3.2 `OrdemCaptacao`
+Representa a oferta distribuída aos credores. Uma `SolicitacaoCaptacao` gera exatamente uma `OrdemCaptacao` ativa por vez.
+
+- `id`
+- `solicitacao_id`
+- `valor_alvo`
+- `valor_captado_atual` (soma dinâmica dos aceites)
+- `threshold_minimo` (% ou valor mínimo para considerar captação viável — decisão de produto, ex: 80%)
+- `prazo_captacao` (janela de tempo, ex: 48h/72h)
+- `status`: `aberta` → `completa` | `parcial_expirada` | `cancelada`
+
+### 3.3 `PosicaoCredor`
+Cada aceite (manual ou via mandato automático) de um credor a uma ordem específica.
+
+- `id`
+- `ordem_captacao_id`
+- `credor_id`
+- `valor_comprometido`
+- `origem`: `manual` | `mandato_automatico`
+- `status`: `reservado` → `confirmado` (após disponibilização efetiva de recursos) | `revertido` (se a ordem não fechar)
+
+**Importante:** `reservado` ≠ `confirmado`. Reserva é intenção; confirmação exige que o recurso tenha efetivamente saído da conta do credor. Só posições `confirmado` contam para fechar a `OrdemCaptacao`.
+
+### 3.4 `InstrumentoCredito`
+**Só é criado quando `OrdemCaptacao.status = completa`.** Este é o "contrato da dívida" que o usuário vê — mas juridicamente é o instrumento representativo do crédito emitido pela SEP, vinculando o devedor a cada credor proporcionalmente.
+
+- `id`
+- `ordem_captacao_id` (origem)
+- `devedor_id`
+- `credores[]` (lista de `PosicaoCredor` confirmadas, com fração de participação)
+- `valor_total`
+- `plano_pagamento_final`
+- `data_emissao`
+- `permite_cessao` (boolean — precisa ser `true` desde a origem para viabilizar o secundário)
+- `status`: `ativo` → `quitado` | `inadimplente` | `renegociado`
+
+### 3.5 `TransacaoCessao`
+Movimentação no mercado secundário — credor vende sua fração a outro credor (PF, SCD, ou institucional elegível).
+
+- `id`
+- `instrumento_credito_id`
+- `posicao_credor_origem_id` (cedente)
+- `cessionario_id` (novo credor — precisa passar checagem de elegibilidade)
+- `preco_negociado` (não pode ser hardcoded — ver Seção 5)
+- `data_notificacao_devedor` (obrigatória — Art. 290 CC)
+- `status`: `proposta` → `aceita` → `liquidada` | `recusada`
+
+### 3.6 `RepasseParcela`
+Cada pagamento do devedor sendo distribuído aos credores atuais (podem ter mudado via cessão desde a emissão).
+
+- `id`
+- `instrumento_credito_id`
+- `parcela_numero`
+- `valor_pago_devedor`
+- `distribuicao[]` (valor por credor atual, proporcional à posição vigente na data do pagamento)
+- `tarifa_plataforma` (retida separadamente — nunca descontada do "juro" do credor de forma disfarçada, ver Seção 6)
+
+---
+
+## 4. Máquina de estados do fluxo principal
+
+```
+SolicitacaoCaptacao: rascunho
+        |
+   (score aprovado, termos definidos)
+        v
+SolicitacaoCaptacao: em_captacao  ──> cria OrdemCaptacao: aberta
+        |
+        |  credores fazem aceite (manual ou mandato)
+        |  → cria/atualiza PosicaoCredor (reservado → confirmado)
+        v
+   [checagem contínua: valor_captado_atual vs valor_alvo]
+        |
+        ├── atingiu 100% (ou threshold, conforme regra de produto)
+        |        v
+        |   OrdemCaptacao: completa
+        |        v
+        |   cria InstrumentoCredito: ativo
+        |        v
+        |   libera recursos ao devedor
+        |   (norma permite até 5 dias úteis — é teto máximo, não piso;
+        |    liquidação em minutos é permitida e é o alvo de produto, ver 7-A)
+        |
+        └── expirou prazo sem atingir threshold
+                 v
+            OrdemCaptacao: parcial_expirada
+                 v
+            reverte PosicaoCredor (reservado → revertido)
+            devolve intenção de recurso ao credor
+                 v
+            SolicitacaoCaptacao: captacao_parcial_expirada
+            (devedor pode relançar com novos termos)
+```
+
+---
+
+## 5. Regras do mercado secundário (implementação)
+
+Para não configurar garantia disfarçada (ver decisões já tomadas sobre a SCD como comprador de última instância):
+
+1. **Motor de precificação obrigatório antes de qualquer cessão** — nunca aceitar preço arbitrário digitado livremente sem validação. Precificação deve ser função de:
+   - Score de crédito atualizado do devedor (não o score da emissão original).
+   - Dias em atraso, se houver.
+   - Prazo remanescente.
+   - Taxa de referência de mercado no momento.
+2. **Sem exclusividade estrutural para a SCD do grupo** — a arquitetura de matching deve permitir tecnicamente qualquer cessionário elegível (outro credor PF, outra SCD, FIDC, securitizadora), mesmo que a SCD do grupo seja o comprador mais ativo na prática.
+3. **Decisão de compra da SCD nunca automática/garantida** — se a SCD participa como cessionária, a decisão precisa passar por um motor de análise próprio (não um gatilho automático de "sempre compra quando não há PF comprador"), com log auditável do critério aplicado a cada operação.
+4. **Nenhuma comunicação de "saída garantida"** — telas, notificações e termos de uso não podem sugerir liquidez assegurada. Copy correto: "você pode tentar negociar sua posição no mercado secundário, sujeito a interesse de compradores e preço de mercado" — nunca "você pode sair quando quiser".
+
+---
+
+## 6. Regras de tarifa (implementação)
+
+A plataforma cobra **duas tarifas distintas, de partes diferentes, em momentos diferentes**. Nunca misturar as duas em um único campo/linha de receita — cada uma tem uma base jurídica e um fluxo de dados próprio.
+
+### 6.1 Tarifa de originação ("taxa de emissão")
+- **Cobrada de:** devedor.
+- **Momento:** no desembolso, quando `InstrumentoCredito` é criado e os recursos são liberados.
+- **Base de cálculo:** percentual sobre o valor bruto solicitado (o devedor deve juros sobre o valor bruto, não sobre o líquido recebido).
+- **Campo sugerido:** `tarifa_originacao` em `InstrumentoCredito`, deduzida no momento da liquidação ao devedor (ex: solicitação de R$1.000 → devedor recebe R$1.000 − tarifa_originacao).
+- **Base jurídica:** tarifa de serviço de intermediação/originação, permitida por não incidir sobre recursos do credor.
+
+### 6.2 Tarifa de serviço ("taxa de servicing")
+- **Cobrada de:** credor.
+- **Momento:** a cada `RepasseParcela`, deduzida do valor recebido pelo credor naquele pagamento — nunca antecipada.
+- **Base de cálculo:** percentual sobre o valor de cada parcela efetivamente recebida (proporcional ao capital movimentado, não valor fixo).
+- **Faixas sugeridas por perfil:** considerar percentual mais alto para operações de curtíssimo prazo (D+1/semanal — custo operacional proporcionalmente maior pelo giro) e mais baixo para prazos longos (custo se dilui ao longo do tempo). Definir tabela de faixas antes do lançamento.
+- **Campo sugerido:** `tarifa_servicing_pct` em `InstrumentoCredito` ou por segmento de risco/prazo, aplicado em cada `RepasseParcela.distribuicao[]`.
+- **Base jurídica:** tarifa por serviço de intermediação financeira prestado ao credor (cobrança, gestão, reporting) — separada e vinculada a serviço, não participação no juro pactuado.
+
+### 6.3 Regras de exibição (obrigatórias, não opcionais)
+- Tarifa da plataforma é **sempre uma linha separada**, nunca descontada silenciosamente do juro do credor.
+- Toda tela de simulação/extrato do credor deve mostrar, separadamente:
+  - Taxa de retorno bruta pactuada com o credor (o número que ele aceitou ao investir).
+  - Tarifa de servicing aplicada naquele pagamento.
+  - Valor líquido efetivamente recebido.
+- Toda tela de simulação do devedor deve mostrar, separadamente:
+  - Valor bruto solicitado (base de cálculo dos juros devidos).
+  - Tarifa de originação.
+  - Valor líquido efetivamente desembolsado.
+- Nenhum campo do sistema deve se chamar algo como `plataforma_juros` ou `spread_plataforma` de forma que sugira participação nos juros — usar `tarifa_originacao` / `tarifa_servicing` para manter a rastreabilidade jurídica correta caso auditado.
+
+---
+
+## 7-A. Liquidação ao devedor: minutos, não dias
+
+A norma estabelece um prazo de **até 5 dias úteis** para a SEP transferir os recursos ao devedor após a disponibilização pelos credores — isso é um teto de segurança regulatória, não uma exigência de demora. Liquidação em minutos, assim que `OrdemCaptacao` atinge `completa`, é permitida e deve ser o alvo de produto.
+
+**Requisitos técnicos para viabilizar isso:**
+- Transição `OrdemCaptacao: aberta → completa` deve disparar liquidação automática, sem revisão manual no caminho crítico.
+- Confirmação de `PosicaoCredor: reservado → confirmado` precisa ocorrer em tempo real (via Pix, idealmente), não em lote/batch diário — esse é o gargalo mais provável, não a regra da plataforma.
+- Desembolso ao devedor via Pix automatizado, disparado pelo mesmo evento que marca `InstrumentoCredito: ativo`.
+- Monitorar separadamente a latência de "captação → confirmação do credor" vs. "confirmação → desembolso ao devedor" — são gargalos diferentes e devem ser medidos e otimizados de forma independente.
+
+## 7. Checklist de implementação por fase
+
+**Fase 1 — Captação sem capital adiantado**
+- [ ] `SolicitacaoCaptacao` e `OrdemCaptacao` implementadas com separação clara de estados.
+- [ ] `PosicaoCredor` com estados `reservado`/`confirmado`/`revertido` — nunca liberar recurso ao devedor com posições apenas `reservado`.
+- [ ] Definir e implementar `threshold_minimo` (decisão de produto pendente).
+- [ ] Definir e implementar mandato automático de investimento (critérios configuráveis pelo credor).
+
+**Fase 2 — Emissão do instrumento**
+- [ ] `InstrumentoCredito` só é criável a partir de `OrdemCaptacao: completa`.
+- [ ] Documento gerado (PDF/hash) deve usar terminologia jurídica correta (Seção 2), não a linguagem de UX.
+- [ ] Campo `permite_cessao` obrigatoriamente `true` desde a criação, com cláusula correspondente no instrumento.
+
+**Fase 3 — Mercado secundário**
+- [ ] Motor de precificação implementado antes de habilitar qualquer `TransacaoCessao`.
+- [ ] Checagem de elegibilidade do cessionário (categoria de credor permitida).
+- [ ] Notificação automática ao devedor em toda cessão liquidada (Art. 290 CC).
+- [ ] Auditoria de decisões de compra da SCD, se aplicável.
+
+**Fase 4 — Repasse e tarifas**
+- [ ] `RepasseParcela` distribuindo proporcionalmente aos credores vigentes na data do pagamento (não aos credores originais, se houve cessão).
+- [ ] Tarifa sempre como linha separada e rastreável.
+
+**Fase 5 — Jurídico**
+- [ ] Revisão de todo texto de termos de uso, contrato e instrumento por jurídico especializado em SEP/Bacen.
+- [ ] Confirmação de que nenhuma tela ou notificação sugere garantia de liquidez ou de crédito.

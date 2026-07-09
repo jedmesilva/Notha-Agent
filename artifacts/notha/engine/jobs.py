@@ -14,6 +14,7 @@ Jobs:
   distribute_investment_payouts : processa payouts de investimento vencidos (a cada minuto)
   recalculate_investor_metrics  : recalcula métricas de investidores (a cada hora)
   expire_investment_offers      : expira ofertas de investimento vencidas (a cada 5 min)
+  expire_stale_p2p_orders       : expira capture_orders P2P sem quórum após deadline (a cada hora)
 """
 import asyncio
 import logging
@@ -92,7 +93,6 @@ async def snapshot_liquidity() -> None:
                 ), 0),
                 NOW()
             FROM levels lv
-            WHERE lv.status = 'active'
         """)
         logger.info("snapshot_liquidity: snapshot de liquidez registrado para todos os níveis.")
     except Exception as e:
@@ -377,6 +377,21 @@ async def distribute_investment_payouts() -> None:
         logger.error("Error in distribute_investment_payouts: %s", e)
 
 
+async def _expire_stale_p2p_orders() -> None:
+    """Expire P2P capture_orders that passed their deadline without reaching the target amount."""
+    db = get_db()
+    if not db:
+        return
+    try:
+        from engine.p2p_engine import expire_stale_orders
+        result = await expire_stale_orders(db)
+        expired = result.get("expired", 0) if isinstance(result, dict) else (result or 0)
+        if expired:
+            logger.info("expire_stale_p2p_orders: %d order(s) expired.", expired)
+    except Exception as e:
+        logger.error("Error in expire_stale_p2p_orders: %s", e)
+
+
 async def start_all_jobs() -> None:
     """Inicia todos os jobs periódicos como asyncio tasks."""
     logger.info("Iniciando jobs periódicos da NOTHA...")
@@ -395,4 +410,7 @@ async def start_all_jobs() -> None:
     asyncio.create_task(_run_job("recalculate_investor_metrics",  recalculate_investor_metrics,  3600))
     asyncio.create_task(_run_job("expire_investment_offers",      expire_investment_offers,       300))
 
-    logger.info("Jobs periódicos iniciados: 11 jobs ativos.")
+    # P2P jobs
+    asyncio.create_task(_run_job("expire_stale_p2p_orders",     _expire_stale_p2p_orders,     3600))
+
+    logger.info("Jobs periódicos iniciados: 12 jobs ativos.")

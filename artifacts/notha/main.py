@@ -333,11 +333,29 @@ async def _migrate_investor_profile_tables() -> None:
             )
             """
         )
+        # Additive migrations — add columns that may be missing on existing tables.
+        # Each ALTER is wrapped so the server starts even when the column already exists.
+        import asyncpg as _asyncpg
+
+        _alter_ddls = [
+            # investor_profiles: add level_id column added during group→level migration
+            ("ALTER TABLE investor_profiles "
+             "ADD COLUMN IF NOT EXISTS level_id INT REFERENCES levels(id) ON DELETE SET NULL"),
+            # investment_offers: level_id was NOT NULL in DDL but may be absent on old tables;
+            # allow NULL here — old rows simply have no level.
+            ("ALTER TABLE investment_offers "
+             "ADD COLUMN IF NOT EXISTS level_id INT"),
+        ]
+        for _ddl in _alter_ddls:
+            try:
+                await conn.execute(_ddl)
+            except Exception:
+                pass  # column already exists or table not yet created — CREATE TABLE covers it
+
         # Índices e restrições — cada DDL isolado para resiliência a falhas parciais.
         # Cada bloco captura UniqueViolationError que ocorre quando dois processos
         # (hot-reload do uvicorn) tentam criar o mesmo objeto simultaneamente —
         # o IF NOT EXISTS não é atômico entre processos no pg_class.
-        import asyncpg as _asyncpg
 
         _idx_ddls = [
             ("CREATE INDEX IF NOT EXISTS idx_investor_profiles_active "

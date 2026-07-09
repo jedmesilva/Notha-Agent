@@ -18,10 +18,18 @@ from engine.turn_state import TurnStateService
 from db.repositories.pending_confirmations import PendingConfirmationsRepository
 from tools.builtin import (
     web_search, currency, math, units, datetime_tool, restriction_check,
+    # borrower — legacy pool-based flow
     solicitar_emprestimo, consultar_extrato, consultar_dividas,
     registrar_pagamento, consultar_limite, calcular_cotacao_taxa,
     aprovar_emprestimo,
+    # creditor/investor — legacy pool-based flow
     listar_oportunidades, investir, consultar_investimentos,
+    # P2P — borrower side (SEP-compliant)
+    request_loan_p2p, launch_capture_order, view_capture_status,
+    pay_p2p_installment, view_user_instruments,
+    # P2P — creditor/investor side
+    view_open_capture_orders, commit_to_capture_order, view_creditor_positions,
+    price_creditor_position, propose_position_sale,
 )
 from phone_info import parse_phone, get_timezone
 from agents.reviewer import ScopeReviewerAgent
@@ -143,7 +151,7 @@ _BUILTIN_TOOL_MAP = {
     units.name:                units,
     datetime_tool.name:        datetime_tool,
     restriction_check.name:    restriction_check,
-    # Ferramentas financeiras — tomador
+    # borrower — legacy pool-based flow
     solicitar_emprestimo.name:  solicitar_emprestimo,
     consultar_extrato.name:     consultar_extrato,
     consultar_dividas.name:     consultar_dividas,
@@ -151,10 +159,22 @@ _BUILTIN_TOOL_MAP = {
     consultar_limite.name:      consultar_limite,
     calcular_cotacao_taxa.name: calcular_cotacao_taxa,
     aprovar_emprestimo.name:    aprovar_emprestimo,
-    # Ferramentas financeiras — investidor
+    # creditor/investor — legacy pool-based flow
     listar_oportunidades.name:    listar_oportunidades,
     investir.name:                investir,
     consultar_investimentos.name: consultar_investimentos,
+    # P2P — borrower side (SEP-compliant)
+    request_loan_p2p.name:       request_loan_p2p,
+    launch_capture_order.name:   launch_capture_order,
+    view_capture_status.name:    view_capture_status,
+    pay_p2p_installment.name:    pay_p2p_installment,
+    view_user_instruments.name:  view_user_instruments,
+    # P2P — creditor/investor side
+    view_open_capture_orders.name:  view_open_capture_orders,
+    commit_to_capture_order.name:   commit_to_capture_order,
+    view_creditor_positions.name:   view_creditor_positions,
+    price_creditor_position.name:   price_creditor_position,
+    propose_position_sale.name:     propose_position_sale,
 }
 
 logger = logging.getLogger("notha.orchestrator")
